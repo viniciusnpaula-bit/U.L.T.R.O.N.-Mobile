@@ -94,9 +94,9 @@ class _CoreScreenState extends State<CoreScreen>
                         color: Color(0xFFE50914),
                       ),
                     ),
-                    IconButton(
+                    const IconButton(
                       onPressed: HapticFeedback.lightImpact,
-                      icon: const Icon(Icons.mic, color: Color(0xFFE50914)),
+                      icon: Icon(Icons.mic, color: Color(0xFFE50914)),
                     ),
                   ],
                 ),
