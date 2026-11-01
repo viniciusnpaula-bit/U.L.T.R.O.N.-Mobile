@@ -89,7 +89,10 @@ class _CoreScreenState extends State<CoreScreen>
                     ),
                     IconButton(
                       onPressed: nextStage,
-                      icon: const Icon(Icons.crop_free, color: Color(0xFFE50914)),
+                      icon: const Icon(
+                        Icons.crop_free,
+                        color: Color(0xFFE50914),
+                      ),
                     ),
                     IconButton(
                       onPressed: HapticFeedback.lightImpact,
@@ -119,7 +122,11 @@ class CorePainter extends CustomPainter {
       ..strokeWidth = 1.3;
     final center = size.center(Offset.zero);
     for (var index = 0; index < 3; index++) {
-      canvas.drawCircle(center, size.shortestSide * (0.22 + index * 0.12), paint);
+      canvas.drawCircle(
+        center,
+        size.shortestSide * (0.22 + index * 0.12),
+        paint,
+      );
     }
     canvas.drawCircle(
       center,
@@ -129,5 +136,6 @@ class CorePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CorePainter oldDelegate) => oldDelegate.time != time;
+  bool shouldRepaint(covariant CorePainter oldDelegate) =>
+      oldDelegate.time != time;
 }
