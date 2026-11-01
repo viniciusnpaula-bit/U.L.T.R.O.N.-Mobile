@@ -1,21 +1,19 @@
 # U.L.T.R.O.N. Mobile
 
-Assistente Android Flutter independente do U.L.T.R.O.N. Desktop, direcionado ao Samsung Galaxy A34 5G.
+Flutter/Dart Android node autonomous and independent of Desktop. Target: Samsung Galaxy A34 5G (Dimensity 1080, Mali-G68, 6–8 GB RAM). No local large LLM; language reasoning can use remote API configured locally.
 
-## Requisitos
-- Flutter stable / Dart
-- Android SDK
+## Architecture
+- `lib/core/security`: biometric gate; PIN verifier injected, no hardcoded PIN.
+- `lib/ui/screens`: access HUD and core stage UI.
+- `lib/services`: native TTS and local Markdown vault.
+- `shaders`: crimson fragment shader source.
+Desktop conventions: model output cannot authorize actions; sensitive operations require confirmation; memory/preferences remain local.
 
-## Configuração
-1. Instale Flutter e Android SDK.
-2. Execute `flutter pub get`.
-3. Copie `.env.example` para `.env` e configure `GEMINI_API_KEY`.
-4. Execute `flutter run`.
+## Performance
+Avoid local model weights, continuous sensors, polling and unnecessary animation. Ticker stops when lifecycle is not resumed. Test profile/release builds on device; shader uses analytic rings without loops.
 
-Nunca versione chaves reais. O `.env` é ignorado pelo Git.
+## Setup/build
+Install Flutter stable and Android SDK; run `flutter doctor`, `flutter pub get`, then `flutter build apk --release`. APK output: `build/app/outputs/flutter-apk/app-release.apk`.
 
-## Dispositivo-alvo
-Samsung Galaxy A34 5G (Dimensity 1080, Mali-G68). A UI prioriza baixo consumo e não executa LLM local.
-
-## Segurança
-Respostas do modelo não autorizam ações sensíveis. Ações privilegiadas exigirão confirmação explícita e autenticação local.
+## Security/scope
+Biometric uses local_auth. PIN verification is delegated; production must implement salted hash verification and key storage via Android Keystore. Session policy does not grant OS permissions. Obsidian needs app-accessible directory; shared Documents requires SAF. Notification listener, quick tile, SQLCipher, runtime shader binding, microphone and full stage are still follow-up work and are not claimed complete.
