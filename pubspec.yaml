@@ -1,21 +1,28 @@
 name: ultron_mobile
-description: U.L.T.R.O.N. Mobile assistant for Android
-publish_to: 'none'
-version: 0.1.0+1
-
+description: U.L.T.R.O.N. Mobile autonomous Android assistant
+publish_to: none
+version: 0.2.0+2
 environment:
   sdk: '>=3.3.0 <4.0.0'
-
 dependencies:
   flutter:
     sdk: flutter
-  flutter_localizations:
-    sdk: flutter
-
+  local_auth: ^2.3.0
+  flutter_tts: ^4.2.2
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  sqflite: ^2.4.2
+  flutter_secure_storage: ^9.2.4
+  connectivity_plus: ^6.1.4
+  battery_plus: ^6.2.2
+  geolocator: ^13.0.2
+  flutter_local_notifications: ^18.0.1
+  permission_handler: ^11.3.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
-
 flutter:
   uses-material-design: true
+  shaders:
+    - shaders/ultron_core.frag
