@@ -14,7 +14,8 @@ class ObsidianService {
 
   Future<String> readPreferences() async {
     final file = File(p.join(root.path, 'Preferencias.md'));
-    return await file.exists() ? file.readAsString() : '';
+    if (!await file.exists()) return '';
+    return file.readAsString();
   }
 
   Future<File> dailyNote(DateTime now, String text) async {
