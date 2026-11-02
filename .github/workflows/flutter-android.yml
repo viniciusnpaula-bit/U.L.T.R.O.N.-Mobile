@@ -23,4 +23,11 @@ jobs:
       - run: dart format --output=none --set-exit-if-changed lib
       - run: flutter analyze
       - run: flutter test
+      # Flutter invokes android/gradlew when present; generate a pinned wrapper.
+      - name: Generate Gradle wrapper
+        working-directory: android
+        run: gradle wrapper --gradle-version 8.14.3 --distribution-type bin
+      - name: Verify Gradle wrapper
+        working-directory: android
+        run: ./gradlew --version
       - run: flutter build apk --debug
