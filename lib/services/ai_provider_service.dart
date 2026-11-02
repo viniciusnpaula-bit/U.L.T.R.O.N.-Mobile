@@ -37,7 +37,7 @@ class AiFailover {
       try { return AiReply(p.name, await _request(p,prompt)); }
       catch(e) { errors.add('${p.name}: ${e.toString()}'); }
     }
-    throw HttpException('Todos os provedores falharam. '+errors.join(' | '));
+    throw HttpException('Todos os provedores falharam. ${errors.join(' | ')}');
   }
   Future<String> test(AiProviderConfig p) => _request(p,'Responda somente: conexão OK');
   Future<String> _request(AiProviderConfig p,String prompt) async {
