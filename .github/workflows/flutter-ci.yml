@@ -45,7 +45,7 @@ jobs:
                   raise SystemExit("dependencies block not found")
               lines.insert(dependency_index + 1, dependency)
 
-          result = "\\n".join(lines) + "\\n"
+          result = chr(10).join(lines) + chr(10)
           if "isCoreLibraryDesugaringEnabled = true" not in result or "desugar_jdk_libs" not in result:
               raise SystemExit("Desugaring configuration verification failed")
           path.write_text(result)
