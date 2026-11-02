@@ -14,12 +14,17 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   final prompt=TextEditingController(text:'Teste de conexão');
   List<AiProviderConfig> providers=[];
   bool busy=false, showKey=false;
+  String providerPreset='OpenAI';
+  void _selectPreset(String value){setState(()=>providerPreset=value);if(value=='Groq'){name.text='Groq';url.text='https://api.groq.com/openai/v1';model.text='openai/gpt-oss-120b';}else{name.text='OpenAI';url.text='https://api.openai.com/v1';model.text='gpt-4o-mini';}}
   String status='Chaves ficam no armazenamento seguro do Android.';
   @override void initState(){super.initState();_load();}
   Future<void> _load() async {providers=await store.load();if(mounted)setState((){});}
   Future<void> _save() async {
     if(name.text.trim().isEmpty||url.text.trim().isEmpty||model.text.trim().isEmpty||key.text.trim().isEmpty){setState(()=>status='Preencha nome, URL, modelo e chave.');return;}
-    final p=AiProviderConfig(id:DateTime.now().microsecondsSinceEpoch.toString(),name:name.text.trim(),baseUrl:url.text.trim(),model:model.text.trim(),apiKey:key.text.trim(),priority:providers.length);
+    final base=url.text.trim();
+    if(providerPreset=='Groq'&&!base.startsWith('https://api.groq.com/')){setState(()=>status='Para uma chave Groq, selecione Groq e use o endpoint da Groq.');return;}
+    if(providerPreset=='OpenAI'&&!base.startsWith('https://api.openai.com/')){setState(()=>status='Para uma chave OpenAI, selecione OpenAI e use o endpoint da OpenAI.');return;}
+    final p=AiProviderConfig(id:DateTime.now().microsecondsSinceEpoch.toString(),name:name.text.trim(),baseUrl:base,model:model.text.trim(),apiKey:key.text.trim(),priority:providers.length);
     providers=[...providers,p];await store.save(providers);key.clear();setState(()=>status='Provedor salvo com segurança.'); 
   }
   Future<void> _test(AiProviderConfig p) async {setState(()=>busy=true);try{final answer=await AiFailover(store:store).test(p);status='Conexão OK: $answer';}catch(e){status='Falha: $e';}finally{if(mounted)setState(()=>busy=false);}}
@@ -28,6 +33,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   @override void dispose(){name.dispose();url.dispose();model.dispose();key.dispose();prompt.dispose();super.dispose();}
   @override Widget build(BuildContext context)=>Scaffold(backgroundColor:const Color(0xFF0A0002),appBar:AppBar(title:const Text('Inteligência Artificial')),body:ListView(padding:const EdgeInsets.all(16),children:[
     const Text('Adicionar provedor compatível com API Chat Completions'),
+    DropdownButtonFormField<String>(value:providerPreset,decoration:const InputDecoration(labelText:'Provedor'),items:const [DropdownMenuItem(value:'OpenAI',child:Text('OpenAI')),DropdownMenuItem(value:'Groq',child:Text('Groq'))],onChanged:(v){if(v!=null)_selectPreset(v);}),
     TextField(controller:name,decoration:const InputDecoration(labelText:'Nome do provedor')),
     TextField(controller:url,keyboardType:TextInputType.url,decoration:const InputDecoration(labelText:'URL base',hintText:'https://api.openai.com/v1')),
     TextField(controller:model,decoration:const InputDecoration(labelText:'Modelo')),
