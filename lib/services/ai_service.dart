@@ -39,6 +39,11 @@ class AiService {
   static const _providersKey = 'ai.providers';
   static const _keysPrefix = 'ai.key.';
 
+  static const presets = [
+    AiProvider(name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', enabled: true),
+    AiProvider(name: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', model: 'mistral-small-latest', enabled: true),
+  ];
+
   Future<List<AiProvider>> providers() async {
     final raw = await _storage.read(key: _providersKey);
     if (raw == null) return [];
@@ -60,6 +65,12 @@ class AiService {
         value: apiKey,
       );
     }
+  }
+
+  Future<void> deleteProvider(String name) async {
+    final updated = (await providers()).where((p) => p.name != name).toList();
+    await _storage.write(key: _providersKey, value: jsonEncode(updated.map((p) => p.toJson()).toList()));
+    await _storage.delete(key: '$_keysPrefix$name');
   }
 
   Future<String> testProvider(AiProvider provider) async {
