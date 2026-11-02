@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
@@ -97,6 +98,17 @@ class _CoreScreenState extends State<CoreScreen>
     super.dispose();
   }
 
+  static const updateChannel = MethodChannel('ultron.mobile/update');
+
+  Future<void> openUpdates() async {
+    try {
+      await updateChannel.invokeMethod<bool>('openReleases');
+      if (mounted) setState(() => status = 'Página de atualizações aberta.');
+    } catch (e) {
+      if (mounted) setState(() => status = 'Não foi possível abrir atualizações: $e');
+    }
+  }
+
   Future<void> send() async {
     final text = command.text.trim();
     if (text.isEmpty || busy) return;
@@ -191,6 +203,11 @@ class _CoreScreenState extends State<CoreScreen>
               ),
             ),
             icon: const Icon(Icons.settings, color: red),
+          ),
+          IconButton(
+            tooltip: 'Atualizar U.L.T.R.O.N.',
+            onPressed: openUpdates,
+            icon: const Icon(Icons.system_update, color: red),
           ),
           IconButton(
             tooltip: 'Posição do núcleo',
