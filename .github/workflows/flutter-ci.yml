@@ -27,21 +27,37 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path("android/app/build.gradle.kts")
           s = p.read_text()
-          marker = "    compileOptions {"
-          if marker not in s:
-              raise SystemExit("compileOptions block not found in generated Android app Gradle file")
-          start = s.index(marker)
-          end = s.index("    }", start) + 5
-          block = s[start:end]
-          if "isCoreLibraryDesugaringEnabled" not in block:
-              block = block.replace(marker, marker + chr(10) + "        isCoreLibraryDesugaringEnabled = true")
-              s = s[:start] + block + s[end:]
-          dep = '    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
-          if dep not in s:
-              s = s.replace("dependencies {", "dependencies {" + chr(10) + dep, 1)
+
+          if "isCoreLibraryDesugaringEnabled = true" not in s:
+              s, count = re.subn(
+                  r"(compileOptions\\s*\\{)",
+                  r"\\1\\n    isCoreLibraryDesugaringEnabled = true",
+                  s,
+                  count=1,
+          )
+              if count != 1:
+                  raise SystemExit("Could not enable core library desugaring in compileOptions")
+
+          dependency = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
+          if dependency not in s:
+              s, count = re.subn(
+                  r"(?m)^dependencies\\s*\\{",
+                  lambda match: match.group(0) + "\\n    " + dependency,
+                  s,
+                  count=1,
+          )
+              if count != 1:
+                  raise SystemExit("Could not locate app dependencies block")
+
+          if dependency not in s:
+              raise SystemExit("Desugaring dependency was not inserted")
           p.write_text(s)
+          print("Verified core library desugaring configuration:")
+          print("\\n".join(line for line in s.splitlines() if "desugaring" in line.lower() or "desugar_jdk" in line))
           PY
       - name: Install dependencies
         run: flutter pub get
