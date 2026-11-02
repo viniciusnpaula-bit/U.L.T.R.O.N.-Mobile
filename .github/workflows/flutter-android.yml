@@ -10,11 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
       - run: flutter --version
+      - run: gradle --version
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib
       - run: flutter analyze
