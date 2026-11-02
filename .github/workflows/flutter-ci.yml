@@ -21,6 +21,8 @@ jobs:
         run: flutter --version
       - name: Generate Android platform
         run: flutter create --platforms=android --project-name=ultron_mobile .
+      - name: Restore project dependencies configuration
+        run: git checkout -- pubspec.yaml
       - name: Remove generated default widget test
         run: rm -f test/widget_test.dart
       - name: Enable Android core library desugaring

@@ -9,6 +9,12 @@ void main() {
     expect(SlashCommandParser.parse('/settings')?.command, UltronCommand.settings);
   });
 
+  test('preserves command arguments separated by whitespace', () {
+    final result = SlashCommandParser.parse('/help  comandos   locais');
+    expect(result?.command, UltronCommand.help);
+    expect(result?.argument, 'comandos locais');
+  });
+
   test('does not classify ordinary messages or unknown commands', () {
     expect(SlashCommandParser.parse('Olá'), isNull);
     expect(SlashCommandParser.parse('/unknown'), isNull);

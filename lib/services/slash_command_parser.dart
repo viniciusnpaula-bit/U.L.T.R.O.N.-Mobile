@@ -17,7 +17,7 @@ class SlashCommandParser {
   static CommandResult? parse(String input) {
     final text = input.trim();
     if (!text.startsWith('/')) return null;
-    final parts = text.split(RegExp(r'\\s+'));
+    final parts = text.split(RegExp(r'\s+'));
     final command = commands[parts.first.toLowerCase()];
     if (command == null) return null;
     return CommandResult(command, parts.skip(1).join(' '));
