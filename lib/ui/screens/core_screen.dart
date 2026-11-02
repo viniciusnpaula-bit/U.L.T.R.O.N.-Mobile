@@ -6,6 +6,7 @@ import '../../models/chat_message.dart';
 import '../../services/conversation_history.dart';
 import '../../services/ai_provider_service.dart';
 import '../../services/slash_command_parser.dart';
+import '../../services/voice_service.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
 
@@ -26,6 +27,7 @@ class _CoreScreenState extends State<CoreScreen>
   CoreStage stage = CoreStage.center;
   bool active = false;
   bool sending = false;
+  final voiceService = VoiceService();
 
 
   @override
@@ -38,6 +40,7 @@ class _CoreScreenState extends State<CoreScreen>
     });
     ticker.start();
     active = true;
+    voiceService.initialize();
   }
 
   @override
@@ -50,6 +53,7 @@ class _CoreScreenState extends State<CoreScreen>
     } else if (active) {
       ticker.stop();
       active = false;
+      voiceService.stop();
     }
   }
 
@@ -57,6 +61,7 @@ class _CoreScreenState extends State<CoreScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     ticker.dispose();
+    voiceService.stop();
     commandController.dispose();
     super.dispose();
   }
@@ -104,6 +109,8 @@ class _CoreScreenState extends State<CoreScreen>
         content: reply.text,
         createdAt: DateTime.now(),
       ));
+      if (!mounted) return;
+      await voiceService.speak(reply.text);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Resposta recebida de ${reply.provider}. Consulte o histórico.')),
