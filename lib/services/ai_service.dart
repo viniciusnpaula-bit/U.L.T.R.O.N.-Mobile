@@ -74,7 +74,7 @@ class AiService {
       final response = await request.close().timeout(const Duration(seconds: 20));
       final body = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw Exception('HTTP ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 300))}');
+        throw Exception('HTTP ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 300).toInt())}');
       }
       final decoded = jsonDecode(body) as Map<String, dynamic>;
       final answer = decoded['choices']?[0]?['message']?['content'];
@@ -107,7 +107,7 @@ class AiService {
           final response = await request.close().timeout(const Duration(seconds: 45));
           final body = await response.transform(utf8.decoder).join();
           if (response.statusCode < 200 || response.statusCode >= 300) {
-            throw Exception('HTTP ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 250))}');
+            throw Exception('HTTP ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 250).toInt())}');
           }
           final decoded = jsonDecode(body) as Map<String, dynamic>;
           final answer = decoded['choices']?[0]?['message']?['content'];
