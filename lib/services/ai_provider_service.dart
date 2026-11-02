@@ -51,7 +51,13 @@ class AiFailover {
       req.write(jsonEncode({'model':p.model,'messages':[{'role':'user','content':prompt}],'temperature':0.4}));
       final response=await req.close().timeout(const Duration(seconds:25));
       final body=await response.transform(utf8.decoder).join();
-      if(response.statusCode<200||response.statusCode>=300) throw HttpException('HTTP ${response.statusCode}: ${body.length>240?body.substring(0,240):body}');
+      if(response.statusCode<200||response.statusCode>=300) {
+        String message='Falha HTTP ${response.statusCode}';
+        try { final error=jsonDecode(body); message=(error['error']?['message']??error['message']??message).toString(); } catch (_) {}
+        message=message.replaceAll(p.apiKey,'[chave ocultada]');
+        if(message.length>220) message=message.substring(0,220);
+        throw HttpException('HTTP ${response.statusCode}: $message');
+      }
       final data=jsonDecode(body) as Map<String,dynamic>;
       final text=((data['choices'] as List?)?.first['message']?['content']??'').toString();
       if(text.trim().isEmpty) throw const FormatException('Resposta vazia');
