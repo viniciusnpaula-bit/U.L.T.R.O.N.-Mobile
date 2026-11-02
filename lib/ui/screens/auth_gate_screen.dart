@@ -81,7 +81,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> with WidgetsBindingObse
         padding: const EdgeInsets.all(26),
         child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420), child: Column(
           mainAxisSize: MainAxisSize.min, children: [
-            Container(width: 112,height: 112,decoration: BoxDecoration(shape: BoxShape.circle,border: Border.all(color: red.withOpacity(.55)),boxShadow:[BoxShadow(color:red.withOpacity(.15),blurRadius:32)]),
+            Container(width: 112,height: 112,decoration: BoxDecoration(shape: BoxShape.circle,border: Border.all(color: red.withValues(alpha:.55)),boxShadow:[BoxShadow(color:red.withValues(alpha:.15),blurRadius:32)]),
               child: const Icon(Icons.shield_moon_outlined,color:red,size:54)),
             const SizedBox(height: 28),
             const Text('U.L.T.R.O.N.',style: TextStyle(color:red,fontSize:24,fontWeight:FontWeight.w900,letterSpacing:4)),
@@ -97,7 +97,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> with WidgetsBindingObse
               ),
               if (_setup) ...[
                 const SizedBox(height:12),
-                TextField(controller:_confirm,keyboardType:TextInputType.number,password:!_showPin,maxLength:8,
+                TextField(controller:_confirm,keyboardType:TextInputType.number,obscureText:!_showPin,maxLength:8,
                   decoration:const InputDecoration(labelText:'Confirmar PIN',counterText:'')),
               ],
               if (_error != null) Padding(padding:const EdgeInsets.only(top:14),child:Text(_error!,style:const TextStyle(color:Colors.redAccent),textAlign:TextAlign.center)),
