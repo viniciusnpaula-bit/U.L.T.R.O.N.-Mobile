@@ -7,9 +7,9 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 class UpdateInfo {
-  const UpdateInfo({required this.version, required this.downloadUrl, required this.name, this.sha256});
+  const UpdateInfo({required this.version, required this.downloadUrl, required this.name, this.checksumSha256});
   final String version, downloadUrl, name;
-  final String? sha256;
+  final String? checksumSha256;
 }
 
 class AppUpdateService {
@@ -36,7 +36,7 @@ class AppUpdateService {
         version: (release['tag_name'] ?? '').toString().replaceFirst(RegExp(r'^v'), ''),
         name: (apk['name'] ?? 'ultron-update.apk').toString(),
         downloadUrl: apk['browser_download_url'].toString(),
-        sha256: normalizedDigest,
+        checksumSha256: normalizedDigest,
       );
     } finally {
       client.close(force: true);
@@ -77,7 +77,7 @@ class AppUpdateService {
       final length = await file.length();
       if (length < 1024 * 1024) throw const FormatException('APK baixado parece incompleto.');
       if (total > 0 && received != total) throw const FormatException('Download incompleto: tamanho recebido diferente do esperado.');
-      final expected = update.sha256;
+      final expected = update.checksumSha256;
       if (expected != null) {
         if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(expected)) throw const FormatException('SHA-256 publicado inválido.');
         final actual = sha256.convert(await file.readAsBytes()).toString();
