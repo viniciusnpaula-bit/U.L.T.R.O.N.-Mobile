@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../models/chat_message.dart';
 import '../../services/conversation_history.dart';
+import '../../services/slash_command_parser.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
 
@@ -65,6 +66,19 @@ class _CoreScreenState extends State<CoreScreen>
   Future<void> saveCommand() async {
     final text = commandController.text.trim();
     if (text.isEmpty) return;
+    final command = SlashCommandParser.parse(text);
+    if (command != null) {
+      commandController.clear();
+      await _runCommand(command.command);
+      return;
+    }
+    if (text.startsWith('/')) {
+      commandController.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Comando desconhecido. Use /help.')),
+      );
+      return;
+    }
     await ConversationHistory.instance.save(ChatMessage(
       id: null,
       conversationId: 'default',
@@ -77,6 +91,39 @@ class _CoreScreenState extends State<CoreScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Mensagem salva no histórico local.')),
     );
+  }
+
+  Future<void> _runCommand(UltronCommand command) async {
+    switch (command) {
+      case UltronCommand.help:
+        await showDialog<void>(context: context, builder: (context) => AlertDialog(
+          backgroundColor: const Color(0xFF160509),
+          title: const Text('COMANDOS U.L.T.R.O.N.'),
+          content: const SingleChildScrollView(child: Text(
+            '/help     Exibe esta lista\\n'
+            '/security  Abre o painel de segurança\\n'
+            '/history   Abre o histórico local\\n'
+            '/settings  Configurações de IA\\n\\n'
+            'Comandos são interpretados localmente.',
+          )),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('FECHAR'))],
+        ));
+        break;
+      case UltronCommand.security:
+        await showDialog<void>(context: context, builder: (context) => AlertDialog(
+          backgroundColor: const Color(0xFF160509),
+          title: const Text('SEGURANÇA'),
+          content: const Text('O módulo AuthGate existe, mas ainda não está conectado à tela principal.\\n\\nNenhuma autenticação foi executada. O painel informa o estado real sem simular uma proteção ativa.'),
+          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('ENTENDI'))],
+        ));
+        break;
+      case UltronCommand.history:
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ConversationHistoryScreen()));
+        break;
+      case UltronCommand.settings:
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AiSettingsScreen()));
+        break;
+    }
   }
 
   @override
