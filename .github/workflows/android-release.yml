@@ -46,7 +46,7 @@ jobs:
                   lines.extend(["", "dependencies {", dependency, "}"])
               else:
                   lines.insert(dependency_index + 1, dependency)
-          path.write_text("\\n".join(lines) + "\\n")
+          path.write_text("\n".join(lines) + "\n")
           PY
 
       - name: Configure Android signing
@@ -91,7 +91,7 @@ jobs:
           release_block = text[release_start:release_end]
           if 'signingConfig = signingConfigs.getByName("release")' not in release_block:
               text = text[:release_start] + text[release_start:].replace(
-                  "release {", 'release {\\n            signingConfig = signingConfigs.getByName("release")', 1
+                  "release {", 'release {\n            signingConfig = signingConfigs.getByName("release")', 1
               )
           path.write_text(text)
           PY
