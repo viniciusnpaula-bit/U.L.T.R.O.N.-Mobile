@@ -17,6 +17,22 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   final model = TextEditingController(text: 'gpt-4o-mini');
   final key = TextEditingController();
   bool enabled = true;
+  List<AiProvider> saved = [];
+
+  @override
+  void initState() {
+    super.initState();
+    widget.service.providers().then((items) { if (mounted) setState(() => saved = items); });
+  }
+
+  Future<void> refreshProviders() async {
+    final items = await widget.service.providers();
+    if (mounted) setState(() => saved = items);
+  }
+
+  void selectPreset(AiProvider p) {
+    setState(() { name.text = p.name; url.text = p.baseUrl; model.text = p.model; enabled = true; key.clear(); status = 'Preset selecionado. Insira a chave API.'; });
+  }
   bool busy = false;
   String status = '';
 
@@ -38,6 +54,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         ),
         key.text.trim(),
       );
+      await refreshProviders();
       if (mounted) {
         setState(
           () => status =
@@ -99,6 +116,8 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
+          const Text('PROVEDORES RÁPIDOS'),
+          Wrap(spacing: 8, children: AiService.presets.map((p) => OutlinedButton(onPressed: busy ? null : () => selectPreset(p), child: Text(p.name))).toList()),
           _field(name, 'Nome do provedor'),
           _field(url, 'URL base (OpenAI Chat Completions)'),
           _field(model, 'Modelo'),
@@ -118,6 +137,9 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
             onPressed: busy ? null : test,
             child: const Text('Testar conexão real'),
           ),
+          const Divider(height: 28),
+          const Text('PROVEDORES SALVOS'),
+          ...saved.map((p) => ListTile(title: Text(p.name), subtitle: Text(p.model), onTap: () => selectPreset(p), trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: busy ? null : () async { await widget.service.deleteProvider(p.name); await refreshProviders(); }))),
           if (busy)
             const Center(child: CircularProgressIndicator(color: crimson)),
           SelectableText(
