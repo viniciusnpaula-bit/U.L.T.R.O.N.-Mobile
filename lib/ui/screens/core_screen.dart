@@ -152,7 +152,7 @@ class _CoreScreenState extends State<CoreScreen>
     try {
       setState(() => status = 'Ouvindo…');
       await speech.listen(
-        options: stt.SpeechListenOptions(localeId: 'pt_BR'),
+        listenOptions: stt.SpeechListenOptions(localeId: 'pt_BR'),
         onResult: (result) {
           if (!mounted) return;
           setState(() => command.text = result.recognizedWords);
