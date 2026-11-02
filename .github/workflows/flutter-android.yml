@@ -32,10 +32,15 @@ jobs:
         working-directory: android
         run: ./gradlew --version
       - run: flutter build apk --debug
+      - name: Prepare APK checksum
+        run: sha256sum build/app/outputs/flutter-apk/app-debug.apk > build/app/outputs/flutter-apk/app-debug.apk.sha256
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ultron-mobile-debug
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: |
+            build/app/outputs/flutter-apk/app-debug.apk
+            build/app/outputs/flutter-apk/app-debug.apk.sha256
           if-no-files-found: error
+          compression-level: 0
           retention-days: 7
