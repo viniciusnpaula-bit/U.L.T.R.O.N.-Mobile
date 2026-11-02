@@ -1,4 +1,4 @@
-import 'package:flutter_test/flutter.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:ultron_mobile/services/slash_command_parser.dart';
 
 void main() {
