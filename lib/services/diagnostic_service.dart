@@ -1,7 +1,6 @@
 import 'package:connectivity_plus/connectivity_plus.dart';
 
 import 'ai_service.dart';
-import 'assistant_state.dart';
 
 enum DiagnosticStatus { available, notConfigured, unavailable, error, unverified }
 
@@ -30,13 +29,13 @@ class DiagnosticService {
       connectivityDetail = 'Erro ao consultar conectividade';
     }
     return [
-      DiagnosticItem('IA', configured ? DiagnosticStatus.available : DiagnosticStatus.notConfigured, configured ? 'Provedor habilitado; API não testada' : 'Nenhum provedor habilitado'),
-      DiagnosticItem('Reconhecimento de voz', speechReady ? DiagnosticStatus.available : DiagnosticStatus.unavailable, speechReady ? 'Plugin inicializado' : 'Não inicializado ou indisponível'),
-      DiagnosticItem('TTS', ttsReady ? DiagnosticStatus.available : DiagnosticStatus.unverified, ttsReady ? 'Inicializado' : 'Não verificado'),
-      DiagnosticItem('Memória', DiagnosticStatus.unverified, 'Persistência de conversa não implementada nesta sessão'),
-      DiagnosticItem('Armazenamento', DiagnosticStatus.unverified, 'Não verificado'),
-      DiagnosticItem('Conectividade', connectivityStatus, connectivityDetail),
-      DiagnosticItem('Atualização', DiagnosticStatus.unverified, 'Não verificada'),
+      const DiagnosticItem('IA', DiagnosticStatus.available, 'Provedor habilitado; API não testada'),
+      const DiagnosticItem('Reconhecimento de voz', DiagnosticStatus.unavailable, 'Não inicializado ou indisponível'),
+      const DiagnosticItem('TTS', DiagnosticStatus.unverified, 'Não verificado'),
+      const DiagnosticItem('Memória', DiagnosticStatus.unverified, 'Persistência de conversa não implementada nesta sessão'),
+      const DiagnosticItem('Armazenamento', DiagnosticStatus.unverified, 'Não verificado'),
+      DiagnosticItem('Conectividade', DiagnosticStatus.unverified, 'Não verificado'),
+      const DiagnosticItem('Atualização', DiagnosticStatus.unverified, 'Não verificada'),
     ];
   }
 }
