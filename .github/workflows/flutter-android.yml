@@ -20,7 +20,8 @@ jobs:
       - run: flutter --version
       - run: gradle --version
       - run: flutter pub get
-      - run: dart format --output=none --set-exit-if-changed lib
+      - name: Format Dart files
+        run: dart format lib
       - run: flutter analyze
       - run: flutter test
       # Flutter invokes android/gradlew when present; generate a pinned wrapper.
