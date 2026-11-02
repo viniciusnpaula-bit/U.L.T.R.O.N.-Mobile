@@ -36,11 +36,11 @@ jobs:
           end = s.index("    }", start) + 5
           block = s[start:end]
           if "isCoreLibraryDesugaringEnabled" not in block:
-              block = block.replace(marker, marker + "\\n        isCoreLibraryDesugaringEnabled = true")
+              block = block.replace(marker, marker + chr(10) + "        isCoreLibraryDesugaringEnabled = true")
               s = s[:start] + block + s[end:]
           dep = '    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
           if dep not in s:
-              s = s.replace("dependencies {", "dependencies {\\n" + dep, 1)
+              s = s.replace("dependencies {", "dependencies {" + chr(10) + dep, 1)
           p.write_text(s)
           PY
       - name: Install dependencies
