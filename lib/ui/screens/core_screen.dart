@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../models/chat_message.dart';
 import '../../services/conversation_history.dart';
+import '../../services/ai_provider_service.dart';
 import '../../services/slash_command_parser.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
@@ -24,6 +25,7 @@ class _CoreScreenState extends State<CoreScreen>
   Duration elapsed = Duration.zero;
   CoreStage stage = CoreStage.center;
   bool active = false;
+  bool sending = false;
 
 
   @override
@@ -64,6 +66,7 @@ class _CoreScreenState extends State<CoreScreen>
       });
 
   Future<void> saveCommand() async {
+    if (sending) return;
     final text = commandController.text.trim();
     if (text.isEmpty) return;
     final command = SlashCommandParser.parse(text);
@@ -79,18 +82,40 @@ class _CoreScreenState extends State<CoreScreen>
       );
       return;
     }
+
+    commandController.clear();
+    final now = DateTime.now();
     await ConversationHistory.instance.save(ChatMessage(
       id: null,
       conversationId: 'default',
       role: ChatRole.user,
       content: text,
-      createdAt: DateTime.now(),
+      createdAt: now,
     ));
     if (!mounted) return;
-    commandController.clear();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Mensagem salva no histórico local.')),
-    );
+    setState(() => sending = true);
+
+    try {
+      final reply = await AiFailover().ask(text);
+      await ConversationHistory.instance.save(ChatMessage(
+        id: null,
+        conversationId: 'default',
+        role: ChatRole.assistant,
+        content: reply.text,
+        createdAt: DateTime.now(),
+      ));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Resposta recebida de ${reply.provider}. Consulte o histórico.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Mensagem salva, mas a IA falhou: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => sending = false);
+    }
   }
 
   Future<void> _runCommand(UltronCommand command) async {
@@ -175,7 +200,10 @@ class _CoreScreenState extends State<CoreScreen>
                           controller: commandController,
                           textInputAction: TextInputAction.send,
                           onSubmitted: (_) => saveCommand(),
-                          decoration: const InputDecoration(hintText: 'Comando…'),
+                          decoration: InputDecoration(
+                            hintText: sending ? 'U.L.T.R.O.N. processando…' : 'Comando…',
+                          ),
+                          enabled: !sending,
                         ),
                       ),
                       IconButton(
