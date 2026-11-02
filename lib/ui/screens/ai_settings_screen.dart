@@ -33,7 +33,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   @override void dispose(){name.dispose();url.dispose();model.dispose();key.dispose();prompt.dispose();super.dispose();}
   @override Widget build(BuildContext context)=>Scaffold(backgroundColor:const Color(0xFF0A0002),appBar:AppBar(title:const Text('Inteligência Artificial')),body:ListView(padding:const EdgeInsets.all(16),children:[
     const Text('Adicionar provedor compatível com API Chat Completions'),
-    DropdownButtonFormField<String>(value:providerPreset,decoration:const InputDecoration(labelText:'Provedor'),items:const [DropdownMenuItem(value:'OpenAI',child:Text('OpenAI')),DropdownMenuItem(value:'Groq',child:Text('Groq'))],onChanged:(v){if(v!=null)_selectPreset(v);}),
+    DropdownButtonFormField<String>(initialValue:providerPreset,decoration:const InputDecoration(labelText:'Provedor'),items:const [DropdownMenuItem(value:'OpenAI',child:Text('OpenAI')),DropdownMenuItem(value:'Groq',child:Text('Groq'))],onChanged:(v){if(v!=null)_selectPreset(v);}),
     TextField(controller:name,decoration:const InputDecoration(labelText:'Nome do provedor')),
     TextField(controller:url,keyboardType:TextInputType.url,decoration:const InputDecoration(labelText:'URL base',hintText:'https://api.openai.com/v1')),
     TextField(controller:model,decoration:const InputDecoration(labelText:'Modelo')),
