@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../models/chat_message.dart';
 import '../../services/conversation_history.dart';
+import '../../services/slash_command_parser.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
 
