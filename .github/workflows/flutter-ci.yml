@@ -23,6 +23,26 @@ jobs:
         run: flutter create --platforms=android --project-name=ultron_mobile .
       - name: Remove generated default widget test
         run: rm -f test/widget_test.dart
+      - name: Enable Android core library desugaring
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android/app/build.gradle.kts")
+          s = p.read_text()
+          marker = "    compileOptions {"
+          if marker not in s:
+              raise SystemExit("compileOptions block not found in generated Android app Gradle file")
+          start = s.index(marker)
+          end = s.index("    }", start) + 5
+          block = s[start:end]
+          if "isCoreLibraryDesugaringEnabled" not in block:
+              block = block.replace(marker, marker + "\\n        isCoreLibraryDesugaringEnabled = true")
+              s = s[:start] + block + s[end:]
+          dep = '    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
+          if dep not in s:
+              s = s.replace("dependencies {", "dependencies {\\n" + dep, 1)
+          p.write_text(s)
+          PY
       - name: Install dependencies
         run: flutter pub get
       - name: Analyze
