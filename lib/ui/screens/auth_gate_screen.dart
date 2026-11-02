@@ -92,7 +92,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> with WidgetsBindingObse
             else ...[
               Text(_setup ? 'Crie um PIN de 4 a 8 dígitos para proteger o núcleo.' : 'Autentique-se para continuar.',textAlign:TextAlign.center,style:const TextStyle(color:Colors.white70)),
               const SizedBox(height: 22),
-              TextField(controller:_pin,keyboardType:TextInputType.number,password:!_showPin, maxLength:8,
+              TextField(controller:_pin,keyboardType:TextInputType.number,obscureText:!_showPin, maxLength:8,
                 decoration:InputDecoration(labelText:_setup?'Criar PIN':'PIN de acesso',counterText:'',suffixIcon:IconButton(icon:Icon(_showPin?Icons.visibility_off:Icons.visibility),onPressed:()=>setState(()=>_showPin=!_showPin))),
               ),
               if (_setup) ...[
