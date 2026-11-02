@@ -40,7 +40,7 @@ class AiService {
   static const _keysPrefix = 'ai.key.';
 
   static const presets = [
-    AiProvider(name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', enabled: true),
+    AiProvider(name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', enabled: true),
     AiProvider(name: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', model: 'mistral-small-latest', enabled: true),
   ];
 
