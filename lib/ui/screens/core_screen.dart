@@ -23,7 +23,7 @@ class _CoreScreenState extends State<CoreScreen>
   final command = TextEditingController();
   final scroll = ScrollController();
   final ai = AiService();
-  const router = CommandRouter();
+  final router = const CommandRouter();
   final voice = VoiceService();
   final speech = stt.SpeechToText();
   Duration elapsed = Duration.zero;
