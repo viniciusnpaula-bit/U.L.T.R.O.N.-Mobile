@@ -50,35 +50,55 @@ class AiService {
   Future<void> saveProvider(AiProvider provider, String apiKey) async {
     final list = await providers();
     final updated = [...list.where((p) => p.name != provider.name), provider];
-    await _storage.write(key: _providersKey, value: jsonEncode(updated.map((p) => p.toJson()).toList()));
+    await _storage.write(
+      key: _providersKey,
+      value: jsonEncode(updated.map((p) => p.toJson()).toList()),
+    );
     if (apiKey.isNotEmpty) {
-      await _storage.write(key: '$_keysPrefix${provider.name}', value: apiKey);
+      await _storage.write(
+        key: '$_keysPrefix${provider.name}',
+        value: apiKey,
+      );
     }
   }
 
   Future<String> testProvider(AiProvider provider) async {
     final key = await _storage.read(key: '$_keysPrefix${provider.name}');
-    if (key == null || key.isEmpty) throw Exception('API Key não cadastrada.');
-    final uri = Uri.parse('${provider.baseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions');
+    if (key == null || key.isEmpty) {
+      throw Exception('API Key não cadastrada.');
+    }
+    final uri = Uri.parse(
+      '${provider.baseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions',
+    );
     final client = HttpClient();
     try {
       final request = await client.postUrl(uri);
       request.headers
         ..set(HttpHeaders.authorizationHeader, 'Bearer $key')
         ..contentType = ContentType.json;
-      request.write(jsonEncode({
-        'model': provider.model,
-        'messages': [{'role': 'user', 'content': 'Responda somente: conexão OK'}],
-        'max_tokens': 20,
-      }));
-      final response = await request.close().timeout(const Duration(seconds: 20));
+      request.write(
+        jsonEncode({
+          'model': provider.model,
+          'messages': [
+            {'role': 'user', 'content': 'Responda somente: conexão OK'}
+          ],
+          'max_tokens': 20,
+        }),
+      );
+      final response = await request.close().timeout(
+        const Duration(seconds: 20),
+      );
       final body = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw Exception('HTTP ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 300).toInt())}');
+        throw Exception(
+          'HTTP ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 300).toInt())}',
+        );
       }
       final decoded = jsonDecode(body) as Map<String, dynamic>;
       final answer = decoded['choices']?[0]?['message']?['content'];
-      if (answer is! String || answer.trim().isEmpty) throw Exception('Resposta inválida da API.');
+      if (answer is! String || answer.trim().isEmpty) {
+        throw Exception('Resposta inválida da API.');
+      }
       return answer;
     } finally {
       client.close(force: true);
@@ -87,31 +107,51 @@ class AiService {
 
   Future<String> ask(String prompt) async {
     final enabled = (await providers()).where((p) => p.enabled).toList();
-    if (enabled.isEmpty) throw Exception('Cadastre e habilite um provedor em Configurações.');
+    if (enabled.isEmpty) {
+      throw Exception('Cadastre e habilite um provedor em Configurações.');
+    }
     final errors = <String>[];
     for (final provider in enabled) {
       try {
-        final key = await _storage.read(key: '$_keysPrefix${provider.name}');
-        if (key == null || key.isEmpty) throw Exception('API Key ausente');
-        final uri = Uri.parse('${provider.baseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions');
+        final key = await _storage.read(
+          key: '$_keysPrefix${provider.name}',
+        );
+        if (key == null || key.isEmpty) {
+          throw Exception('API Key ausente');
+        }
+        final uri = Uri.parse(
+          '${provider.baseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions',
+        );
         final client = HttpClient();
         try {
-          final request = await client.postUrl(uri).timeout(const Duration(seconds: 20));
+          final request = await client.postUrl(uri).timeout(
+            const Duration(seconds: 20),
+          );
           request.headers
             ..set(HttpHeaders.authorizationHeader, 'Bearer $key')
             ..contentType = ContentType.json;
-          request.write(jsonEncode({
-            'model': provider.model,
-            'messages': [{'role': 'user', 'content': prompt}],
-          }));
-          final response = await request.close().timeout(const Duration(seconds: 45));
+          request.write(
+            jsonEncode({
+              'model': provider.model,
+              'messages': [
+                {'role': 'user', 'content': prompt}
+              ],
+            }),
+          );
+          final response = await request.close().timeout(
+            const Duration(seconds: 45),
+          );
           final body = await response.transform(utf8.decoder).join();
           if (response.statusCode < 200 || response.statusCode >= 300) {
-            throw Exception('HTTP ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 250).toInt())}');
+            throw Exception(
+              'HTTP ${response.statusCode}: ${body.substring(0, body.length.clamp(0, 250).toInt())}',
+            );
           }
           final decoded = jsonDecode(body) as Map<String, dynamic>;
           final answer = decoded['choices']?[0]?['message']?['content'];
-          if (answer is! String || answer.trim().isEmpty) throw Exception('Resposta vazia');
+          if (answer is! String || answer.trim().isEmpty) {
+            throw Exception('Resposta vazia');
+          }
           return answer.trim();
         } finally {
           client.close(force: true);
