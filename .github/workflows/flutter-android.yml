@@ -31,16 +31,18 @@ jobs:
       - name: Verify Gradle wrapper
         working-directory: android
         run: ./gradlew --version
-      - run: flutter build apk --debug
-      - name: Prepare APK checksum
-        run: sha256sum build/app/outputs/flutter-apk/app-debug.apk > build/app/outputs/flutter-apk/app-debug.apk.sha256
+      - name: Build release APKs per architecture
+        run: flutter build apk --release --split-per-abi
+      - name: Prepare APK checksums
+        working-directory: build/app/outputs/flutter-apk
+        run: sha256sum *.apk > SHA256SUMS
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ultron-mobile-debug
+          name: ultron-mobile-release
           path: |
-            build/app/outputs/flutter-apk/app-debug.apk
-            build/app/outputs/flutter-apk/app-debug.apk.sha256
+            build/app/outputs/flutter-apk/*.apk
+            build/app/outputs/flutter-apk/SHA256SUMS
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
