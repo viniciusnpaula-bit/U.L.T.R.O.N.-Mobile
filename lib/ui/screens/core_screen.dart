@@ -9,6 +9,7 @@ import '../../services/slash_command_parser.dart';
 import '../../services/voice_service.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
+import 'update_screen.dart';
 
 enum CoreStage { center, corner, hidden }
 
@@ -183,6 +184,11 @@ class _CoreScreenState extends State<CoreScreen>
                   padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
+                      IconButton(
+                        tooltip: 'Atualizar U.L.T.R.O.N.',
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UpdateScreen())),
+                        icon: const Icon(Icons.system_update, color: Color(0xFFE50914)),
+                      ),
                       IconButton(
                         tooltip: 'Configurações de IA',
                         onPressed: () => Navigator.of(context).push(
