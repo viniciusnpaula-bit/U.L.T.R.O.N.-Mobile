@@ -19,6 +19,8 @@ jobs:
           cache: true
       - name: Flutter version
         run: flutter --version
+      - name: Generate Android platform
+        run: flutter create --platforms=android --project-name=ultron_mobile .
       - name: Install dependencies
         run: flutter pub get
       - name: Analyze
