@@ -4,6 +4,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../../services/ai_service.dart';
+import '../../services/command_router.dart';
 import '../../services/voice_service.dart';
 import 'ai_settings_screen.dart';
 
@@ -22,6 +23,7 @@ class _CoreScreenState extends State<CoreScreen>
   final command = TextEditingController();
   final scroll = ScrollController();
   final ai = AiService();
+  const router = CommandRouter();
   final voice = VoiceService();
   final speech = stt.SpeechToText();
   Duration elapsed = Duration.zero;
@@ -125,15 +127,24 @@ class _CoreScreenState extends State<CoreScreen>
       messages.add('VOCÊ: $text');
     });
     try {
-      final answer = await ai.ask(text);
+      final result = await router.route(
+        text,
+        askAi: ai.ask,
+        openAiSettings: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => AiSettingsScreen(service: ai)),
+          );
+        },
+        statusSummary: 'Diagnóstico básico disponível em /status.',
+        clearHistory: () => messages.clear(),
+      );
       if (!mounted) return;
       setState(() {
-        messages.add('U.L.T.R.O.N.: $answer');
-        status = 'Respondendo';
+        messages.add('U.L.T.R.O.N.: ${result.message}');
+        status = result.handled ? 'Aguardando comando' : 'Erro';
       });
-      await voice.speak(answer);
-      if (mounted) {
-        setState(() => status = 'Aguardando comando');
+      if (result.intent == CommandIntent.ai && result.handled) {
+        await voice.speak(result.message);
       }
     } catch (e) {
       if (mounted) {
@@ -143,9 +154,7 @@ class _CoreScreenState extends State<CoreScreen>
         });
       }
     } finally {
-      if (mounted) {
-        setState(() => busy = false);
-      }
+      if (mounted) setState(() => busy = false);
       if (mounted && scroll.hasClients) {
         scroll.animateTo(
           scroll.position.maxScrollExtent,
