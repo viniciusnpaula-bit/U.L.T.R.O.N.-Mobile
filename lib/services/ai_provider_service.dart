@@ -1,0 +1,61 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+class AiProviderConfig {
+  const AiProviderConfig({required this.id, required this.name, required this.baseUrl, required this.model, required this.apiKey, this.enabled = true, this.priority = 0});
+  final String id, name, baseUrl, model, apiKey;
+  final bool enabled;
+  final int priority;
+  Map<String,dynamic> toJson() => {'id':id,'name':name,'baseUrl':baseUrl,'model':model,'apiKey':apiKey,'enabled':enabled,'priority':priority};
+  factory AiProviderConfig.fromJson(Map<String,dynamic> j) => AiProviderConfig(id:j['id'],name:j['name'],baseUrl:j['baseUrl'],model:j['model'],apiKey:j['apiKey'],enabled:j['enabled']??true,priority:j['priority']??0);
+}
+
+class AiProviderStore {
+  AiProviderStore({FlutterSecureStorage? storage}) : _storage=storage??const FlutterSecureStorage();
+  final FlutterSecureStorage _storage;
+  static const _key='ultron.ai.providers.v1';
+  Future<List<AiProviderConfig>> load() async {
+    final raw=await _storage.read(key:_key); if(raw==null)return [];
+    try { return (jsonDecode(raw) as List).map((e)=>AiProviderConfig.fromJson(Map<String,dynamic>.from(e))).toList(); } catch (_) { return []; }
+  }
+  Future<void> save(List<AiProviderConfig> providers) => _storage.write(key:_key,value:jsonEncode(providers.map((e)=>e.toJson()).toList()));
+  Future<void> deleteAll() => _storage.delete(key:_key);
+}
+
+class AiReply { const AiReply(this.provider, this.text); final String provider,text; }
+
+class AiFailover {
+  AiFailover({AiProviderStore? store}) : _store=store??AiProviderStore();
+  final AiProviderStore _store;
+  Future<AiReply> ask(String prompt) async {
+    final providers=(await _store.load()).where((p)=>p.enabled && p.apiKey.trim().isNotEmpty && p.model.trim().isNotEmpty).toList()
+      ..sort((a,b)=>a.priority.compareTo(b.priority));
+    if(providers.isEmpty) throw StateError('Nenhum provedor de IA ativo e configurado.');
+    final errors=<String>[];
+    for(final p in providers) {
+      try { return AiReply(p.name, await _request(p,prompt)); }
+      catch(e) { errors.add('${p.name}: ${e.toString()}'); }
+    }
+    throw HttpException('Todos os provedores falharam. '+errors.join(' | '));
+  }
+  Future<String> test(AiProviderConfig p) => _request(p,'Responda somente: conexão OK');
+  Future<String> _request(AiProviderConfig p,String prompt) async {
+    final client=HttpClient()..connectionTimeout=const Duration(seconds:15);
+    try {
+      final base=p.baseUrl.trim().replaceAll(RegExp(r'/+$'),'');
+      final uri=Uri.parse(base.endsWith('/chat/completions')?base:'$base/chat/completions');
+      final req=await client.postUrl(uri).timeout(const Duration(seconds:20));
+      req.headers.set(HttpHeaders.authorizationHeader,'Bearer ${p.apiKey}');
+      req.headers.contentType=ContentType.json;
+      req.write(jsonEncode({'model':p.model,'messages':[{'role':'user','content':prompt}],'temperature':0.4}));
+      final response=await req.close().timeout(const Duration(seconds:25));
+      final body=await response.transform(utf8.decoder).join();
+      if(response.statusCode<200||response.statusCode>=300) throw HttpException('HTTP ${response.statusCode}: ${body.length>240?body.substring(0,240):body}');
+      final data=jsonDecode(body) as Map<String,dynamic>;
+      final text=((data['choices'] as List?)?.first['message']?['content']??'').toString();
+      if(text.trim().isEmpty) throw const FormatException('Resposta vazia');
+      return text;
+    } finally { client.close(force:true); }
+  }
+}
