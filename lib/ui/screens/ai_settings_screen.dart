@@ -105,7 +105,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
           _field(key, 'API Key (fica no Secure Storage)', secret: true),
           SwitchListTile(
             value: enabled,
-            activeColor: crimson,
+            activeThumbColor: crimson,
             title: const Text('Provedor habilitado'),
             onChanged: (v) => setState(() => enabled = v),
           ),
