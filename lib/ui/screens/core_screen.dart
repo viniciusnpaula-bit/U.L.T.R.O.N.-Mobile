@@ -105,9 +105,13 @@ class _CoreScreenState extends State<CoreScreen>
   Future<void> openUpdates() async {
     try {
       await updateChannel.invokeMethod<bool>('openReleases');
-      if (mounted) setState(() => status = 'Página de atualizações aberta.');
+      if (mounted) {
+        setState(() => status = 'Página de atualizações aberta.');
+      }
     } catch (e) {
-      if (mounted) setState(() => status = 'Não foi possível abrir atualizações: $e');
+      if (mounted) {
+        setState(() => status = 'Não foi possível abrir atualizações: $e');
+      }
     }
   }
 
@@ -128,7 +132,9 @@ class _CoreScreenState extends State<CoreScreen>
         status = 'Respondendo';
       });
       await voice.speak(answer);
-      if (mounted) setState(() => status = 'Aguardando comando');
+      if (mounted) {
+        setState(() => status = 'Aguardando comando');
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -137,7 +143,9 @@ class _CoreScreenState extends State<CoreScreen>
         });
       }
     } finally {
-      if (mounted) setState(() => busy = false);
+      if (mounted) {
+        setState(() => busy = false);
+      }
       if (mounted && scroll.hasClients) {
         scroll.animateTo(
           scroll.position.maxScrollExtent,
@@ -179,7 +187,9 @@ class _CoreScreenState extends State<CoreScreen>
         },
       );
     } catch (e) {
-      if (mounted) setState(() => status = 'Microfone indisponível: $e');
+      if (mounted) {
+        setState(() => status = 'Microfone indisponível: $e');
+      }
     }
   }
 
