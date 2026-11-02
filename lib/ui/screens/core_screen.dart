@@ -11,6 +11,7 @@ enum CoreStage { center, corner, hidden }
 
 class CoreScreen extends StatefulWidget {
   const CoreScreen({super.key});
+
   @override
   State<CoreScreen> createState() => _CoreScreenState();
 }
@@ -25,7 +26,10 @@ class _CoreScreenState extends State<CoreScreen>
   final speech = stt.SpeechToText();
   Duration elapsed = Duration.zero;
   CoreStage stage = CoreStage.center;
-  bool active = false, listening = false, busy = false, speechReady = false;
+  bool active = false;
+  bool listening = false;
+  bool busy = false;
+  bool speechReady = false;
   String status = 'Aguardando comando';
   final List<String> messages = [];
 
@@ -33,22 +37,51 @@ class _CoreScreenState extends State<CoreScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    ticker = createTicker((duration) { elapsed = duration; if (mounted) setState(() {}); });
+    ticker = createTicker((duration) {
+      elapsed = duration;
+      if (mounted) setState(() {});
+    });
     ticker.start();
     active = true;
     voice.initialize().catchError((_) {});
-    speech.initialize(
-      onStatus: (value) { if (mounted) setState(() { listening = value == 'listening'; status = listening ? 'Ouvindo…' : (busy ? 'Processando…' : 'Aguardando comando'); }); },
-      onError: (error) { if (mounted) setState(() { listening = false; status = 'Erro de voz: ${error.errorMsg}'; }); },
-    ).then((ready) { if (mounted) setState(() => speechReady = ready); });
+    speech
+        .initialize(
+      onStatus: (value) {
+        if (mounted) {
+          setState(() {
+            listening = value == 'listening';
+            status = listening
+                ? 'Ouvindo…'
+                : (busy ? 'Processando…' : 'Aguardando comando');
+          });
+        }
+      },
+      onError: (error) {
+        if (mounted) {
+          setState(() {
+            listening = false;
+            status = 'Erro de voz: ${error.errorMsg}';
+          });
+        }
+      },
+    )
+        .then((ready) {
+      if (mounted) setState(() => speechReady = ready);
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      if (!active) { ticker.start(); active = true; }
+      if (!active) {
+        ticker.start();
+        active = true;
+      }
     } else {
-      if (active) { ticker.stop(); active = false; }
+      if (active) {
+        ticker.stop();
+        active = false;
+      }
       if (listening) speech.stop();
       voice.stop();
     }
@@ -69,25 +102,48 @@ class _CoreScreenState extends State<CoreScreen>
     final text = command.text.trim();
     if (text.isEmpty || busy) return;
     command.clear();
-    setState(() { busy = true; status = 'Processando…'; messages.add('VOCÊ: $text'); });
+    setState(() {
+      busy = true;
+      status = 'Processando…';
+      messages.add('VOCÊ: $text');
+    });
     try {
       final answer = await ai.ask(text);
       if (!mounted) return;
-      setState(() { messages.add('U.L.T.R.O.N.: $answer'); status = 'Respondendo'; });
+      setState(() {
+        messages.add('U.L.T.R.O.N.: $answer');
+        status = 'Respondendo';
+      });
       await voice.speak(answer);
       if (mounted) setState(() => status = 'Aguardando comando');
     } catch (e) {
-      if (mounted) setState(() { messages.add('ERRO: $e'); status = 'Erro'; });
+      if (mounted) {
+        setState(() {
+          messages.add('ERRO: $e');
+          status = 'Erro';
+        });
+      }
     } finally {
       if (mounted) setState(() => busy = false);
-      if (mounted && scroll.hasClients) scroll.animateTo(scroll.position.maxScrollExtent, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      if (mounted && scroll.hasClients) {
+        scroll.animateTo(
+          scroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
     }
   }
 
   Future<void> toggleVoice() async {
     if (listening) {
       await speech.stop();
-      if (mounted) setState(() { listening = false; status = 'Aguardando comando'; });
+      if (mounted) {
+        setState(() {
+          listening = false;
+          status = 'Aguardando comando';
+        });
+      }
       return;
     }
     if (!speechReady) {
@@ -102,7 +158,10 @@ class _CoreScreenState extends State<CoreScreen>
           if (!mounted) return;
           setState(() => command.text = result.recognizedWords);
           if (result.finalResult) {
-            setState(() { listening = false; status = 'Texto reconhecido'; });
+            setState(() {
+              listening = false;
+              status = 'Texto reconhecido';
+            });
           }
         },
       );
@@ -111,7 +170,10 @@ class _CoreScreenState extends State<CoreScreen>
     }
   }
 
-  void nextStage() => setState(() => stage = CoreStage.values[(stage.index + 1) % CoreStage.values.length]);
+  void nextStage() => setState(
+        () => stage =
+            CoreStage.values[(stage.index + 1) % CoreStage.values.length],
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -122,39 +184,116 @@ class _CoreScreenState extends State<CoreScreen>
         backgroundColor: const Color(0xFF2E0305),
         title: const Text('U.L.T.R.O.N.'),
         actions: [
-          IconButton(tooltip: 'Configurações de IA', onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => AiSettingsScreen(service: ai))), icon: const Icon(Icons.settings, color: red)),
-          IconButton(tooltip: 'Posição do núcleo', onPressed: nextStage, icon: const Icon(Icons.crop_free, color: red)),
+          IconButton(
+            tooltip: 'Configurações de IA',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => AiSettingsScreen(service: ai),
+              ),
+            ),
+            icon: const Icon(Icons.settings, color: red),
+          ),
+          IconButton(
+            tooltip: 'Posição do núcleo',
+            onPressed: nextStage,
+            icon: const Icon(Icons.crop_free, color: red),
+          ),
         ],
       ),
       body: SafeArea(
-        child: Column(children: [
-          if (stage != CoreStage.hidden)
-            SizedBox(height: stage == CoreStage.center ? 230 : 100, child: Align(
-              alignment: stage == CoreStage.center ? Alignment.center : Alignment.topRight,
-              child: SizedBox(width: stage == CoreStage.center ? 220 : 90, height: stage == CoreStage.center ? 220 : 90, child: CustomPaint(painter: CorePainter(elapsed.inMilliseconds / 1000))),
-            )),
-          Container(
-            width: double.infinity, padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text('● $status', style: TextStyle(color: status == 'Erro' ? Colors.orangeAccent : const Color(0xFFFFA0A0)), textAlign: TextAlign.center),
-          ),
-          Expanded(child: ListView(controller: scroll, padding: const EdgeInsets.all(16), children: messages.map((m) => Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: SelectableText(m, style: TextStyle(color: m.startsWith('ERRO') ? Colors.orangeAccent : Colors.white, height: 1.4)),
-          )).toList())),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-            child: Row(children: [
-              Expanded(child: TextField(
-                controller: command,
-                minLines: 1, maxLines: 4, textInputAction: TextInputAction.send,
-                onSubmitted: (_) => send(),
-                decoration: const InputDecoration(hintText: 'Comando…', filled: true, fillColor: Color(0xFF2E0305), border: OutlineInputBorder(), focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: red))),
-              )),
-              IconButton(tooltip: listening ? 'Parar microfone' : 'Reconhecimento de voz', onPressed: toggleVoice, icon: Icon(listening ? Icons.mic : Icons.mic_none, color: listening ? const Color(0xFFFF1A24) : red)),
-              IconButton(tooltip: 'Enviar comando', onPressed: busy ? null : send, icon: Icon(Icons.send, color: busy ? Colors.white38 : red)),
-            ]),
-          ),
-        ]),
+        child: Column(
+          children: [
+            if (stage != CoreStage.hidden)
+              SizedBox(
+                height: stage == CoreStage.center ? 230 : 100,
+                child: Align(
+                  alignment: stage == CoreStage.center
+                      ? Alignment.center
+                      : Alignment.topRight,
+                  child: SizedBox(
+                    width: stage == CoreStage.center ? 220 : 90,
+                    height: stage == CoreStage.center ? 220 : 90,
+                    child: CustomPaint(
+                      painter: CorePainter(elapsed.inMilliseconds / 1000),
+                    ),
+                  ),
+                ),
+              ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Text(
+                '● $status',
+                style: TextStyle(
+                  color: status == 'Erro'
+                      ? Colors.orangeAccent
+                      : const Color(0xFFFFA0A0),
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                controller: scroll,
+                padding: const EdgeInsets.all(16),
+                children: messages
+                    .map(
+                      (m) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: SelectableText(
+                          m,
+                          style: TextStyle(
+                            color: m.startsWith('ERRO')
+                                ? Colors.orangeAccent
+                                : Colors.white,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: command,
+                      minLines: 1,
+                      maxLines: 4,
+                      textInputAction: TextInputAction.send,
+                      onSubmitted: (_) => send(),
+                      decoration: const InputDecoration(
+                        hintText: 'Comando…',
+                        filled: true,
+                        fillColor: Color(0xFF2E0305),
+                        border: OutlineInputBorder(),
+                        focusedBorder: OutlineInputBorder(
+                          borderSide: BorderSide(color: red),
+                        ),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: listening ? 'Parar microfone' : 'Reconhecimento de voz',
+                    onPressed: toggleVoice,
+                    icon: Icon(
+                      listening ? Icons.mic : Icons.mic_none,
+                      color: listening ? const Color(0xFFFF1A24) : red,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Enviar comando',
+                    onPressed: busy ? null : send,
+                    icon: Icon(Icons.send, color: busy ? Colors.white38 : red),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -162,16 +301,27 @@ class _CoreScreenState extends State<CoreScreen>
 
 class CorePainter extends CustomPainter {
   CorePainter(this.time);
+
   final double time;
+
   @override
   void paint(Canvas canvas, Size size) {
     final center = size.center(Offset.zero);
-    final paint = Paint()..color = const Color(0xFFE50914)..style = PaintingStyle.stroke..strokeWidth = 1.3;
+    final paint = Paint()
+      ..color = const Color(0xFFE50914)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.3;
     for (var i = 0; i < 3; i++) {
       canvas.drawCircle(center, size.shortestSide * (0.22 + i * 0.12), paint);
     }
-    canvas.drawCircle(center, size.shortestSide * 0.07, Paint()..color = const Color(0xFFFF1A24));
+    canvas.drawCircle(
+      center,
+      size.shortestSide * 0.07,
+      Paint()..color = const Color(0xFFFF1A24),
+    );
   }
+
   @override
-  bool shouldRepaint(covariant CorePainter oldDelegate) => oldDelegate.time != time;
+  bool shouldRepaint(covariant CorePainter oldDelegate) =>
+      oldDelegate.time != time;
 }
