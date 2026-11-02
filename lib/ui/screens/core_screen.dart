@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/services.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../../services/ai_service.dart';
@@ -153,7 +152,7 @@ class _CoreScreenState extends State<CoreScreen>
     try {
       setState(() => status = 'Ouvindo…');
       await speech.listen(
-        localeId: 'pt_BR',
+        options: stt.SpeechListenOptions(localeId: 'pt_BR'),
         onResult: (result) {
           if (!mounted) return;
           setState(() => command.text = result.recognizedWords);
