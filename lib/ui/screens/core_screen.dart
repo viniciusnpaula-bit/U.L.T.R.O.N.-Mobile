@@ -66,7 +66,9 @@ class _CoreScreenState extends State<CoreScreen>
       },
     )
         .then((ready) {
-      if (mounted) setState(() => speechReady = ready);
+      if (mounted) {
+        setState(() => speechReady = ready);
+      }
     });
   }
 
