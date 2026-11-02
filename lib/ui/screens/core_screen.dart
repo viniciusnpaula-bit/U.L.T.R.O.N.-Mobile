@@ -91,6 +91,20 @@ class _CoreScreenState extends State<CoreScreen>
 
     commandController.clear();
     final now = DateTime.now();
+    final previousMessages = await ConversationHistory.instance.messages(
+      conversationId: 'default',
+      limit: 12,
+    );
+    final aiHistory = previousMessages
+        .where((message) =>
+            message.role == ChatRole.user ||
+            message.role == ChatRole.assistant)
+        .map((message) => <String, String>{
+              'role': message.role.name,
+              'content': message.content,
+            })
+        .toList();
+
     await ConversationHistory.instance.save(ChatMessage(
       id: null,
       conversationId: 'default',
@@ -102,7 +116,7 @@ class _CoreScreenState extends State<CoreScreen>
     setState(() => sending = true);
 
     try {
-      final reply = await AiFailover().ask(text);
+      final reply = await AiFailover().ask(text, history: aiHistory);
       await ConversationHistory.instance.save(ChatMessage(
         id: null,
         conversationId: 'default',
