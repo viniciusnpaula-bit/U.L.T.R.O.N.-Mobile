@@ -23,6 +23,12 @@ class AppUpdateService {
       request.headers.set(HttpHeaders.acceptHeader, 'application/vnd.github+json');
       request.headers.set(HttpHeaders.userAgentHeader, 'ULTRON-Mobile-Updater');
       final response = await request.close().timeout(const Duration(seconds: 20));
+      // GitHub returns 404 when the repository has no published "latest" release.
+      // Treat this as an empty update catalog, not as a network failure.
+      if (response.statusCode == 404) {
+        await response.drain<void>();
+        return null;
+      }
       final body = await response.transform(utf8.decoder).join();
       if (response.statusCode != 200) throw HttpException('GitHub respondeu HTTP ${response.statusCode}.');
       final release = jsonDecode(body) as Map<String, dynamic>;
