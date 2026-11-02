@@ -29,7 +29,8 @@ jobs:
           from pathlib import Path
 
           path = Path("android/app/build.gradle.kts")
-          lines = path.read_text().splitlines()
+          text = path.read_text()
+          lines = text.splitlines()
 
           compile_index = next((i for i, line in enumerate(lines) if line.strip() == "compileOptions {"), None)
           if compile_index is None:
@@ -42,8 +43,9 @@ jobs:
           if not any("desugar_jdk_libs" in line for line in lines):
               dependency_index = next((i for i, line in enumerate(lines) if line.strip() == "dependencies {"), None)
               if dependency_index is None:
-                  raise SystemExit("dependencies block not found")
-              lines.insert(dependency_index + 1, dependency)
+                  lines.extend(["", "dependencies {", dependency, "}"])
+              else:
+                  lines.insert(dependency_index + 1, dependency)
 
           result = chr(10).join(lines) + chr(10)
           if "isCoreLibraryDesugaringEnabled = true" not in result or "desugar_jdk_libs" not in result:
