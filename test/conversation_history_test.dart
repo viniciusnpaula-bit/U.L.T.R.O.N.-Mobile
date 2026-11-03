@@ -22,6 +22,9 @@ Future<ConversationHistory> _open() async {
     inMemoryDatabasePath,
     options: OpenDatabaseOptions(
       version: 1,
+      // inMemoryDatabasePath is cached by path, so without this every test
+      // would share one database.
+      singleInstance: false,
       onCreate: (db, _) async {
         for (final statement in ConversationHistory.schema) {
           await db.execute(statement);
