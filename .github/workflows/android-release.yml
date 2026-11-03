@@ -47,6 +47,7 @@ jobs:
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/ultron-release.jks
           cat > android/key.properties <<EOF
           storeFile=ultron-release.jks
+          storeType=PKCS12
           storePassword=$ANDROID_KEYSTORE_PASSWORD
           keyAlias=$ANDROID_KEY_ALIAS
           keyPassword=$ANDROID_KEY_PASSWORD
