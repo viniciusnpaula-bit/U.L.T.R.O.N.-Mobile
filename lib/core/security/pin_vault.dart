@@ -27,7 +27,7 @@ class PinVault {
   /// No wait until [freeAttempts], then 30s doubling up to 15 minutes.
   static Duration lockDelay(int failures) {
     if (failures <= freeAttempts) return Duration.zero;
-    final step = (failures - freeAttempts).clamp(1, 10);
+    final step = (failures - freeAttempts).clamp(1, 10).toInt();
     final seconds = _baseDelay.inSeconds << (step - 1);
     return Duration(seconds: min(seconds, _maxDelay.inSeconds));
   }
