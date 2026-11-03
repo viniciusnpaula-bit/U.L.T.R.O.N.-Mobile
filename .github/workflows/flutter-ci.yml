@@ -44,3 +44,15 @@ jobs:
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
           retention-days: 7
+      # Regression guard: the release variant is the one that ships, and it does
+      # not inherit the INTERNET permission from src/debug/AndroidManifest.xml.
+      - name: Check release APK permissions and app id
+        run: |
+          flutter build apk --release
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+          AAPT="$(ls -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/* | sort -V | tail -1)/aapt2"
+          "$AAPT" dump permissions "$APK"
+          "$AAPT" dump badging "$APK" | head -1
+          "$AAPT" dump permissions "$APK" | grep -q "android.permission.INTERNET"
+          "$AAPT" dump permissions "$APK" | grep -q "android.permission.REQUEST_INSTALL_PACKAGES"
+          "$AAPT" dump badging "$APK" | grep -q "package: name='com.viniciusnpaula.ultron_mobile'"
