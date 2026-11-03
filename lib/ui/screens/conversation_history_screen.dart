@@ -188,67 +188,84 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                               .toLocal()
                               .toString()
                               .substring(0, 16);
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: isUser
-                                  ? const Color(0xFF180004)
-                                  : const Color(0xFF0E0002),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: isUser
-                                    ? _crimson.withValues(alpha: 0.4)
-                                    : _border,
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      isUser ? 'OPERADOR' : 'U.L.T.R.O.N.',
-                                      style: TextStyle(
-                                        color: isUser ? _rose : _crimson,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(
-                                      timestamp,
-                                      style: const TextStyle(
-                                        color: Color(0xFF64748B),
-                                        fontSize: 9,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  message.content,
-                                  style: const TextStyle(
-                                    color: Color(0xFFE2E8F0),
-                                    fontSize: 11,
-                                    height: 1.4,
+                          return GestureDetector(
+                            onLongPress: () {
+                              HapticFeedback.selectionClick();
+                              Clipboard.setData(
+                                ClipboardData(text: message.content),
+                              );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Mensagem copiada para a área de transferência.',
+                                    style: TextStyle(fontSize: 11),
                                   ),
+                                  duration: Duration(seconds: 2),
                                 ),
-                                const SizedBox(height: 6),
-                                const Row(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  children: [
-                                    Text(
-                                      'Isolado Localmente',
-                                      style: TextStyle(
-                                        color: Color(0xFF34D399),
-                                        fontSize: 9,
+                              );
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: isUser
+                                    ? const Color(0xFF180004)
+                                    : const Color(0xFF0E0002),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: isUser
+                                      ? _crimson.withValues(alpha: 0.4)
+                                      : _border,
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        isUser ? 'OPERADOR' : 'U.L.T.R.O.N.',
+                                        style: TextStyle(
+                                          color: isUser ? _rose : _crimson,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
                                       ),
+                                      Text(
+                                        timestamp,
+                                        style: const TextStyle(
+                                          color: Color(0xFF64748B),
+                                          fontSize: 9,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    message.content,
+                                    style: const TextStyle(
+                                      color: Color(0xFFE2E8F0),
+                                      fontSize: 11,
+                                      height: 1.4,
                                     ),
-                                  ],
-                                ),
-                              ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  const Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        'Isolado Localmente',
+                                        style: TextStyle(
+                                          color: Color(0xFF34D399),
+                                          fontSize: 9,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
                             ),
                           );
                         },

@@ -71,4 +71,24 @@ void main() {
       expect(redactSecret('falha', '  '), 'falha');
     });
   });
+
+  group('AiProviderConfig', () {
+    test('copyWith and JSON serialization preserve fields', () {
+      const original = AiProviderConfig(
+        id: 'p1',
+        name: 'Groq',
+        baseUrl: 'https://api.groq.com/openai/v1',
+        model: 'llama-3.3-70b-versatile',
+        apiKey: 'gsk_1234567890',
+        enabled: true,
+        priority: 0,
+      );
+      final updated = original.copyWith(enabled: false, priority: 2);
+      final restored = AiProviderConfig.fromJson(updated.toJson());
+      expect(restored.id, 'p1');
+      expect(restored.name, 'Groq');
+      expect(restored.enabled, isFalse);
+      expect(restored.priority, 2);
+    });
+  });
 }

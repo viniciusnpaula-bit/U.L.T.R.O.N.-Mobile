@@ -57,15 +57,31 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
       name.text = 'Groq (Native Llama)';
       url.text = 'https://api.groq.com/openai/v1';
       model.text = 'llama-3.3-70b-versatile';
-    } else {
-      name.text = 'OpenAI-Compatible';
+    } else if (value == 'OpenAI') {
+      name.text = 'OpenAI Official';
       url.text = 'https://api.openai.com/v1';
       model.text = 'gpt-4o-mini';
+    } else {
+      name.text = 'OpenRouter / Custom';
+      url.text = 'https://openrouter.ai/api/v1';
+      model.text = 'meta-llama/llama-3.3-70b-instruct';
     }
   }
 
+  List<AiProviderConfig> _normalizePriorities(List<AiProviderConfig> list) => [
+        for (var i = 0; i < list.length; i++) list[i].copyWith(priority: i),
+      ];
+
+  static String _maskKey(String secret) {
+    final trimmed = secret.trim();
+    if (trimmed.length <= 8) return '••••••••';
+    return '${trimmed.substring(0, 4)}••••${trimmed.substring(trimmed.length - 4)}';
+  }
+
   Future<void> _load() async {
-    providers = await store.load();
+    final loaded = await store.load()
+      ..sort((a, b) => a.priority.compareTo(b.priority));
+    providers = _normalizePriorities(loaded);
     if (mounted) setState(() {});
   }
 
@@ -103,14 +119,17 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   }
 
   Future<void> _save() async {
-    if (name.text.trim().isEmpty ||
-        url.text.trim().isEmpty ||
-        model.text.trim().isEmpty ||
-        key.text.trim().isEmpty) {
+    final cleanName = name.text.trim();
+    final base = url.text.trim();
+    final cleanModel = model.text.trim();
+    final cleanKey = key.text.trim();
+    if (cleanName.isEmpty ||
+        base.isEmpty ||
+        cleanModel.isEmpty ||
+        cleanKey.isEmpty) {
       setState(() => status = 'Preencha nome, URL, modelo e chave.');
       return;
     }
-    final base = url.text.trim();
     final parsed = Uri.tryParse(base);
     if (parsed == null || parsed.scheme != 'https' || parsed.host.isEmpty) {
       setState(() => status = 'Use uma URL https válida.');
@@ -120,7 +139,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         !base.startsWith('https://api.groq.com/')) {
       setState(
         () => status =
-            'Para uma chave Groq, selecione Groq e use o endpoint da Groq.',
+            'Para o preset Groq, mantenha o endpoint https://api.groq.com/openai/v1 ou mude para Custom.',
       );
       return;
     }
@@ -128,22 +147,31 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         !base.startsWith('https://api.openai.com/')) {
       setState(
         () => status =
-            'Para uma chave OpenAI, selecione OpenAI e use o endpoint da OpenAI.',
+            'Para o preset OpenAI, use https://api.openai.com/v1 ou selecione OpenAI-Compatible (Custom).',
+      );
+      return;
+    }
+    if (cleanKey.startsWith('gsk_') &&
+        !base.startsWith('https://api.groq.com/')) {
+      setState(
+        () => status =
+            'Chave gsk_ detectada: selecione o preset Groq para usar o endpoint da Groq.',
       );
       return;
     }
     final p = AiProviderConfig(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
-      name: name.text.trim(),
+      name: cleanName,
       baseUrl: base,
-      model: model.text.trim(),
-      apiKey: key.text.trim(),
+      model: cleanModel,
+      apiKey: cleanKey,
       priority: providers.length,
     );
-    providers = [...providers, p];
+    providers = _normalizePriorities([...providers, p]);
     await store.save(providers);
     key.clear();
     HapticFeedback.mediumImpact();
+    if (!mounted) return;
     setState(() => status = 'Provedor salvo com segurança no Keystore.');
   }
 
@@ -154,8 +182,10 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
     });
     try {
       final answer = await AiFailover(store: store).test(p);
+      if (!mounted) return;
       setState(() => status = 'Conexão OK (${p.name}): $answer');
     } catch (e) {
+      if (!mounted) return;
       setState(() => status = 'Falha (${p.name}): $e');
     } finally {
       if (mounted) setState(() => busy = false);
@@ -163,30 +193,38 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   }
 
   Future<void> _delete(AiProviderConfig p) async {
-    providers.removeWhere((x) => x.id == p.id);
+    HapticFeedback.lightImpact();
+    providers = _normalizePriorities(
+      providers.where((x) => x.id != p.id).toList(),
+    );
     await store.save(providers);
+    if (!mounted) return;
     setState(() => status = 'Provedor ${p.name} removido.');
+  }
+
+  Future<void> _movePriority(int index, int delta) async {
+    final target = index + delta;
+    if (target < 0 || target >= providers.length) return;
+    HapticFeedback.selectionClick();
+    final updated = [...providers];
+    final item = updated.removeAt(index);
+    updated.insert(target, item);
+    providers = _normalizePriorities(updated);
+    await store.save(providers);
+    if (!mounted) return;
+    setState(
+      () => status =
+          'Prioridade atualizada: ${item.name} agora é #${target + 1}.',
+    );
   }
 
   Future<void> _toggle(AiProviderConfig p) async {
     HapticFeedback.selectionClick();
     providers = providers
-        .map(
-          (x) => x.id == p.id
-              ? AiProviderConfig(
-                  id: x.id,
-                  name: x.name,
-                  baseUrl: x.baseUrl,
-                  model: x.model,
-                  apiKey: x.apiKey,
-                  enabled: !x.enabled,
-                  priority: x.priority,
-                )
-              : x,
-        )
+        .map((x) => x.id == p.id ? x.copyWith(enabled: !x.enabled) : x)
         .toList();
     await store.save(providers);
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   InputDecoration _hudInput(String label, {String? hint, Widget? suffixIcon}) =>
@@ -333,113 +371,162 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                             ),
                           ),
                         ),
-                      for (final p in providers)
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: _card,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: _border),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
+                      for (var idx = 0; idx < providers.length; idx++)
+                        Builder(
+                          builder: (context) {
+                            final p = providers[idx];
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: _card,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: _border),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Expanded(
-                                    child: Text(
-                                      '#${p.priority + 1} ${p.name}',
-                                      style: const TextStyle(
-                                        color: Color(0xFFE2E8F0),
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '#${idx + 1} ${p.name}',
+                                          style: const TextStyle(
+                                            color: Color(0xFFE2E8F0),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                  ),
-                                  InkWell(
-                                    onTap: () => _toggle(p),
-                                    borderRadius: BorderRadius.circular(6),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 3,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: p.enabled
-                                            ? const Color(0x3310B981)
-                                            : const Color(0xFF200004),
+                                      InkWell(
+                                        onTap: () => _toggle(p),
                                         borderRadius: BorderRadius.circular(6),
-                                        border: Border.all(
-                                          color: p.enabled
-                                              ? const Color(0x6610B981)
-                                              : _border,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 3,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: p.enabled
+                                                ? const Color(0x3310B981)
+                                                : const Color(0xFF200004),
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                            border: Border.all(
+                                              color: p.enabled
+                                                  ? const Color(0x6610B981)
+                                                  : _border,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            p.enabled ? 'ATIVO' : 'INATIVO',
+                                            style: TextStyle(
+                                              color: p.enabled
+                                                  ? const Color(0xFF34D399)
+                                                  : const Color(0xFF64748B),
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                      child: Text(
-                                        p.enabled ? 'ATIVO' : 'INATIVO',
-                                        style: TextStyle(
-                                          color: p.enabled
-                                              ? const Color(0xFF34D399)
-                                              : const Color(0xFF64748B),
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'MODELO: ${p.model}\nENDPOINT: ${p.baseUrl}\nCHAVE: ${_maskKey(p.apiKey)}',
+                                    style: const TextStyle(
+                                      color: Color(0xFF94A3B8),
+                                      fontSize: 10,
+                                      height: 1.35,
                                     ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          IconButton(
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            tooltip: 'Subir prioridade',
+                                            onPressed: idx > 0
+                                                ? () => _movePriority(idx, -1)
+                                                : null,
+                                            icon: Icon(
+                                              Icons.keyboard_arrow_up,
+                                              size: 16,
+                                              color: idx > 0
+                                                  ? const Color(0xFFCBD5E1)
+                                                  : const Color(0xFF334155),
+                                            ),
+                                          ),
+                                          IconButton(
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            tooltip: 'Descer prioridade',
+                                            onPressed:
+                                                idx < providers.length - 1
+                                                    ? () =>
+                                                        _movePriority(idx, 1)
+                                                    : null,
+                                            icon: Icon(
+                                              Icons.keyboard_arrow_down,
+                                              size: 16,
+                                              color: idx < providers.length - 1
+                                                  ? const Color(0xFFCBD5E1)
+                                                  : const Color(0xFF334155),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      Row(
+                                        children: [
+                                          TextButton.icon(
+                                            onPressed:
+                                                busy ? null : () => _test(p),
+                                            icon: const Icon(
+                                              Icons.wifi_tethering,
+                                              size: 14,
+                                              color: _crimson,
+                                            ),
+                                            label: const Text(
+                                              'TESTAR',
+                                              style: TextStyle(
+                                                color: _crimson,
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                          TextButton.icon(
+                                            onPressed: () => _delete(p),
+                                            icon: const Icon(
+                                              Icons.delete_outline,
+                                              size: 14,
+                                              color: Color(0xFFFB7185),
+                                            ),
+                                            label: const Text(
+                                              'REMOVER',
+                                              style: TextStyle(
+                                                color: Color(0xFFFB7185),
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 6),
-                              Text(
-                                'MODELO: ${p.model}\nENDPOINT: ${p.baseUrl}',
-                                style: const TextStyle(
-                                  color: Color(0xFF94A3B8),
-                                  fontSize: 10,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  TextButton.icon(
-                                    onPressed: busy ? null : () => _test(p),
-                                    icon: const Icon(
-                                      Icons.wifi_tethering,
-                                      size: 14,
-                                      color: _crimson,
-                                    ),
-                                    label: const Text(
-                                      'TESTAR',
-                                      style: TextStyle(
-                                        color: _crimson,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  TextButton.icon(
-                                    onPressed: () => _delete(p),
-                                    icon: const Icon(
-                                      Icons.delete_outline,
-                                      size: 14,
-                                      color: Color(0xFFFB7185),
-                                    ),
-                                    label: const Text(
-                                      'REMOVER',
-                                      style: TextStyle(
-                                        color: Color(0xFFFB7185),
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
+                            );
+                          },
                         ),
 
                       // Add Provider Card
@@ -479,7 +566,13 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                 ),
                                 DropdownMenuItem(
                                   value: 'OpenAI',
-                                  child: Text('OpenAI-Compatible'),
+                                  child: Text('OpenAI Official'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'Custom',
+                                  child: Text(
+                                    'OpenAI-Compatible (Custom / OpenRouter)',
+                                  ),
                                 ),
                               ],
                               onChanged: (v) {

@@ -147,14 +147,23 @@ class _AuthScreenState extends State<AuthScreen> {
         busy = true;
         pinStatus = 'GRAVANDO COFRE PBKDF2...';
       });
-      await widget.vault.setPin(pin);
-      final ok = await widget.gate.authenticatePin(pin, widget.vault.verify);
-      if (!mounted) return;
-      setState(() {
-        busy = false;
-        pinStatus = ok ? 'PORTÃO LIBERADO' : 'FALHA NO COFRE';
-        if (!ok) error = 'Não foi possível salvar o PIN';
-      });
+      try {
+        await widget.vault.setPin(pin);
+        final ok = await widget.gate.authenticatePin(pin, widget.vault.verify);
+        if (!mounted) return;
+        setState(() {
+          busy = false;
+          pinStatus = ok ? 'PORTÃO LIBERADO' : 'FALHA NO COFRE';
+          if (!ok) error = 'Não foi possível salvar o PIN';
+        });
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          busy = false;
+          pinStatus = 'FALHA NO COFRE';
+          error = 'Erro ao gravar PIN: $e';
+        });
+      }
       return;
     }
 
@@ -162,25 +171,35 @@ class _AuthScreenState extends State<AuthScreen> {
       busy = true;
       pinStatus = 'AUTENTICANDO AUTHGATE...';
     });
-    final ok = await widget.gate.authenticatePin(pin, widget.vault.verify);
-    if (!mounted) return;
-    if (!ok) {
-      HapticFeedback.heavyImpact();
-      await _refreshLock();
+    try {
+      final ok = await widget.gate.authenticatePin(pin, widget.vault.verify);
+      if (!mounted) return;
+      if (!ok) {
+        HapticFeedback.heavyImpact();
+        await _refreshLock();
+        if (!mounted) return;
+        setState(() {
+          busy = false;
+          pin = '';
+          pinStatus =
+              lockLeft > Duration.zero ? 'BLOQUEIO ATIVO' : 'PIN RECUSADO';
+          error = 'PIN inválido';
+        });
+        return;
+      }
+      HapticFeedback.mediumImpact();
+      setState(() {
+        busy = false;
+        pinStatus = 'PORTÃO LIBERADO';
+      });
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         busy = false;
-        pin = '';
-        pinStatus = lockLeft > Duration.zero ? 'BLOQUEIO ATIVO' : 'PIN RECUSADO';
-        error = 'PIN inválido';
+        pinStatus = 'ERRO DE AUTENTICAÇÃO';
+        error = 'Falha ao verificar PIN: $e';
       });
-      return;
     }
-    HapticFeedback.mediumImpact();
-    setState(() {
-      busy = false;
-      pinStatus = 'PORTÃO LIBERADO';
-    });
   }
 
   Future<void> _biometric() async {
@@ -191,19 +210,28 @@ class _AuthScreenState extends State<AuthScreen> {
       error = null;
       pinStatus = 'ESCANEANDO BIOMETRIA...';
     });
-    final ok = await widget.gate.authenticateBiometric();
-    if (ok) await widget.vault.resetFailures();
-    if (!mounted) return;
-    setState(() {
-      busy = false;
-      if (ok) {
-        pinStatus = 'BIOMETRIA APROVADA';
-      } else {
+    try {
+      final ok = await widget.gate.authenticateBiometric();
+      if (ok) await widget.vault.resetFailures();
+      if (!mounted) return;
+      setState(() {
+        busy = false;
+        if (ok) {
+          pinStatus = 'BIOMETRIA APROVADA';
+        } else {
+          pinStatus = 'FALHA BIOMÉTRICA';
+          error =
+              'Sensor indisponível, cancelado ou bloqueado pelo sistema. Use o PIN.';
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        busy = false;
         pinStatus = 'FALHA BIOMÉTRICA';
-        error =
-            'Sensor indisponível, cancelado ou bloqueado pelo sistema. Use o PIN.';
-      }
-    });
+        error = 'Sensor indisponível no momento. Use o PIN.';
+      });
+    }
   }
 
   void _handleDigit(String digit) {
@@ -221,11 +249,31 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
+  void _handleBackspace() {
+    if (blocked || pin.isEmpty) return;
+    SystemSound.play(SystemSoundType.click);
+    HapticFeedback.selectionClick();
+    setState(() {
+      pin = pin.substring(0, pin.length - 1);
+      error = null;
+      if (pin.isEmpty) {
+        pinStatus = isSetup
+            ? (firstEntry == null
+                ? 'CRIE SEU PIN (4-8 DÍGITOS)'
+                : 'REPITA O PIN')
+            : 'AGUARDANDO PIN';
+      }
+    });
+  }
+
   void _handleClear() {
     if (blocked) return;
     SystemSound.play(SystemSoundType.click);
     HapticFeedback.lightImpact();
     setState(() {
+      if (isSetup && pin.isEmpty && firstEntry != null) {
+        firstEntry = null;
+      }
       pin = '';
       error = null;
       pinStatus = isSetup
@@ -478,15 +526,38 @@ class _AuthScreenState extends State<AuthScreen> {
                               fontSize: 10,
                             ),
                           ),
-                          Text(
-                            lockLeft > Duration.zero
-                                ? 'AGUARDE ${_formatWait(lockLeft)}'
-                                : pinStatus,
-                            style: const TextStyle(
-                              color: _crimson,
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                            ),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                lockLeft > Duration.zero
+                                    ? 'AGUARDE ${_formatWait(lockLeft)}'
+                                    : pinStatus,
+                                style: const TextStyle(
+                                  color: _crimson,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              if (pin.isNotEmpty && !blocked) ...[
+                                const SizedBox(width: 8),
+                                InkWell(
+                                  onTap: _handleBackspace,
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 2,
+                                    ),
+                                    child: Icon(
+                                      Icons.backspace_outlined,
+                                      size: 13,
+                                      color: _rose,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ],
                       ),
@@ -579,7 +650,9 @@ class _AuthScreenState extends State<AuthScreen> {
                           onTap: blocked ? null : () => _handleDigit('$num'),
                         ),
                       _KeypadButton(
-                        label: 'LIMPAR',
+                        label: isSetup && pin.isEmpty && firstEntry != null
+                            ? 'VOLTAR'
+                            : 'LIMPAR',
                         textColor: const Color(0xFFF43F5E),
                         fontSize: 11,
                         onTap: blocked ? null : _handleClear,

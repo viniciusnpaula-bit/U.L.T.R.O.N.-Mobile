@@ -77,10 +77,19 @@ class PinVault {
     if (await lockRemaining() > Duration.zero) return false;
     final raw = await _storage.read(key: _key);
     if (raw == null) return false;
-    final data = jsonDecode(raw) as Map<String, dynamic>;
-    final salt = base64Decode(data['salt'] as String);
-    final expected = base64Decode(data['hash'] as String);
-    final actual = await _derive(pin, salt, iterations: data['iterations'] as int);
+    final Map<String, dynamic> data;
+    final Uint8List salt;
+    final Uint8List expected;
+    final int iterations;
+    try {
+      data = jsonDecode(raw) as Map<String, dynamic>;
+      salt = base64Decode(data['salt'] as String);
+      expected = base64Decode(data['hash'] as String);
+      iterations = (data['iterations'] as int?) ?? _iterations;
+    } catch (_) {
+      return false;
+    }
+    final actual = await _derive(pin, salt, iterations: iterations);
     if (!_constantTimeEquals(actual, expected)) {
       await registerFailure();
       return false;

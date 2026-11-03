@@ -69,7 +69,7 @@ class _CoreScreenState extends State<CoreScreen>
   int authFailures = 0;
   bool? hasPinConfigured;
 
-  List<_FeedEntry> feed = const [
+  static const _defaultFeed = <_FeedEntry>[
     _FeedEntry(
       isUser: false,
       senderLabel: 'Kernel Local',
@@ -78,6 +78,8 @@ class _CoreScreenState extends State<CoreScreen>
       timestamp: 'ONLINE',
     ),
   ];
+
+  List<_FeedEntry> feed = _defaultFeed;
 
   @override
   void initState() {
@@ -108,22 +110,22 @@ class _CoreScreenState extends State<CoreScreen>
       setState(() {
         authFailures = failures;
         hasPinConfigured = pinSet;
-        if (enabledProviders.isNotEmpty) {
-          activeProviderUsed = enabledProviders.first.name;
-        }
-        if (saved.isNotEmpty) {
-          feed = saved
-              .map(
-                (m) => _FeedEntry(
-                  isUser: m.role == ChatRole.user,
-                  senderLabel:
-                      m.role == ChatRole.user ? 'OPERADOR' : 'U.L.T.R.O.N.',
-                  text: m.content,
-                  timestamp: _formatTime(m.createdAt.toLocal()),
-                ),
-              )
-              .toList();
-        }
+        activeProviderUsed = enabledProviders.isNotEmpty
+            ? enabledProviders.first.name
+            : 'Failover Pronto';
+        feed = saved.isNotEmpty
+            ? saved
+                .map(
+                  (m) => _FeedEntry(
+                    isUser: m.role == ChatRole.user,
+                    senderLabel:
+                        m.role == ChatRole.user ? 'OPERADOR' : 'U.L.T.R.O.N.',
+                    text: m.content,
+                    timestamp: _formatTime(m.createdAt.toLocal()),
+                  ),
+                )
+                .toList()
+            : _defaultFeed;
       });
       _scrollToBottom();
     } catch (_) {}
@@ -266,7 +268,7 @@ class _CoreScreenState extends State<CoreScreen>
           timestamp: timeStr,
         ),
       );
-      await _runCommand(command.command);
+      await _runCommand(command.command, command.argument);
       return;
     }
     if (text.startsWith('/')) {
@@ -420,12 +422,20 @@ class _CoreScreenState extends State<CoreScreen>
     }
   }
 
-  Future<void> _runCommand(UltronCommand command) async {
+  Future<void> _runCommand(
+    UltronCommand command, [
+    String argument = '',
+  ]) async {
     switch (command) {
       case UltronCommand.help:
         _setPanel(_ActivePanel.help);
         break;
       case UltronCommand.security:
+        final arg = argument.trim().toLowerCase();
+        if (arg == 'lock' || arg == 'travar' || arg == 'bloquear') {
+          _lockSession();
+          return;
+        }
         final failures = await widget.vault.failureCount();
         final pinSet = await widget.vault.hasPin;
         if (!mounted) return;
@@ -844,58 +854,73 @@ class _CoreScreenState extends State<CoreScreen>
                 return Align(
                   alignment:
                       msg.isUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: Container(
-                    constraints: BoxConstraints(
-                      maxWidth: MediaQuery.of(context).size.width * 0.84,
-                    ),
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: msg.isUser
-                          ? const Color(0xFF180004)
-                          : const Color(0xFF0F0003),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: msg.isUser
-                            ? _crimson.withValues(alpha: 0.4)
-                            : _border,
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              msg.senderLabel,
-                              style: TextStyle(
-                                color: msg.isUser ? _rose : _crimson,
-                                fontSize: 9,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            Text(
-                              msg.timestamp,
-                              style: const TextStyle(
-                                color: Color(0xFF64748B),
-                                fontSize: 9,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          msg.text,
-                          style: TextStyle(
-                            color: msg.isUser
-                                ? const Color(0xFFE2E8F0)
-                                : const Color(0xFFCBD5E1),
-                            fontSize: 11,
-                            height: 1.4,
+                  child: GestureDetector(
+                    onLongPress: () {
+                      HapticFeedback.selectionClick();
+                      Clipboard.setData(ClipboardData(text: msg.text));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Mensagem copiada para a área de transferência.',
+                            style: TextStyle(fontSize: 11),
                           ),
+                          duration: Duration(seconds: 2),
                         ),
-                      ],
+                      );
+                    },
+                    child: Container(
+                      constraints: BoxConstraints(
+                        maxWidth: MediaQuery.of(context).size.width * 0.84,
+                      ),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: msg.isUser
+                            ? const Color(0xFF180004)
+                            : const Color(0xFF0F0003),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: msg.isUser
+                              ? _crimson.withValues(alpha: 0.4)
+                              : _border,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                msg.senderLabel,
+                                style: TextStyle(
+                                  color: msg.isUser ? _rose : _crimson,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                msg.timestamp,
+                                style: const TextStyle(
+                                  color: Color(0xFF64748B),
+                                  fontSize: 9,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            msg.text,
+                            style: TextStyle(
+                              color: msg.isUser
+                                  ? const Color(0xFFE2E8F0)
+                                  : const Color(0xFFCBD5E1),
+                              fontSize: 11,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 );
@@ -1439,9 +1464,9 @@ class _CoreScreenState extends State<CoreScreen>
                   highlight: true,
                 ),
                 _HelpSyntaxItem(
-                  cmd: '/security',
+                  cmd: '/security | /security lock',
                   desc:
-                      'Exibe a auditoria do AuthGate e o nível de privilégio.',
+                      'Exibe a auditoria do AuthGate ou trava a sessão imediatamente.',
                   highlight: true,
                 ),
                 _HelpSyntaxItem(
@@ -1751,6 +1776,46 @@ class CorePainter extends CustomPainter {
   final double time;
   final double intensity;
 
+  static const _auraGradient = RadialGradient(
+    colors: [
+      Color(0xE6FF1A24),
+      Color(0x73AA0812),
+      Color(0x40320205),
+      Color(0x000A0002),
+    ],
+    stops: [0.0, 0.35, 0.70, 1.0],
+  );
+
+  static const _hotspotGradient = RadialGradient(
+    colors: [
+      Color(0xFFFFFFFF),
+      Color(0xFFFF9098),
+      Color(0xFFFF1A24),
+      Color(0x00FF1A24),
+    ],
+    stops: [0.0, 0.28, 0.70, 1.0],
+  );
+
+  static final _ring1Paint = Paint()
+    ..color = const Color(0xBFFF1A24)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.8;
+
+  static final _nodePaint = Paint()..color = const Color(0xFFFF2B37);
+
+  static final _ring2Paint = Paint()
+    ..color = const Color(0x80FF3C46)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.3;
+
+  static final _majorTickPaint = Paint()..color = const Color(0xFFFF1A24);
+  static final _minorTickPaint = Paint()..color = const Color(0x59FF5050);
+
+  static final _hexPaint = Paint()
+    ..color = const Color(0xBFFF6E78)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.4;
+
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.shortestSide;
@@ -1766,16 +1831,7 @@ class CorePainter extends CustomPainter {
     // 1. Deep Crimson Radial Aura
     final auraRadius = baseR * 1.95;
     final auraRect = Rect.fromCircle(center: center, radius: auraRadius);
-    final auraPaint = Paint()
-      ..shader = const RadialGradient(
-        colors: [
-          Color(0xE6FF1A24),
-          Color(0x73AA0812),
-          Color(0x40320205),
-          Color(0x000A0002),
-        ],
-        stops: [0.0, 0.35, 0.70, 1.0],
-      ).createShader(auraRect);
+    final auraPaint = Paint()..shader = _auraGradient.createShader(auraRect);
     canvas.drawCircle(center, auraRadius, auraPaint);
 
     canvas.save();
@@ -1789,18 +1845,13 @@ class CorePainter extends CustomPainter {
       width: baseR * 1.55 * 2,
       height: baseR * 0.82 * 2,
     );
-    final ring1Paint = Paint()
-      ..color = const Color(0xBFFF1A24)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.8;
-    canvas.drawOval(ring1Rect, ring1Paint);
+    canvas.drawOval(ring1Rect, _ring1Paint);
 
-    final nodePaint = Paint()..color = const Color(0xFFFF2B37);
     for (var i = 0; i < 4; i++) {
       final th = i * pi / 2;
       final px = cos(th) * baseR * 1.55;
       final py = sin(th) * baseR * 0.82;
-      canvas.drawCircle(Offset(px, py), 2.5, nodePaint);
+      canvas.drawCircle(Offset(px, py), 2.5, _nodePaint);
     }
     canvas.restore();
 
@@ -1812,15 +1863,9 @@ class CorePainter extends CustomPainter {
       width: baseR * 1.15 * 2,
       height: baseR * 1.48 * 2,
     );
-    final ring2Paint = Paint()
-      ..color = const Color(0x80FF3C46)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.3;
-    canvas.drawOval(ring2Rect, ring2Paint);
+    canvas.drawOval(ring2Rect, _ring2Paint);
 
     const ticks = 16;
-    final majorTickPaint = Paint()..color = const Color(0xFFFF1A24);
-    final minorTickPaint = Paint()..color = const Color(0x59FF5050);
     for (var t = 0; t < ticks; t++) {
       final theta = (t / ticks) * pi * 2;
       final tx = cos(theta) * baseR * 1.15;
@@ -1829,7 +1874,7 @@ class CorePainter extends CustomPainter {
       canvas.drawCircle(
         Offset(tx, ty),
         isMajor ? 2.0 : 1.0,
-        isMajor ? majorTickPaint : minorTickPaint,
+        isMajor ? _majorTickPaint : _minorTickPaint,
       );
     }
     canvas.restore();
@@ -1851,11 +1896,7 @@ class CorePainter extends CustomPainter {
       }
     }
     hexPath.close();
-    final hexPaint = Paint()
-      ..color = const Color(0xBFFF6E78)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4;
-    canvas.drawPath(hexPath, hexPaint);
+    canvas.drawPath(hexPath, _hexPaint);
     canvas.restore();
 
     // 4. Central Hyper-Bright Singularity Hotspot
@@ -1865,15 +1906,7 @@ class CorePainter extends CustomPainter {
       radius: hotspotRadius,
     );
     final hotspotPaint = Paint()
-      ..shader = const RadialGradient(
-        colors: [
-          Color(0xFFFFFFFF),
-          Color(0xFFFF9098),
-          Color(0xFFFF1A24),
-          Color(0x00FF1A24),
-        ],
-        stops: [0.0, 0.28, 0.70, 1.0],
-      ).createShader(hotspotRect);
+      ..shader = _hotspotGradient.createShader(hotspotRect);
     canvas.drawCircle(Offset.zero, hotspotRadius, hotspotPaint);
 
     canvas.restore();
