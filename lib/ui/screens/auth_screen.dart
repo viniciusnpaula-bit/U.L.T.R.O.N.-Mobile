@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:local_auth/local_auth.dart';
 
 import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
@@ -21,6 +24,9 @@ class _AuthScreenState extends State<AuthScreen> {
   String? error;
   bool? hasPin;
   bool busy = false;
+  Duration lockLeft = Duration.zero;
+  List<BiometricType> biometrics = const [];
+  Timer? _lockTimer;
 
   @override
   void initState() {
@@ -28,10 +34,24 @@ class _AuthScreenState extends State<AuthScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _lockTimer?.cancel();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     try {
       final stored = await widget.vault.hasPin;
-      if (mounted) setState(() => hasPin = stored);
+      final left = await widget.vault.lockRemaining();
+      final available = await widget.gate.biometrics();
+      if (!mounted) return;
+      setState(() {
+        hasPin = stored;
+        lockLeft = left;
+        biometrics = available;
+      });
+      _startLockTimer();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -41,10 +61,33 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
+  /// Counts the wait down on screen; the vault enforces it either way.
+  void _startLockTimer() {
+    _lockTimer?.cancel();
+    if (lockLeft <= Duration.zero) return;
+    _lockTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+      final left = await widget.vault.lockRemaining();
+      if (!mounted) return;
+      setState(() {
+        lockLeft = left;
+        if (left <= Duration.zero) error = null;
+      });
+      if (left <= Duration.zero) _lockTimer?.cancel();
+    });
+  }
+
+  Future<void> _refreshLock() async {
+    final left = await widget.vault.lockRemaining();
+    if (!mounted) return;
+    setState(() => lockLeft = left);
+    _startLockTimer();
+  }
+
   bool get isSetup => hasPin == false;
+  bool get blocked => busy || lockLeft > Duration.zero;
 
   Future<void> _submit() async {
-    if (busy) return;
+    if (blocked) return;
     if (isSetup && firstEntry == null) {
       if (pin.length < 4) {
         setState(() => error = 'Use de 4 a 8 dígitos');
@@ -86,6 +129,7 @@ class _AuthScreenState extends State<AuthScreen> {
       pin = '';
       if (!ok) error = 'PIN inválido';
     });
+    if (!ok) await _refreshLock();
   }
 
   Future<void> _biometric() async {
@@ -95,12 +139,14 @@ class _AuthScreenState extends State<AuthScreen> {
     if (!mounted) return;
     setState(() {
       busy = false;
-      if (!ok) error = 'Biometria indisponível ou cancelada';
+      if (!ok) {
+        error = 'Sensor indisponível, cancelado ou bloqueado pelo sistema. Use o PIN.';
+      }
     });
   }
 
   void _handleKey(int index, String label) {
-    if (busy) return;
+    if (blocked) return;
     if (index == 11) {
       _submit();
       return;
@@ -115,13 +161,35 @@ class _AuthScreenState extends State<AuthScreen> {
     });
   }
 
+  String get _biometricLabel {
+    if (biometrics.contains(BiometricType.face)) return 'Reconhecimento facial';
+    if (biometrics.contains(BiometricType.fingerprint)) return 'Impressão digital';
+    if (biometrics.contains(BiometricType.iris)) return 'Íris';
+    // Android reports strong/weak without naming the sensor; BiometricPrompt
+    // uses whichever biometric the user enrolled, face included.
+    return 'Face ou digital';
+  }
+
+  IconData get _biometricIcon => biometrics.contains(BiometricType.face)
+      ? Icons.face_retouching_natural
+      : Icons.fingerprint;
+
   String get _title => !isSetup
       ? 'PORTÃO DE ACESSO'
       : firstEntry == null
           ? 'CRIE SEU PIN'
           : 'REPITA O PIN';
 
+  static String _formatWait(Duration wait) {
+    final seconds = wait.inSeconds;
+    if (seconds < 60) return '${seconds}s';
+    return '${wait.inMinutes}m${(seconds % 60).toString().padLeft(2, '0')}s';
+  }
+
   String get _hint {
+    if (lockLeft > Duration.zero) {
+      return 'Muitas tentativas. Aguarde ${_formatWait(lockLeft)}';
+    }
     if (error != null) return error!;
     if (isSetup) {
       return firstEntry == null
@@ -157,7 +225,7 @@ class _AuthScreenState extends State<AuthScreen> {
                 ),
               ),
               Text('PIN • ${List.filled(pin.length, '●').join(' ')}'),
-              Text(_hint),
+              Text(_hint, textAlign: TextAlign.center),
               if (busy) const LinearProgressIndicator(),
               Wrap(
                 alignment: WrapAlignment.center,
@@ -174,7 +242,7 @@ class _AuthScreenState extends State<AuthScreen> {
                     child: Padding(
                       padding: const EdgeInsets.all(4),
                       child: OutlinedButton(
-                        onPressed: busy ? null : () => _handleKey(index, label),
+                        onPressed: blocked ? null : () => _handleKey(index, label),
                         style: OutlinedButton.styleFrom(foregroundColor: red),
                         child: Text(label),
                       ),
@@ -182,11 +250,11 @@ class _AuthScreenState extends State<AuthScreen> {
                   );
                 }),
               ),
-              if (!isSetup)
+              if (!isSetup && biometrics.isNotEmpty)
                 TextButton.icon(
                   onPressed: busy ? null : _biometric,
-                  icon: const Icon(Icons.fingerprint),
-                  label: const Text('Biometria'),
+                  icon: Icon(_biometricIcon),
+                  label: Text(_biometricLabel),
                 ),
             ],
           ),

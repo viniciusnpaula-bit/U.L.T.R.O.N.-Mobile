@@ -31,4 +31,25 @@ void main() {
       expect(a.length, 32);
     });
   });
+
+  group('PinVault lockout', () {
+    test('does not wait during the free attempts', () {
+      for (var failures = 0; failures <= PinVault.freeAttempts; failures++) {
+        expect(PinVault.lockDelay(failures), Duration.zero);
+      }
+    });
+
+    test('waits 30s on the first failure and doubles after it', () {
+      expect(PinVault.lockDelay(6), const Duration(seconds: 30));
+      expect(PinVault.lockDelay(7), const Duration(seconds: 60));
+      expect(PinVault.lockDelay(8), const Duration(seconds: 120));
+      expect(PinVault.lockDelay(9), const Duration(seconds: 240));
+      expect(PinVault.lockDelay(10), const Duration(minutes: 8));
+    });
+
+    test('caps the wait at 15 minutes', () {
+      expect(PinVault.lockDelay(11), const Duration(minutes: 15));
+      expect(PinVault.lockDelay(1000), const Duration(minutes: 15));
+    });
+  });
 }

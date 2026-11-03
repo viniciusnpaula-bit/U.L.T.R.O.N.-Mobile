@@ -14,9 +14,46 @@ class PinVault {
 
   final FlutterSecureStorage _storage;
   static const _key = 'ultron.pin.v1';
+  static const _lockKey = 'ultron.pin.lock.v1';
   static const _iterations = 120000;
 
+  /// Wrong PINs allowed before the first wait.
+  static const freeAttempts = 5;
+  static const _baseDelay = Duration(seconds: 30);
+  static const _maxDelay = Duration(minutes: 15);
+
   Future<bool> get hasPin async => (await _storage.read(key: _key)) != null;
+
+  /// No wait until [freeAttempts], then 30s doubling up to 15 minutes.
+  static Duration lockDelay(int failures) {
+    if (failures <= freeAttempts) return Duration.zero;
+    final step = (failures - freeAttempts).clamp(1, 10);
+    final seconds = _baseDelay.inSeconds << (step - 1);
+    return Duration(seconds: min(seconds, _maxDelay.inSeconds));
+  }
+
+  Future<Duration> lockRemaining() async {
+    final lock = await _readLock();
+    final until = DateTime.fromMillisecondsSinceEpoch(lock['until'] as int? ?? 0);
+    final left = until.difference(DateTime.now());
+    return left.isNegative ? Duration.zero : left;
+  }
+
+  /// Counts the failure, stores the wait it bought and returns it.
+  Future<Duration> registerFailure() async {
+    final failures = ((await _readLock())['failures'] as int? ?? 0) + 1;
+    final delay = lockDelay(failures);
+    await _storage.write(
+      key: _lockKey,
+      value: jsonEncode({
+        'failures': failures,
+        'until': DateTime.now().add(delay).millisecondsSinceEpoch,
+      }),
+    );
+    return delay;
+  }
+
+  Future<void> resetFailures() => _storage.delete(key: _lockKey);
 
   Future<void> setPin(String pin) async {
     final salt = _randomSalt();
@@ -29,19 +66,38 @@ class PinVault {
         'iterations': _iterations,
       }),
     );
+    await resetFailures();
   }
 
   Future<bool> verify(String pin) async {
+    // The gate refuses while a wait is pending, not only the keypad.
+    if (await lockRemaining() > Duration.zero) return false;
     final raw = await _storage.read(key: _key);
     if (raw == null) return false;
     final data = jsonDecode(raw) as Map<String, dynamic>;
     final salt = base64Decode(data['salt'] as String);
     final expected = base64Decode(data['hash'] as String);
     final actual = await _derive(pin, salt, iterations: data['iterations'] as int);
-    return _constantTimeEquals(actual, expected);
+    if (!_constantTimeEquals(actual, expected)) {
+      await registerFailure();
+      return false;
+    }
+    await resetFailures();
+    return true;
   }
 
   Future<void> clear() => _storage.delete(key: _key);
+
+  Future<Map<String, dynamic>> _readLock() async {
+    try {
+      final raw = await _storage.read(key: _lockKey);
+      if (raw == null) return const {};
+      return jsonDecode(raw) as Map<String, dynamic>;
+    } catch (_) {
+      // A corrupted record must not brick the gate.
+      return const {};
+    }
+  }
 
   static Future<List<int>> _derive(
     String pin,
