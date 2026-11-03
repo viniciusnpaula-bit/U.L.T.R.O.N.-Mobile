@@ -5,6 +5,7 @@ class VoiceService {
   final FlutterTts _tts;
   Future<void>? _initializing;
   bool _ready = false;
+  bool enabled = true;
 
   Future<void> initialize() async {
     if (_ready) return;
@@ -14,14 +15,15 @@ class VoiceService {
 
   Future<void> _configure() async {
     await _tts.setLanguage('pt-BR');
-    await _tts.setPitch(0.68);
-    await _tts.setSpeechRate(0.42);
+    await _tts.setPitch(0.55);
+    await _tts.setSpeechRate(0.48);
     await _tts.setVolume(1);
     await _tts.awaitSpeakCompletion(true);
     _ready = true;
   }
 
   Future<void> speak(String text) async {
+    if (!enabled) return;
     final message = text.trim();
     if (message.isEmpty) return;
     await initialize();

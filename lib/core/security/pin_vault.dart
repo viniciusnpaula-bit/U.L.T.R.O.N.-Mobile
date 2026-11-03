@@ -39,6 +39,9 @@ class PinVault {
     return left.isNegative ? Duration.zero : left;
   }
 
+  Future<int> failureCount() async =>
+      (await _readLock())['failures'] as int? ?? 0;
+
   /// Counts the failure, stores the wait it bought and returns it.
   Future<Duration> registerFailure() async {
     final failures = ((await _readLock())['failures'] as int? ?? 0) + 1;

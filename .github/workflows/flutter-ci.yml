@@ -65,4 +65,5 @@ jobs:
           "$AAPT" dump badging "$APK" | head -1
           "$AAPT" dump permissions "$APK" | grep -q "android.permission.INTERNET"
           "$AAPT" dump permissions "$APK" | grep -q "android.permission.REQUEST_INSTALL_PACKAGES"
+          "$AAPT" dump permissions "$APK" | grep -q "android.permission.USE_BIOMETRIC"
           "$AAPT" dump badging "$APK" | grep -q "package: name='com.viniciusnpaula.ultron_mobile'"
