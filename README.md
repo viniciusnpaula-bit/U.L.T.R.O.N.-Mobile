@@ -12,8 +12,14 @@ Desktop conventions: model output cannot authorize actions; sensitive operations
 ## Performance
 Avoid local model weights, continuous sensors, polling and unnecessary animation. Ticker stops when lifecycle is not resumed. Test profile/release builds on device; shader uses analytic rings without loops.
 
+## Android platform
+`android/` is versioned, not generated ad hoc: the manifest (INTERNET, REQUEST_INSTALL_PACKAGES, `allowBackup=false`), the app id `com.viniciusnpaula.ultron_mobile`, core library desugaring and the release signing config live here. CI still runs `flutter create --platforms=android --org com.viniciusnpaula --project-name=ultron_mobile .` to fill the files Flutter owns (Gradle plugin versions, wrapper, icons) and then restores the versioned copies. Use the same `--org` locally: a different id puts `MainActivity` in another package and the app crashes at launch.
+
 ## Setup/build
-Install Flutter stable and Android SDK; run `flutter doctor`, `flutter pub get`, then `flutter build apk --release`. APK output: `build/app/outputs/flutter-apk/app-release.apk`.
+Install Flutter stable and Android SDK; run `flutter doctor`, `flutter pub get`, then `flutter build apk --release`. APK output: `build/app/outputs/flutter-apk/app-release.apk`. Without `android/key.properties` a local release build is signed with the debug key, so it cannot replace an installed release build.
+
+## Release
+Pushing a `vX.Y.Z` tag builds, verifies with `apksigner` and publishes a GitHub Release containing `app-release.apk`; that release is what the in-app updater reads. Required repository secrets: `ANDROID_KEYSTORE_BASE64` (base64 of the `.jks`), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The job fails instead of publishing when they are missing.
 
 ## Security/scope
-Biometric uses local_auth. PIN verification is delegated; production must implement salted hash verification and key storage via Android Keystore. Session policy does not grant OS permissions. Obsidian needs app-accessible directory; shared Documents requires SAF. Notification listener, quick tile, SQLCipher, runtime shader binding, microphone and full stage are still follow-up work and are not claimed complete.
+Biometric uses local_auth. PIN verification is delegated; production must implement salted hash verification and key storage via Android Keystore. Conversation history is excluded from cloud backup and device transfer (`allowBackup=false` plus `data_extraction_rules.xml`). Session policy does not grant OS permissions. Obsidian needs app-accessible directory; shared Documents requires SAF. Notification listener, quick tile, SQLCipher, runtime shader binding, microphone and full stage are still follow-up work and are not claimed complete.

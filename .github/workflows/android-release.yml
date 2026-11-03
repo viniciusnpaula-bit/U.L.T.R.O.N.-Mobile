@@ -7,7 +7,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   release:
@@ -23,31 +23,15 @@ jobs:
           cache: true
 
       - name: Generate Android platform
-        run: flutter create --platforms=android --project-name=ultron_mobile .
+        run: flutter create --platforms=android --org com.viniciusnpaula --project-name=ultron_mobile .
 
-      - name: Restore project dependencies configuration
-        run: git checkout -- pubspec.yaml
-
-      - name: Enable Android core library desugaring
+      # flutter create rewrites pubspec.yaml and some Android files; the versioned
+      # copies (manifest, applicationId, desugaring, signing) always win.
+      - name: Restore committed files
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("android/app/build.gradle.kts")
-          lines = path.read_text().splitlines()
-          compile_index = next((i for i, line in enumerate(lines) if line.strip() == "compileOptions {"), None)
-          if compile_index is None:
-              raise SystemExit("compileOptions block not found")
-          if not any("isCoreLibraryDesugaringEnabled = true" in line for line in lines):
-              lines.insert(compile_index + 1, "        isCoreLibraryDesugaringEnabled = true")
-          dependency = '    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")'
-          if not any("desugar_jdk_libs" in line for line in lines):
-              dependency_index = next((i for i, line in enumerate(lines) if line.strip() == "dependencies {"), None)
-              if dependency_index is None:
-                  lines.extend(["", "dependencies {", dependency, "}"])
-              else:
-                  lines.insert(dependency_index + 1, dependency)
-          path.write_text("\n".join(lines) + "\n")
-          PY
+          git checkout -- pubspec.yaml
+          git checkout -- android
+          rm -f test/widget_test.dart
 
       - name: Configure Android signing
         env:
@@ -61,40 +45,12 @@ jobs:
           test -n "$ANDROID_KEY_ALIAS" || { echo "Missing ANDROID_KEY_ALIAS secret"; exit 1; }
           test -n "$ANDROID_KEY_PASSWORD" || { echo "Missing ANDROID_KEY_PASSWORD secret"; exit 1; }
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/ultron-release.jks
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-          path = Path("android/app/build.gradle.kts")
-          text = path.read_text()
-          if "signingConfigs {" not in text:
-              text = text.replace(
-                  "    buildTypes {",
-                  """    signingConfigs {
-                  create("release") {
-                      storeFile = file("ultron-release.jks")
-                      storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                      keyAlias = System.getenv("ANDROID_KEY_ALIAS")
-                      keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
-                  }
-              }
-              buildTypes {""",
-                  1,
-              )
-          text = text.replace(
-              'signingConfig = signingConfigs.getByName("debug")',
-              'signingConfig = signingConfigs.getByName("release")',
-          )
-          release_start = text.find('release {')
-          if release_start < 0:
-              raise SystemExit("release buildType not found")
-          release_end = text.find('}', release_start)
-          release_block = text[release_start:release_end]
-          if 'signingConfig = signingConfigs.getByName("release")' not in release_block:
-              text = text[:release_start] + text[release_start:].replace(
-                  "release {", 'release {\n            signingConfig = signingConfigs.getByName("release")', 1
-              )
-          path.write_text(text)
-          PY
+          cat > android/key.properties <<EOF
+          storeFile=ultron-release.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
 
       - name: Install dependencies
         run: flutter pub get
@@ -105,16 +61,33 @@ jobs:
       - name: Test
         run: flutter test
 
+      - name: Derive version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: echo "BUILD_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
       - name: Build signed release APK
-        run: flutter build apk --release
+        run: |
+          if [ -n "${BUILD_VERSION:-}" ]; then
+            flutter build apk --release --build-name="$BUILD_VERSION" --build-number="$GITHUB_RUN_NUMBER"
+          else
+            flutter build apk --release
+          fi
 
       - name: Verify APK signature
         run: |
           APK="build/app/outputs/flutter-apk/app-release.apk"
           test -s "$APK"
-          jarsigner -verify -verbose -certs "$APK"
+          APKSIGNER="$(ls -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/* | sort -V | tail -1)/apksigner"
+          "$APKSIGNER" verify --print-certs "$APK"
 
-      - name: Upload signed APK
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/app/outputs/flutter-apk/app-release.apk
+          generate_release_notes: true
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: ultron-release-apk
