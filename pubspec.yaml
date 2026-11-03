@@ -24,5 +24,3 @@ dev_dependencies:
   sqflite_common_ffi: ^2.3.0
 flutter:
   uses-material-design: true
-  shaders:
-    - shaders/ultron_core.frag
