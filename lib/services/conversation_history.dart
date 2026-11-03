@@ -8,9 +8,29 @@ class ConversationHistory {
   ConversationHistory._();
 
   static final ConversationHistory instance = ConversationHistory._();
+
+  /// Test seam: skips path_provider by taking an already-open database.
+  ConversationHistory.forDatabase(Database db) {
+    _database = db;
+  }
+
   static const _databaseName = 'ultron_conversations.db';
   static const _databaseVersion = 1;
   Database? _database;
+
+  static const schema = [
+    '''
+          CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          )
+        ''',
+    'CREATE INDEX messages_conversation_created '
+        'ON messages(conversation_id, created_at)',
+  ];
 
   Future<Database> get database async {
     if (_database != null) return _database!;
@@ -19,19 +39,9 @@ class ConversationHistory {
       p.join(directory.path, _databaseName),
       version: _databaseVersion,
       onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            conversation_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL
-          )
-        ''');
-        await db.execute(
-          'CREATE INDEX messages_conversation_created '
-          'ON messages(conversation_id, created_at)',
-        );
+        for (final statement in schema) {
+          await db.execute(statement);
+        }
       },
     );
     return _database!;

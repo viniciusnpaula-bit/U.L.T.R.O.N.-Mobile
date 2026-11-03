@@ -20,6 +20,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  # Runs sqflite on the desktop VM so the SQL layer is covered by `flutter test`.
+  sqflite_common_ffi: ^2.3.0
 flutter:
   uses-material-design: true
   shaders:
