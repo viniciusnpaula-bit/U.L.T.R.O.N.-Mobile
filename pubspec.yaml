@@ -1,7 +1,7 @@
 name: ultron_mobile
 description: U.L.T.R.O.N. Mobile autonomous Android assistant
 publish_to: none
-version: 0.3.0+3
+version: 0.4.0+4
 environment:
   sdk: '>=3.3.0 <4.0.0'
 dependencies:
