@@ -34,6 +34,16 @@ jobs:
         run: flutter analyze
       - name: Test
         run: flutter test
+      # Two Gradle builds in one job filled the runner disk (app-debug plus
+      # app-release both keep their merged native libs). Drop toolchains this
+      # project never uses; the Android SDK and the NDK stay.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/share/boost /opt/ghc /usr/share/swift
+          sudo rm -rf "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/emulator
+          sudo rm -rf "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/system-images
+          sudo docker image prune -af
+          df -h /
       - name: Build debug APK
         run: flutter build apk --debug
       - name: Upload debug APK
