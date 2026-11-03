@@ -3,6 +3,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../../models/chat_message.dart';
+import '../../core/security/auth_gate.dart';
+import '../../core/security/pin_vault.dart';
 import '../../services/conversation_history.dart';
 import '../../services/ai_provider_service.dart';
 import '../../services/app_update_service.dart';
@@ -15,7 +17,10 @@ import 'update_screen.dart';
 enum CoreStage { center, corner, hidden }
 
 class CoreScreen extends StatefulWidget {
-  const CoreScreen({super.key});
+  const CoreScreen({super.key, required this.gate, required this.vault});
+
+  final AuthGate gate;
+  final PinVault vault;
 
   @override
   State<CoreScreen> createState() => _CoreScreenState();
@@ -25,7 +30,7 @@ class _CoreScreenState extends State<CoreScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   late final Ticker ticker;
   final commandController = TextEditingController();
-  Duration elapsed = Duration.zero;
+  final coreTime = ValueNotifier<double>(0);
   CoreStage stage = CoreStage.center;
   bool active = false;
   bool sending = false;
@@ -38,9 +43,10 @@ class _CoreScreenState extends State<CoreScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Only the core repaints at 60fps; rebuilding the whole screen would repaint
+    // the text field and buttons on every frame.
     ticker = createTicker((duration) {
-      elapsed = duration;
-      if (mounted) setState(() {});
+      coreTime.value = duration.inMicroseconds / 1000000;
     });
     ticker.start();
     active = true;
@@ -79,6 +85,7 @@ class _CoreScreenState extends State<CoreScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     ticker.dispose();
+    coreTime.dispose();
     voiceService.stop();
     commandController.dispose();
     super.dispose();
@@ -164,22 +171,17 @@ class _CoreScreenState extends State<CoreScreen>
           backgroundColor: const Color(0xFF160509),
           title: const Text('COMANDOS U.L.T.R.O.N.'),
           content: const SingleChildScrollView(child: Text(
-            '/help     Exibe esta lista\\n'
-            '/security  Abre o painel de segurança\\n'
-            '/history   Abre o histórico local\\n'
-            '/settings  Configurações de IA\\n\\n'
+            '/help     Exibe esta lista\n'
+            '/security  Abre o painel de segurança\n'
+            '/history   Abre o histórico local\n'
+            '/settings  Configurações de IA\n\n'
             'Comandos são interpretados localmente.',
           )),
           actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('FECHAR'))],
         ));
         break;
       case UltronCommand.security:
-        await showDialog<void>(context: context, builder: (context) => AlertDialog(
-          backgroundColor: const Color(0xFF160509),
-          title: const Text('SEGURANÇA'),
-          content: const Text('O módulo AuthGate existe, mas ainda não está conectado à tela principal.\\n\\nNenhuma autenticação foi executada. O painel informa o estado real sem simular uma proteção ativa.'),
-          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('ENTENDI'))],
-        ));
+        await _showSecurity();
         break;
       case UltronCommand.history:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ConversationHistoryScreen()));
@@ -188,6 +190,39 @@ class _CoreScreenState extends State<CoreScreen>
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AiSettingsScreen()));
         break;
     }
+  }
+
+  Future<void> _showSecurity() async {
+    bool? hasPin;
+    try {
+      hasPin = await widget.vault.hasPin;
+    } catch (_) {
+      hasPin = null;
+    }
+    if (!mounted) return;
+    final pinLabel = hasPin == null
+        ? 'indisponível'
+        : hasPin
+            ? 'configurado'
+            : 'não configurado';
+    final lock = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF160509),
+        title: const Text('SEGURANÇA'),
+        content: Text(
+          'Sessão autenticada: ${widget.gate.isAuthenticated ? 'sim' : 'não'}\n'
+          'PIN: $pinLabel\n'
+          'Bloqueio: ao iniciar o app e ao tocar em BLOQUEAR\n\n'
+          'Conversas e comandos ficam no aparelho. Chaves de IA ficam no armazenamento seguro do Android.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('FECHAR')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('BLOQUEAR')),
+        ],
+      ),
+    );
+    if (lock == true) widget.gate.lock();
   }
 
   @override
@@ -204,8 +239,10 @@ class _CoreScreenState extends State<CoreScreen>
                   child: SizedBox(
                     width: stage == CoreStage.center ? 280 : 90,
                     height: stage == CoreStage.center ? 280 : 90,
-                    child: CustomPaint(
-                      painter: CorePainter(elapsed.inMilliseconds / 1000),
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: coreTime,
+                      builder: (context, time, child) =>
+                          CustomPaint(painter: CorePainter(time)),
                     ),
                   ),
                 ),

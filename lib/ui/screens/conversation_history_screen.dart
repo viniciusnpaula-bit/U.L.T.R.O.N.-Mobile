@@ -25,6 +25,26 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
   }
 
   Future<void> _clear() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Limpar histórico?'),
+        content: const Text(
+          'Todas as conversas salvas neste aparelho serão apagadas. Não dá para desfazer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('CANCELAR'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('APAGAR'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
     await ConversationHistory.instance.clear();
     if (!mounted) return;
     setState(_reload);

@@ -45,28 +45,44 @@ class AiFailover {
       final req=await client.postUrl(uri).timeout(const Duration(seconds:20));
       req.headers.set(HttpHeaders.authorizationHeader,'Bearer ${p.apiKey}');
       req.headers.contentType=ContentType.json;
-      final messages=<Map<String,String>>[];
-      for(final item in history.take(12)) {
-        final role=item['role'], content=item['content'];
-        if((role=='user'||role=='assistant') && content!=null && content.trim().isNotEmpty) {
-          messages.add({'role':role!,'content':content});
-        }
-      }
-      messages.add({'role':'user','content':prompt});
+      final messages=buildAiMessages(prompt,history);
       req.write(jsonEncode({'model':p.model,'messages':messages,'temperature':0.4}));
       final response=await req.close().timeout(const Duration(seconds:25));
-      final body=await response.transform(utf8.decoder).join();
+      final body=await response.transform(utf8.decoder).join().timeout(const Duration(seconds:30));
       if(response.statusCode<200||response.statusCode>=300) {
         String message='Falha HTTP ${response.statusCode}';
         try { final error=jsonDecode(body); message=(error['error']?['message']??error['message']??message).toString(); } catch (_) {}
-        message=message.replaceAll(p.apiKey,'[chave ocultada]');
+        message=redactSecret(message,p.apiKey);
         if(message.length>220) message=message.substring(0,220);
         throw HttpException('HTTP ${response.statusCode}: $message');
       }
-      final data=jsonDecode(body) as Map<String,dynamic>;
-      final text=((data['choices'] as List?)?.first['message']?['content']??'').toString();
-      if(text.trim().isEmpty) throw const FormatException('Resposta vazia');
-      return text;
+      return parseAiReply(body);
     } finally { client.close(force:true); }
   }
+}
+
+/// Keeps only usable turns, caps the window and appends the new prompt.
+List<Map<String,String>> buildAiMessages(String prompt, List<Map<String,String>> history) {
+  final messages=<Map<String,String>>[];
+  for(final item in history.take(12)) {
+    final role=item['role'], content=item['content'];
+    if((role=='user'||role=='assistant') && content!=null && content.trim().isNotEmpty) {
+      messages.add({'role':role!,'content':content});
+    }
+  }
+  messages.add({'role':'user','content':prompt});
+  return messages;
+}
+
+String parseAiReply(String body) {
+  final data=jsonDecode(body) as Map<String,dynamic>;
+  final text=((data['choices'] as List?)?.first['message']?['content']??'').toString();
+  if(text.trim().isEmpty) throw const FormatException('Resposta vazia');
+  return text;
+}
+
+/// Provider errors echo the request back; never let the key reach the UI.
+String redactSecret(String message, String secret) {
+  if(secret.trim().isEmpty) return message;
+  return message.replaceAll(secret,'[chave ocultada]');
 }

@@ -22,6 +22,8 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   Future<void> _save() async {
     if(name.text.trim().isEmpty||url.text.trim().isEmpty||model.text.trim().isEmpty||key.text.trim().isEmpty){setState(()=>status='Preencha nome, URL, modelo e chave.');return;}
     final base=url.text.trim();
+    final parsed=Uri.tryParse(base);
+    if(parsed==null||parsed.scheme!='https'||parsed.host.isEmpty){setState(()=>status='Use uma URL https válida.');return;}
     if(providerPreset=='Groq'&&!base.startsWith('https://api.groq.com/')){setState(()=>status='Para uma chave Groq, selecione Groq e use o endpoint da Groq.');return;}
     if(providerPreset=='OpenAI'&&!base.startsWith('https://api.openai.com/')){setState(()=>status='Para uma chave OpenAI, selecione OpenAI e use o endpoint da OpenAI.');return;}
     final p=AiProviderConfig(id:DateTime.now().microsecondsSinceEpoch.toString(),name:name.text.trim(),baseUrl:base,model:model.text.trim(),apiKey:key.text.trim(),priority:providers.length);
