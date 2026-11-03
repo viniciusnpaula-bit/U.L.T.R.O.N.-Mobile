@@ -19,7 +19,9 @@ Avoid local model weights, continuous sensors, polling and unnecessary animation
 Install Flutter stable and Android SDK; run `flutter doctor`, `flutter pub get`, then `flutter build apk --release`. APK output: `build/app/outputs/flutter-apk/app-release.apk`. Without `android/key.properties` a local release build is signed with the debug key, so it cannot replace an installed release build.
 
 ## Release
-Pushing a `vX.Y.Z` tag builds, verifies with `apksigner` and publishes a GitHub Release containing `app-release.apk`; that release is what the in-app updater reads. Required repository secrets: `ANDROID_KEYSTORE_BASE64` (base64 of the `.jks`), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The job fails instead of publishing when they are missing.
+Pushing a `vX.Y.Z` tag builds, verifies with `apksigner` and publishes a GitHub Release containing `app-release.apk`; that release is what the in-app updater reads. Required repository secrets: `ANDROID_KEYSTORE_BASE64` (base64 of the `.jks`/PKCS12 store), `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. The job fails instead of publishing when they are missing.
+
+Keep a backup of the keystore and its password somewhere outside this repository: an update signed with a different key cannot be installed over the previous build, so losing the keystore ends the update path for installed users.
 
 ## Security/scope
 Biometric uses local_auth: the app starts locked and the core screen only opens after biometrics or the PIN. The PIN is stored as PBKDF2-HMAC-SHA256 (120k iterations, 16-byte random salt) in `flutter_secure_storage`; the plain PIN is never persisted. `/security` reports the real gate state and can lock the session. There is no brute-force lockout yet. Conversation history is excluded from cloud backup and device transfer (`allowBackup=false` plus `data_extraction_rules.xml`). Session policy does not grant OS permissions. Obsidian needs app-accessible directory; shared Documents requires SAF. Notification listener, quick tile, SQLCipher, runtime shader binding, microphone and full stage are still follow-up work and are not claimed complete.
