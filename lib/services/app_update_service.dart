@@ -49,6 +49,27 @@ class AppUpdateService {
     }
   }
 
+  /// Dotted numeric comparison: "v0.3.0" is newer than "0.2.9", "1.0.0+4" equals "1.0.0".
+  static bool isNewer(String candidate, String installed) {
+    final next = _versionParts(candidate);
+    final current = _versionParts(installed);
+    for (var i = 0; i < 3; i++) {
+      final a = i < next.length ? next[i] : 0;
+      final b = i < current.length ? current[i] : 0;
+      if (a != b) return a > b;
+    }
+    return false;
+  }
+
+  static List<int> _versionParts(String value) => value
+      .trim()
+      .replaceFirst(RegExp(r'^v'), '')
+      .split('+')
+      .first
+      .split('.')
+      .map((part) => int.tryParse(RegExp(r'^\d+').stringMatch(part) ?? '') ?? 0)
+      .toList();
+
   static bool isTrustedDownloadUri(Uri uri) {
     final host = uri.host.toLowerCase();
     final trustedHost = host == 'github.com' ||

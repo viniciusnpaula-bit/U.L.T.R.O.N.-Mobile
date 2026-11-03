@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../models/chat_message.dart';
 import '../../services/conversation_history.dart';
 import '../../services/ai_provider_service.dart';
+import '../../services/app_update_service.dart';
 import '../../services/slash_command_parser.dart';
 import '../../services/voice_service.dart';
 import 'ai_settings_screen.dart';
@@ -28,7 +29,9 @@ class _CoreScreenState extends State<CoreScreen>
   CoreStage stage = CoreStage.center;
   bool active = false;
   bool sending = false;
+  bool hasUpdate = false;
   final voiceService = VoiceService();
+  final updateService = AppUpdateService();
 
 
   @override
@@ -42,6 +45,20 @@ class _CoreScreenState extends State<CoreScreen>
     ticker.start();
     active = true;
     voiceService.initialize();
+    _checkUpdate();
+  }
+
+  /// Silent, best effort: only paints a dot on the update button.
+  Future<void> _checkUpdate() async {
+    try {
+      final latest = await updateService.check();
+      if (latest == null || !mounted) return;
+      final installed = await updateService.currentVersion();
+      if (!mounted) return;
+      setState(() => hasUpdate = AppUpdateService.isNewer(latest.version, installed));
+    } catch (_) {
+      // Offline or rate limited: the update screen reports details on demand.
+    }
   }
 
   @override
@@ -199,9 +216,17 @@ class _CoreScreenState extends State<CoreScreen>
                   child: Row(
                     children: [
                       IconButton(
-                        tooltip: 'Atualizar U.L.T.R.O.N.',
-                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const UpdateScreen())),
-                        icon: const Icon(Icons.system_update, color: Color(0xFFE50914)),
+                        tooltip: hasUpdate
+                            ? 'Atualização disponível'
+                            : 'Atualizar U.L.T.R.O.N.',
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const UpdateScreen()),
+                        ),
+                        icon: Badge(
+                          isLabelVisible: hasUpdate,
+                          child: const Icon(Icons.system_update,
+                              color: Color(0xFFE50914)),
+                        ),
                       ),
                       IconButton(
                         tooltip: 'Configurações de IA',
