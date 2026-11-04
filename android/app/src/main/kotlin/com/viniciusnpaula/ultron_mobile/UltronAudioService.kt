@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.BatteryManager
@@ -27,15 +28,17 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
 /**
- * UltronAudioService (Eco-VAD Ultra-Otimizado):
- * Substitui a gravação contínua de 16kHz + WakeLock infinito por:
- * 1. Duty-Cycling VAD (Voice Activity Detection): amostra apenas janelas curtas de 120ms em 8kHz
- *    e dorme 550ms entre janelas (~82% do tempo em repouso de CPU/ADC).
- * 2. Zero WakeLock Infinito: só adquire PARTIAL_WAKE_LOCK com timeout estrito (8 segundos)
- *    quando a energia RMS do microfone supera o limiar de voz humana.
- * 3. Proteção de Bateria Crítica (< 15%): pausa a amostragem automaticamente se a bateria
- *    estiver crítica fora da tomada.
- * 4. Botão "PARAR ESCUTA" direto na notificação + compatibilidade Android 14 (FOREGROUND_SERVICE_TYPE_MICROPHONE).
+ * UltronAudioService (Eco-VAD v2 — Consumo Ultra-Baixo):
+ * 1. Adaptive Exponential Duty-Cycling (82% a 93.3% Sleep Ratio):
+ *    - Amostra janelas curtas de 100ms em 8kHz (banda de voz humana).
+ *    - Em ambiente ativo (< 20s de silêncio): dorme 450ms entre janelas (~82% ADC desligado).
+ *    - Em silêncio moderado (20s a 120s): dorme 900ms (~90% ADC desligado).
+ *    - Em silêncio profundo (> 120s, ex.: mesa/madrugada): dorme 1400ms (~93.3% ADC desligado).
+ *    - Retorna instantaneamente ao modo rápido (450ms) ao menor sinal acústico.
+ * 2. Zero WakeLock Infinito:
+ *    - Nenhum PARTIAL_WAKE_LOCK fica retido em repouso. Só adquire WakeLock por 8 segundos
+ *      no exato instante em que a voz humana dispara o gatilho.
+ * 3. Pausa Inteligente em Chamadas, Flip-to-Shush (Tela p/ Baixo) e Bateria Crítica (< 15%).
  */
 class UltronAudioService : Service() {
 
@@ -46,9 +49,14 @@ class UltronAudioService : Service() {
         const val ACTION_SAY_TIME = "com.viniciusnpaula.ultron_mobile.SAY_TIME_OFFLINE"
 
         private const val SAMPLE_RATE_HZ = 8000
-        private const val WINDOW_MS = 120
-        private const val SLEEP_IDLE_MS = 550L
-        private const val SLEEP_LOW_BATTERY_MS = 8000L
+        private const val WINDOW_MS = 100
+        private const val SLEEP_ACTIVE_MS = 450L
+        private const val SLEEP_QUIET_MS = 900L
+        private const val SLEEP_DEEP_IDLE_MS = 1400L
+        private const val SLEEP_PAUSED_STATE_MS = 5000L
+        private const val SLEEP_LOW_BATTERY_MS = 10000L
+
+        private const val AMBIENT_ACTIVITY_RMS = 850.0
         private const val VAD_RMS_THRESHOLD = 1950.0
         private const val COOLDOWN_AFTER_TRIGGER_MS = 4500L
 
@@ -95,7 +103,7 @@ class UltronAudioService : Service() {
             return START_NOT_STICKY
         }
 
-        val notification = buildNotification("Modo Eco-VAD ativo (consumo < 1% bat)")
+        val notification = buildNotification("Eco-VAD Adaptativo ativo (82%–93% Sleep)")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -115,7 +123,7 @@ class UltronAudioService : Service() {
         if (!workerActive.compareAndSet(false, true)) return
 
         vadThread = Thread({
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_LOWEST)
             val minBuf = AudioRecord.getMinBufferSize(
                 SAMPLE_RATE_HZ,
                 AudioFormat.CHANNEL_IN_MONO,
@@ -124,6 +132,7 @@ class UltronAudioService : Service() {
 
             val windowSamples = (SAMPLE_RATE_HZ * WINDOW_MS) / 1000
             val pcmBuffer = ShortArray(windowSamples)
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             var recorder: AudioRecord? = null
 
             try {
@@ -136,6 +145,7 @@ class UltronAudioService : Service() {
                 )
 
                 var consecutiveVoiceFrames = 0
+                var lastSoundDetectedMs = System.currentTimeMillis()
 
                 while (workerActive.get()) {
                     // 1. Economia Profunda em Bateria Crítica (< 15% sem carregador)
@@ -144,7 +154,15 @@ class UltronAudioService : Service() {
                         continue
                     }
 
-                    // 2. Captura Burst de apenas 120ms (Duty-Cycle econômico)
+                    // 2. Pausa se estiver em ligação telefônica/VoIP ou Flip-to-Shush (tela p/ baixo)
+                    val inCall = audioManager != null &&
+                        audioManager.mode != AudioManager.MODE_NORMAL
+                    if (inCall || MainActivity.isFaceDownGlobal) {
+                        Thread.sleep(SLEEP_PAUSED_STATE_MS)
+                        continue
+                    }
+
+                    // 3. Captura Burst de apenas 100ms
                     if (recorder.state == AudioRecord.STATE_INITIALIZED) {
                         recorder.startRecording()
                         val readCount = recorder.read(pcmBuffer, 0, windowSamples)
@@ -152,6 +170,9 @@ class UltronAudioService : Service() {
 
                         if (readCount > 0) {
                             val rms = computeRms(pcmBuffer, readCount)
+                            if (rms >= AMBIENT_ACTIVITY_RMS) {
+                                lastSoundDetectedMs = System.currentTimeMillis()
+                            }
                             if (rms >= VAD_RMS_THRESHOLD) {
                                 consecutiveVoiceFrames++
                                 if (consecutiveVoiceFrames >= 2) {
@@ -166,8 +187,14 @@ class UltronAudioService : Service() {
                         }
                     }
 
-                    // 3. Dorme 550ms com ADC desligado (~82% Duty-Cycle OFF)
-                    Thread.sleep(SLEEP_IDLE_MS)
+                    // 4. Adaptive Exponential Sleep Backoff (450ms -> 900ms -> 1400ms)
+                    val silenceDurationMs = System.currentTimeMillis() - lastSoundDetectedMs
+                    val sleepMs = when {
+                        silenceDurationMs > 120_000L -> SLEEP_DEEP_IDLE_MS
+                        silenceDurationMs > 20_000L -> SLEEP_QUIET_MS
+                        else -> SLEEP_ACTIVE_MS
+                    }
+                    Thread.sleep(sleepMs)
                 }
             } catch (_: InterruptedException) {
             } catch (_: Exception) {
@@ -202,7 +229,6 @@ class UltronAudioService : Service() {
         val nowStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         lastTriggerTimestamp = nowStr
 
-        // Toca a assinatura offline ultron_fish_voice.wav e abre/informa o operador
         UltronTtsHelper.playFishVoiceAsset(applicationContext)
         updateNotification("Voz detectada às $nowStr • Toque para falar")
     }
@@ -277,7 +303,7 @@ class UltronAudioService : Service() {
                 "U.L.T.R.O.N. Sentinela Eco-VAD",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Escuta inteligente em Duty-Cycle com baixíssimo consumo de bateria"
+                description = "Escuta inteligente em Duty-Cycle Adaptativo (82% a 93% Sleep)"
                 setShowBadge(false)
             }
             val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager

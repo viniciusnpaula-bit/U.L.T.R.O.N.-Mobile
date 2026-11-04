@@ -40,6 +40,9 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     companion object {
         private const val CHANNEL = "com.viniciusnpaula.ultron_mobile/device"
         private const val SPEECH_REQUEST_CODE = 9042
+
+        @Volatile
+        var isFaceDownGlobal: Boolean = false
     }
 
     private var torchEnabled: Boolean = false
@@ -102,10 +105,12 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         if (z < -8.5f && abs(x) < 3.5f && abs(y) < 3.5f) {
             if (!isFaceDown) {
                 isFaceDown = true
+                isFaceDownGlobal = true
                 deviceChannel?.invokeMethod("onFlipToShush", null)
             }
         } else if (z > 2.5f) {
             isFaceDown = false
+            isFaceDownGlobal = false
         }
     }
 

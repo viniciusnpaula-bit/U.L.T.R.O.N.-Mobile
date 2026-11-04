@@ -4,21 +4,30 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * Wrapper de Voz Offline do U.L.T.R.O.N.:
- * 1. Reproduz o arquivo "ultron_fish_voice.wav" diretamente de assets/ via AssetFileDescriptor
- *    (corrigindo o bug de Uri.parse("asset:///...") que falha no MediaPlayer do Android).
+ * Wrapper de Voz Offline do U.L.T.R.O.N. (Ultra-Otimizado):
+ * 1. Reproduz "ultron_fish_voice.wav" de assets/ via AssetFileDescriptor e libera o MediaPlayer
+ *    imediatamente após o término (zero retenção de codec de hardware).
  * 2. Combina a assinatura vocal da Fish Audio com o motor neural offline nativo do Android
- *    (TextToSpeech calibrado em pitch grave 0.55f) sem exigir bibliotecas quebradas como
- *    org.mozilla:tts:0.1.0 e sem drenar bateria em repouso.
+ *    (TextToSpeech em pitch grave 0.55f).
+ * 3. Auto-Hibernação do Binder TTS: desliga automaticamente a instância do TextToSpeech
+ *    após 25 segundos sem falar, liberando 100% da memória RAM e conexões IPC em repouso.
  */
 object UltronTtsHelper {
     private const val VOICE_ASSET_NAME = "ultron_fish_voice.wav"
+    private const val IDLE_SHUTDOWN_DELAY_MS = 25_000L
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val idleShutdownRunnable = Runnable { shutdownTtsOnly() }
+
     private var player: MediaPlayer? = null
     private var offlineTts: TextToSpeech? = null
     private var ttsReady: Boolean = false
@@ -41,6 +50,11 @@ object UltronTtsHelper {
             mp.setOnCompletionListener {
                 releasePlayer()
                 onComplete?.invoke()
+            }
+            mp.setOnErrorListener { _, _, _ ->
+                releasePlayer()
+                onComplete?.invoke()
+                true
             }
             mp.prepare()
             mp.start()
@@ -84,7 +98,13 @@ object UltronTtsHelper {
         return reply
     }
 
+    private fun scheduleIdleShutdown() {
+        mainHandler.removeCallbacks(idleShutdownRunnable)
+        mainHandler.postDelayed(idleShutdownRunnable, IDLE_SHUTDOWN_DELAY_MS)
+    }
+
     private fun speakWithOfflineEngine(appContext: Context, text: String) {
+        scheduleIdleShutdown()
         if (offlineTts != null && ttsReady) {
             offlineTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ultron_offline_utt")
             return
@@ -95,6 +115,20 @@ object UltronTtsHelper {
                 offlineTts?.language = Locale("pt", "BR")
                 offlineTts?.setPitch(0.55f)
                 offlineTts?.setSpeechRate(0.92f)
+                offlineTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) {
+                        mainHandler.removeCallbacks(idleShutdownRunnable)
+                    }
+
+                    override fun onDone(utteranceId: String?) {
+                        scheduleIdleShutdown()
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        scheduleIdleShutdown()
+                    }
+                })
                 offlineTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ultron_offline_utt")
             }
         }
@@ -112,8 +146,7 @@ object UltronTtsHelper {
         player = null
     }
 
-    fun shutdown() {
-        releasePlayer()
+    private fun shutdownTtsOnly() {
         try {
             offlineTts?.stop()
             offlineTts?.shutdown()
@@ -121,5 +154,11 @@ object UltronTtsHelper {
         }
         offlineTts = null
         ttsReady = false
+    }
+
+    fun shutdown() {
+        mainHandler.removeCallbacks(idleShutdownRunnable)
+        releasePlayer()
+        shutdownTtsOnly()
     }
 }
