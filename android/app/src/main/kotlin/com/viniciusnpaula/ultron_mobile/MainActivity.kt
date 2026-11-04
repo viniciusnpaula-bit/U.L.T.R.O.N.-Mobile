@@ -320,6 +320,42 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 }
                 result.success(granted)
             }
+            "isAudioSentinelRunning" -> {
+                result.success(UltronAudioService.isRunning)
+            }
+            "setAudioSentinel" -> {
+                val enable = call.argument<Boolean>("enabled") ?: false
+                if (!enable) {
+                    stopService(Intent(this, UltronAudioService::class.java))
+                    result.success(false)
+                } else {
+                    val hasMic = ContextCompat.checkSelfPermission(
+                        this,
+                        Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (!hasMic) {
+                        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            arrayOf(
+                                Manifest.permission.RECORD_AUDIO,
+                                Manifest.permission.POST_NOTIFICATIONS
+                            )
+                        } else {
+                            arrayOf(Manifest.permission.RECORD_AUDIO)
+                        }
+                        ActivityCompat.requestPermissions(this, perms, 9044)
+                        result.success(false)
+                    } else {
+                        val svcIntent = Intent(this, UltronAudioService::class.java)
+                        ContextCompat.startForegroundService(this, svcIntent)
+                        result.success(true)
+                    }
+                }
+            }
+            "speakOfflineFishVoice" -> {
+                val text = call.argument<String>("text") ?: ""
+                val spoken = UltronTtsHelper.answerQuickOfflineQuery(this, text)
+                result.success(spoken)
+            }
             else -> result.notImplemented()
         }
     }

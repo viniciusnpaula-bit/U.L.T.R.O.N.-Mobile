@@ -48,6 +48,10 @@ void main() {
           return 'WhatsApp aberto para ${args['target']}: "${args['text']}"';
         case 'sendSms':
           return 'SMS aberto para ${args['target']}: "${args['text']}"';
+        case 'speakOfflineFishVoice':
+          return 'Operador, agora são exatamente 23:35.';
+        case 'setAudioSentinel':
+          return args['enabled'] as bool? ?? false;
         default:
           return true;
       }
@@ -57,6 +61,19 @@ void main() {
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+  });
+
+  test('executes offline time readout and Eco-VAD sentinel toggle', () async {
+    final service = DeviceControlService(channel: channel);
+
+    final timeRes = await service.tryExecuteNaturalCommand('Ei Ultron, que horas são?');
+    expect(timeRes?.handled, isTrue);
+    expect(calls.last.method, 'speakOfflineFishVoice');
+
+    final vadRes = await service.tryExecuteNaturalCommand('ativar sentinela de voz');
+    expect(vadRes?.handled, isTrue);
+    expect(calls.last.method, 'setAudioSentinel');
+    expect(calls.last.arguments, {'enabled': true});
   });
 
   test('reads, replies in background, and sends WhatsApp/SMS via natural language', () async {

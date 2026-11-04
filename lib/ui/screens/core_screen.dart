@@ -77,9 +77,10 @@ class _CoreScreenState extends State<CoreScreen>
   bool nightFocusMode = false;
   bool criticalBatteryAlerted = false;
   bool notificationSentinelEnabled = false;
+  bool ecoVadSentinelRunning = false;
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
-  String installedVersion = 'v0.7.0';
+  String installedVersion = 'v0.9.0';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -234,6 +235,7 @@ class _CoreScreenState extends State<CoreScreen>
     try {
       final hwStatus = await deviceService.getStatus();
       final notifEnabled = await deviceService.isNotificationListenerEnabled();
+      final vadRunning = await deviceService.isAudioSentinelRunning();
       final msgs = notifEnabled
           ? await deviceService.getRecentMessages(limit: 12)
           : const <CapturedNotification>[];
@@ -242,6 +244,7 @@ class _CoreScreenState extends State<CoreScreen>
         deviceStatus = hwStatus;
         torchOn = hwStatus.torchOn;
         notificationSentinelEnabled = notifEnabled;
+        ecoVadSentinelRunning = vadRunning;
         recentMessages = msgs;
       });
       _applyContextSensors(hwStatus);
@@ -2540,6 +2543,87 @@ class _CoreScreenState extends State<CoreScreen>
                       valueColor: nightFocusMode
                           ? const Color(0xFF34D399)
                           : const Color(0xFF94A3B8),
+                    ),
+                    const SizedBox(height: 4),
+                    _SecurityRow(
+                      label: 'Sentinela Voz Eco-VAD (82% Sleep):',
+                      value: ecoVadSentinelRunning
+                          ? 'ATIVO (< 1% Bateria)'
+                          : 'EM REPOUSO (0% Bateria)',
+                      valueColor: ecoVadSentinelRunning
+                          ? const Color(0xFF34D399)
+                          : const Color(0xFF94A3B8),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () async {
+                              final next = !ecoVadSentinelRunning;
+                              final state =
+                                  await deviceService.setAudioSentinel(next);
+                              if (!mounted) return;
+                              setState(() => ecoVadSentinelRunning = state);
+                            },
+                            style: FilledButton.styleFrom(
+                              backgroundColor: ecoVadSentinelRunning
+                                  ? const Color(0xFF064E3B)
+                                  : const Color(0xFF240006),
+                              foregroundColor: ecoVadSentinelRunning
+                                  ? const Color(0xFF34D399)
+                                  : _rose,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: Icon(
+                              ecoVadSentinelRunning
+                                  ? Icons.hearing
+                                  : Icons.hearing_disabled,
+                              size: 13,
+                            ),
+                            label: Text(
+                              ecoVadSentinelRunning
+                                  ? 'DESATIVAR ECO-VAD'
+                                  : 'ATIVAR SENTINELA ECO-VAD',
+                              style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () async {
+                              final reply = await deviceService
+                                  .speakOfflineFishVoice('que horas são');
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    '🔊 Voz Offline: $reply',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                              );
+                            },
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _crimson,
+                              foregroundColor: Colors.black,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: const Icon(Icons.graphic_eq, size: 13),
+                            label: const Text(
+                              'VOZ OFFLINE (HORAS)',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

@@ -410,6 +410,25 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     return res ?? false;
   }
 
+  Future<bool> isAudioSentinelRunning() async {
+    final res = await _channel.invokeMethod<bool>('isAudioSentinelRunning');
+    return res ?? false;
+  }
+
+  Future<bool> setAudioSentinel(bool enabled) async {
+    final res = await _channel.invokeMethod<bool>('setAudioSentinel', {
+      'enabled': enabled,
+    });
+    return res ?? false;
+  }
+
+  Future<String> speakOfflineFishVoice(String text) async {
+    final res = await _channel.invokeMethod<String>('speakOfflineFishVoice', {
+      'text': text,
+    });
+    return res ?? text;
+  }
+
   /// Parses direct natural-language hardware commands so they execute immediately
   /// with zero latency and even without internet/API keys.
   Future<DeviceActionResult?> tryExecuteNaturalCommand(String rawInput) async {
@@ -803,7 +822,48 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         );
       }
 
-      // 18. Open any installed app ("abrir whatsapp", "abrir youtube", etc.)
+      // 18. Offline Time / Date & Fish Audio Voice ("ei ultron que horas são", "que horas são", "testar voz offline")
+      if (RegExp(
+        r'\b(que\s+horas\s+s[aã]o|qual\s+(?:[eé]\s+)?a\s+hora|testar\s+voz\s+offline|voz\s+offline)\b',
+        caseSensitive: false,
+      ).hasMatch(lower)) {
+        final reply = await speakOfflineFishVoice('que horas são');
+        return DeviceActionResult(
+          handled: true,
+          message: '🔊 [Voz Offline Fish Audio + TTS Nativo]: $reply',
+        );
+      }
+
+      // 19. Eco-VAD Voice Sentinel Toggle ("ativar sentinela de voz", "desativar sentinela de voz")
+      if (RegExp(
+        r'\b(ativar|ligar|iniciar)\s+(?:o\s+|a\s+)?(?:sentinela\s+de\s+voz|escuta\s+24h|escuta\s+em\s+segundo\s+plano)\b',
+        caseSensitive: false,
+      ).hasMatch(lower)) {
+        final running = await setAudioSentinel(true);
+        return DeviceActionResult(
+          handled: true,
+          message: running
+              ? '🎙️ Sentinela Eco-VAD ativado em 2º plano (Duty-Cycle 82% Sleep • Consumo < 1% bateria).'
+              : '⚠️ Conceda a permissão de microfone na janela do Android e tente novamente.',
+          speakText: running
+              ? 'Sentinela Eco VAD ativado.'
+              : 'Permissão de microfone necessária.',
+        );
+      }
+
+      if (RegExp(
+        r'\b(desativar|desligar|parar)\s+(?:o\s+|a\s+)?(?:sentinela\s+de\s+voz|escuta\s+24h|escuta\s+em\s+segundo\s+plano)\b',
+        caseSensitive: false,
+      ).hasMatch(lower)) {
+        await setAudioSentinel(false);
+        return const DeviceActionResult(
+          handled: true,
+          message: '⏹️ Sentinela Eco-VAD em 2º plano desligado.',
+          speakText: 'Sentinela de voz desativado.',
+        );
+      }
+
+      // 20. Open any installed app ("abrir whatsapp", "abrir youtube", etc.)
       final openMatch = RegExp(
         r'^(?:abrir|iniciar|executar)\s+(?:o\s+|a\s+|app\s+|aplicativo\s+)?(.+)$',
       ).firstMatch(lower);
