@@ -170,7 +170,7 @@ void main() {
     final service = DeviceControlService(channel: channel);
     final sync = service.preparePcSyncPayload(
       command: 'SYNC_TELEMETRY',
-      data: {'battery': 98, 'ram': 4096},
+      data: const {'battery': 98, 'ram': 4096},
     );
     expect(sync['body'], contains('SYNC_TELEMETRY'));
     expect(sync['signature'], startsWith('sha256='));

@@ -76,7 +76,7 @@ class ActionGate {
     switch (op) {
       case 'KILL_SWITCH':
       case 'LOCK_PC':
-        return ActionSimulation(
+        return const ActionSimulation(
           actionCode: 'KILL_SWITCH',
           riskLevel: RiskLevel.critical,
           description: 'Bloqueio de Emergência da Estação de Trabalho PC via LAN',
@@ -149,7 +149,7 @@ class ActionGate {
       case 'VOLUME_UP':
       case 'VOLUME_DOWN':
       case 'VOLUME_MUTE':
-        return ActionSimulation(
+        return const ActionSimulation(
           actionCode: 'VOLUME',
           riskLevel: RiskLevel.safe,
           description: 'Modulação de volume do canal de mídia',

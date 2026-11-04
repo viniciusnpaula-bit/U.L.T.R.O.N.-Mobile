@@ -33,7 +33,7 @@ void main() {
     test('formats multimodal vision payload when imageBase64 is supplied', () {
       final messages = buildAiMessages(
         'Analise esta imagem tática',
-        [],
+        const [],
         imageBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
       );
       expect(messages.length, 1);

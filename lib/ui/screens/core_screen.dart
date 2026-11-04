@@ -67,6 +67,7 @@ class _CoreScreenState extends State<CoreScreen>
   final updateService = AppUpdateService();
   final providerStore = AiProviderStore();
   final deviceService = DeviceControlService();
+  final actionGate = const ActionGate();
 
   CoreStage stage = CoreStage.center;
   _ActivePanel panel = _ActivePanel.main;
@@ -1101,10 +1102,11 @@ class _CoreScreenState extends State<CoreScreen>
         }
         break;
       case UltronCommand.killswitch:
+        final sim = actionGate.simulate('KILL_SWITCH');
         final confirmed = await _confirmActionGate(
-          title: '🚨 CONFIRMAÇÃO DE KILL SWITCH',
+          title: '🚨 ${sim.description.toUpperCase()}',
           message:
-              'Atenção Operador: Isto transmitirá imediatamente um pacote assinado HMAC-SHA256 para travar sua estação PC na rede local e encerrar a sessão deste dispositivo móvel.',
+              'Atenção Operador: ${sim.estimatedImpact} Alvo: ${sim.targetResource}. Confirmar execução tática?',
           confirmText: 'DISPARAR KILL SWITCH',
         );
         if (!confirmed) {
@@ -1129,10 +1131,11 @@ class _CoreScreenState extends State<CoreScreen>
         await _startVoiceInput();
         break;
       case UltronCommand.clear:
+        final sim = actionGate.simulate('CLEAR_HISTORY');
         final confirmed = await _confirmActionGate(
           title: 'EXPURGAR HISTÓRICO LOCAL',
           message:
-              'Deseja limpar as mensagens da sessão atual? Mensagens salvas no banco de dados não serão perdidas.',
+              'Deseja limpar as mensagens da sessão atual? ${sim.estimatedImpact}',
           confirmText: 'EXPURGAR',
         );
         if (confirmed) {
