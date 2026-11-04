@@ -1,4 +1,4 @@
-# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.0.0`)
+# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.1.0`)
 
 Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado para operar com estética tática **AMOLED Carmesim**, segurança **Fail-Closed**, controle direto sobre o hardware do celular e integração nativa com múltiplos provedores de IA.
 
