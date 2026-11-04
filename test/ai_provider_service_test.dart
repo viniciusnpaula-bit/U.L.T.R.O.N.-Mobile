@@ -127,5 +127,23 @@ void main() {
       final models = parseChatModelsList(raw);
       expect(models, ['openai/gpt-oss-120b', 'qwen/qwen3-32b']);
     });
+
+    test('FreeProviderPreset catalog includes 9 free providers and zero-key Pollinations', () {
+      expect(FreeProviderPreset.catalog.length, 9);
+      final zeroKey = FreeProviderPreset.catalog.first;
+      expect(zeroKey.requiresKey, isFalse);
+      expect(zeroKey.baseUrl, contains('pollinations.ai'));
+
+      const cfg = AiProviderConfig(
+        id: 'p_free',
+        name: 'Pollinations Free',
+        baseUrl: 'https://text.pollinations.ai/openai',
+        model: 'openai',
+        apiKey: '',
+      );
+      expect(cfg.isKeylessProvider, isTrue);
+      expect(cfg.hasUsableCredentials, isTrue);
+      expect(cfg.effectiveToken, 'free');
+    });
   });
 }

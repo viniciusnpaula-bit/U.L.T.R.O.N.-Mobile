@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/ai_provider_service.dart';
-import '../../services/app_update_service.dart';
-import 'update_screen.dart';
+import '../../services/device_control_service.dart';
 
 class AiSettingsScreen extends StatefulWidget {
-  const AiSettingsScreen({super.key});
+  const AiSettingsScreen({super.key, AiProviderStore? store}) : _store = store;
+
+  final AiProviderStore? _store;
 
   @override
   State<AiSettingsScreen> createState() => _AiSettingsScreenState();
@@ -15,1011 +16,1041 @@ class AiSettingsScreen extends StatefulWidget {
 class _AiSettingsScreenState extends State<AiSettingsScreen> {
   static const _crimson = Color(0xFFFF1A24);
   static const _rose = Color(0xFFFF8088);
+  static const _emerald = Color(0xFF10B981);
   static const _border = Color(0xFF2E0306);
-  static const _card = Color(0xFF0E0002);
-  static const _inputBg = Color(0xFF160004);
 
-  final store = AiProviderStore();
-  final updateService = AppUpdateService();
-  final name = TextEditingController(text: 'Groq (GPT-OSS 120B)');
-  final url = TextEditingController(text: 'https://api.groq.com/openai/v1');
-  final model = TextEditingController(text: 'openai/gpt-oss-120b');
-  final key = TextEditingController();
+  late final AiProviderStore _store = widget._store ?? AiProviderStore();
+  final _deviceService = DeviceControlService();
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _url = TextEditingController(text: 'https://api.groq.com/openai/v1');
+  final _model = TextEditingController(text: 'openai/gpt-oss-120b');
+  final _key = TextEditingController();
 
-  List<AiProviderConfig> providers = [];
-  List<String> discoveredModels = [];
-  bool busy = false;
-  bool showKey = false;
-  String providerPreset = 'Groq';
-  String status =
-      'Auto-discovery ativo: modelos obsoletos (Llama antigos) são trocados automaticamente.';
-  String installedVersion = '…';
-  UpdateInfo? latestUpdate;
-  bool checkingUpdate = false;
+  List<AiProviderConfig> _providers = const [];
+  List<String> _fetchedModels = const [];
+  FreeProviderPreset _selectedPreset = FreeProviderPreset.catalog[1];
+  bool _loading = true;
+  bool _fetchingModels = false;
+  String? _testingProviderId;
 
   @override
   void initState() {
     super.initState();
-    _load();
-    _loadVersion();
+    _reload();
   }
 
   @override
   void dispose() {
-    name.dispose();
-    url.dispose();
-    model.dispose();
-    key.dispose();
+    _name.dispose();
+    _url.dispose();
+    _model.dispose();
+    _key.dispose();
     super.dispose();
   }
 
-  void _selectPreset(String value) {
+  Future<void> _reload() async {
+    final list = await _store.load();
+    if (!mounted) return;
     setState(() {
-      providerPreset = value;
-      discoveredModels = [];
+      _providers = list;
+      _loading = false;
     });
-    if (value == 'Groq') {
-      name.text = 'Groq (GPT-OSS 120B)';
-      url.text = 'https://api.groq.com/openai/v1';
-      model.text = 'openai/gpt-oss-120b';
-    } else if (value == 'Gemini') {
-      name.text = 'Google Gemini 2.5';
-      url.text = 'https://generativelanguage.googleapis.com/v1beta/openai';
-      model.text = 'gemini-2.5-flash';
-    } else if (value == 'OpenAI') {
-      name.text = 'OpenAI Official';
-      url.text = 'https://api.openai.com/v1';
-      model.text = 'gpt-4.1-mini';
+  }
+
+  Future<void> _persist(List<AiProviderConfig> next) async {
+    final normalized = [
+      for (var i = 0; i < next.length; i++) next[i].copyWith(priority: i),
+    ];
+    await _store.save(normalized);
+    if (!mounted) return;
+    setState(() => _providers = normalized);
+  }
+
+  void _applyFreePreset(FreeProviderPreset preset) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      _selectedPreset = preset;
+      _name.text = preset.name;
+      _url.text = preset.baseUrl;
+      _model.text = preset.defaultModel;
+      if (!preset.requiresKey) {
+        _key.text = 'free';
+      } else if (_key.text.trim() == 'free') {
+        _key.clear();
+      }
+      _fetchedModels = preset.recommendedModels;
+    });
+  }
+
+  Future<void> _activateZeroKeyFreeNow() async {
+    HapticFeedback.mediumImpact();
+    final zeroKeyPreset = FreeProviderPreset.catalog.first;
+    final existingIdx = _providers.indexWhere(
+      (p) => p.baseUrl.toLowerCase().contains('pollinations.ai'),
+    );
+    List<AiProviderConfig> updated;
+    if (existingIdx >= 0) {
+      final copy = [..._providers];
+      copy[existingIdx] = copy[existingIdx].copyWith(
+        enabled: true,
+        apiKey: 'free',
+      );
+      updated = copy;
     } else {
-      name.text = 'OpenRouter / Custom';
-      url.text = 'https://openrouter.ai/api/v1';
-      model.text = 'openai/gpt-4o-mini';
+      final added = AiProviderConfig(
+        id: 'pollinations_${DateTime.now().microsecondsSinceEpoch}',
+        name: zeroKeyPreset.name,
+        baseUrl: zeroKeyPreset.baseUrl,
+        model: zeroKeyPreset.defaultModel,
+        apiKey: 'free',
+        enabled: true,
+        priority: _providers.length,
+      );
+      updated = [..._providers, added];
+    }
+    await _persist(updated);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          '⚡ IA Grátis Sem Chave (Pollinations AI) ativada na fila de failover!',
+          style: TextStyle(fontSize: 11),
+        ),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _openKeyPage(FreeProviderPreset preset) async {
+    HapticFeedback.lightImpact();
+    try {
+      await _deviceService.openUrl(preset.getKeyUrl);
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: preset.getKeyUrl));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Link copiado: ${preset.getKeyUrl}',
+            style: const TextStyle(fontSize: 11),
+          ),
+        ),
+      );
     }
   }
 
-  Future<void> _detectModels() async {
-    final base = url.text.trim();
-    final apiKey = key.text.trim();
-    if (base.isEmpty || apiKey.isEmpty) {
-      setState(
-        () => status =
-            'Informe a URL base e a API Key para buscar os modelos ativos.',
+  Future<void> _fetchModelsFromApi() async {
+    final baseUrl = _url.text.trim();
+    final apiKey = _key.text.trim();
+    final isPollinations = baseUrl.toLowerCase().contains('pollinations.ai');
+    if (baseUrl.isEmpty || (!isPollinations && apiKey.isEmpty)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Preencha a URL Base e a Chave da API primeiro para buscar os modelos ao vivo.',
+            style: TextStyle(fontSize: 11),
+          ),
+        ),
       );
       return;
     }
-    setState(() {
-      busy = true;
-      status = 'Consultando modelos ativos na API (/models)…';
-    });
+    setState(() => _fetchingModels = true);
     try {
-      final probe = AiProviderConfig(
-        id: 'probe',
-        name: name.text.trim(),
-        baseUrl: base,
-        model: model.text.trim(),
-        apiKey: apiKey,
+      final temp = AiProviderConfig(
+        id: 'temp',
+        name: _name.text.trim().isEmpty ? 'Temp' : _name.text.trim(),
+        baseUrl: baseUrl,
+        model: _model.text.trim(),
+        apiKey: apiKey.isEmpty ? 'free' : apiKey,
       );
-      final models = await AiFailover(store: store).fetchAvailableModels(probe);
-      if (!mounted) return;
-      if (models.isEmpty) {
-        setState(
-          () => status =
-              'Nenhum modelo listado pelo endpoint /models. Verifique a chave ou digite manualmente.',
-        );
-      } else {
-        setState(() {
-          discoveredModels = models.take(8).toList();
-          model.text = discoveredModels.first;
-          status =
-              '${models.length} modelos ativos detectados! Selecionado: ${discoveredModels.first}';
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => status = 'Falha ao buscar modelos: $e');
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  List<AiProviderConfig> _normalizePriorities(List<AiProviderConfig> list) => [
-        for (var i = 0; i < list.length; i++) list[i].copyWith(priority: i),
-      ];
-
-  static String _maskKey(String secret) {
-    final trimmed = secret.trim();
-    if (trimmed.length <= 8) return '••••••••';
-    return '${trimmed.substring(0, 4)}••••${trimmed.substring(trimmed.length - 4)}';
-  }
-
-  Future<void> _load() async {
-    final loaded = await store.load()
-      ..sort((a, b) => a.priority.compareTo(b.priority));
-    providers = _normalizePriorities(loaded);
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _loadVersion() async {
-    try {
-      final v = await updateService.currentVersion();
-      if (mounted) setState(() => installedVersion = 'v$v');
-    } catch (_) {}
-  }
-
-  Future<void> _checkGitHubRelease() async {
-    HapticFeedback.lightImpact();
-    setState(() => checkingUpdate = true);
-    try {
-      final current = await updateService.currentVersion();
-      final latest = await updateService.check();
+      final models = await temp.fetchAvailableModels();
       if (!mounted) return;
       setState(() {
-        installedVersion = 'v$current';
-        if (latest != null && AppUpdateService.isNewer(latest.version, current)) {
-          latestUpdate = latest;
-          status = 'Nova release encontrada: ${latest.version}';
-        } else {
-          latestUpdate = null;
-          status = 'Versão atual ($installedVersion) já é a mais recente.';
+        _fetchedModels = models;
+        if (models.isNotEmpty && !models.contains(_model.text.trim())) {
+          _model.text = models.first;
         }
       });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${models.length} modelos ativos carregados do provedor!',
+            style: const TextStyle(fontSize: 11),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     } catch (e) {
-      if (mounted) {
-        setState(() => status = 'Falha ao consultar GitHub Releases: $e');
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Erro ao listar modelos: $e',
+            style: const TextStyle(fontSize: 11),
+          ),
+        ),
+      );
     } finally {
-      if (mounted) setState(() => checkingUpdate = false);
+      if (mounted) setState(() => _fetchingModels = false);
     }
   }
 
-  Future<void> _save() async {
-    final cleanName = name.text.trim();
-    final base = url.text.trim();
-    final cleanModel = model.text.trim();
-    final cleanKey = key.text.trim();
-    if (cleanName.isEmpty ||
-        base.isEmpty ||
-        cleanModel.isEmpty ||
-        cleanKey.isEmpty) {
-      setState(() => status = 'Preencha nome, URL, modelo e chave.');
-      return;
-    }
-    final parsed = Uri.tryParse(base);
-    if (parsed == null || parsed.scheme != 'https' || parsed.host.isEmpty) {
-      setState(() => status = 'Use uma URL https válida.');
-      return;
-    }
-    if (providerPreset == 'Groq' &&
-        !base.startsWith('https://api.groq.com/')) {
-      setState(
-        () => status =
-            'Para o preset Groq, mantenha o endpoint https://api.groq.com/openai/v1 ou mude para Custom.',
-      );
-      return;
-    }
-    if (providerPreset == 'OpenAI' &&
-        !base.startsWith('https://api.openai.com/')) {
-      setState(
-        () => status =
-            'Para o preset OpenAI, use https://api.openai.com/v1 ou selecione OpenAI-Compatible (Custom).',
-      );
-      return;
-    }
-    if (cleanKey.startsWith('gsk_') &&
-        !base.startsWith('https://api.groq.com/')) {
-      setState(
-        () => status =
-            'Chave gsk_ detectada: selecione o preset Groq para usar o endpoint da Groq.',
-      );
-      return;
-    }
-    final p = AiProviderConfig(
-      id: DateTime.now().microsecondsSinceEpoch.toString(),
-      name: cleanName,
-      baseUrl: base,
-      model: cleanModel,
-      apiKey: cleanKey,
-      priority: providers.length,
-    );
-    providers = _normalizePriorities([...providers, p]);
-    await store.save(providers);
-    key.clear();
-    HapticFeedback.mediumImpact();
-    if (!mounted) return;
-    setState(() => status = 'Provedor salvo com segurança no Keystore.');
-  }
-
-  Future<void> _test(AiProviderConfig p) async {
-    setState(() {
-      busy = true;
-      status = 'Testando conexão com ${p.name}…';
-    });
+  Future<void> _testProvider(AiProviderConfig provider) async {
+    setState(() => _testingProviderId = provider.id);
     try {
-      final answer = await AiFailover(store: store).test(p);
-      await _load();
+      final res = await provider.testConnection();
       if (!mounted) return;
-      setState(() => status = 'Conexão OK (${p.name}): $answer');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✅ Conectado ($res)', style: const TextStyle(fontSize: 11)),
+          duration: const Duration(seconds: 3),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
-      setState(() => status = 'Falha (${p.name}): $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ Falha: $e', style: const TextStyle(fontSize: 11)),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     } finally {
-      if (mounted) setState(() => busy = false);
+      if (mounted) setState(() => _testingProviderId = null);
     }
   }
 
-  Future<void> _delete(AiProviderConfig p) async {
-    HapticFeedback.lightImpact();
-    providers = _normalizePriorities(
-      providers.where((x) => x.id != p.id).toList(),
+  Future<void> _add() async {
+    if (!_formKey.currentState!.validate()) return;
+    HapticFeedback.mediumImpact();
+    final isKeyless = _url.text.trim().toLowerCase().contains('pollinations.ai');
+    final added = AiProviderConfig(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: _name.text.trim(),
+      baseUrl: _url.text.trim(),
+      model: _model.text.trim(),
+      apiKey: isKeyless && _key.text.trim().isEmpty
+          ? 'free'
+          : _key.text.trim(),
+      priority: _providers.length,
     );
-    await store.save(providers);
+    _name.clear();
+    _key.clear();
+    await _persist([..._providers, added]);
     if (!mounted) return;
-    setState(() => status = 'Provedor ${p.name} removido.');
-  }
-
-  Future<void> _movePriority(int index, int delta) async {
-    final target = index + delta;
-    if (target < 0 || target >= providers.length) return;
-    HapticFeedback.selectionClick();
-    final updated = [...providers];
-    final item = updated.removeAt(index);
-    updated.insert(target, item);
-    providers = _normalizePriorities(updated);
-    await store.save(providers);
-    if (!mounted) return;
-    setState(
-      () => status =
-          'Prioridade atualizada: ${item.name} agora é #${target + 1}.',
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '✅ Provedor "${added.name}" salvo na fila de failover!',
+          style: const TextStyle(fontSize: 11),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
     );
   }
 
-  Future<void> _toggle(AiProviderConfig p) async {
-    HapticFeedback.selectionClick();
-    providers = providers
-        .map((x) => x.id == p.id ? x.copyWith(enabled: !x.enabled) : x)
-        .toList();
-    await store.save(providers);
-    if (mounted) setState(() {});
-  }
-
-  InputDecoration _hudInput(String label, {String? hint, Widget? suffixIcon}) =>
+  InputDecoration _hudInputDecoration(
+    String label, {
+    String? hint,
+    Widget? suffixIcon,
+  }) =>
       InputDecoration(
         labelText: label,
         hintText: hint,
+        suffixIcon: suffixIcon,
+        isDense: true,
+        filled: true,
+        fillColor: const Color(0xFF140004),
         labelStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
         hintStyle: const TextStyle(color: Color(0xFF475569), fontSize: 11),
-        filled: true,
-        fillColor: _inputBg,
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: _border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: _crimson),
         ),
-        suffixIcon: suffixIcon,
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFF43F5E)),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFF43F5E)),
+        ),
       );
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        backgroundColor: const Color(0xFF0A0002),
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
+  Widget build(BuildContext context) {
+    final activeModels = _fetchedModels.isNotEmpty
+        ? _fetchedModels
+        : _selectedPreset.recommendedModels;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0002),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0F0003),
+        foregroundColor: _crimson,
+        elevation: 0,
+        title: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'CENTRAL DE IA • 100% GRATUITA',
+              style: TextStyle(
+                color: _crimson,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.3,
+              ),
+            ),
+            Text(
+              'Failover Multi-Provedor • Zero-Key & Free Tiers',
+              style: TextStyle(
+                color: Color(0xFF94A3B8),
+                fontSize: 9,
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: _crimson))
+          : ListView(
+              padding: const EdgeInsets.all(14),
               children: [
-                // Header
+                // 1. Instant Zero-Key Hero Banner
                 Container(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  decoration: const BoxDecoration(
-                    border: Border(bottom: BorderSide(color: _border)),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF1F0006), Color(0xFF0E0003)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _crimson.withValues(alpha: 0.5)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _crimson.withValues(alpha: 0.12),
+                        blurRadius: 12,
+                      ),
+                    ],
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      InkWell(
-                        onTap: () => Navigator.of(context).pop(),
-                        child: const Row(
-                          children: [
-                            Icon(Icons.arrow_back, size: 15, color: _crimson),
-                            SizedBox(width: 4),
-                            Text(
-                              'VOLTAR',
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _emerald.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: _emerald.withValues(alpha: 0.6),
+                              ),
+                            ),
+                            child: const Text(
+                              'DE GRAÇA SEMPRE',
                               style: TextStyle(
-                                color: _crimson,
-                                fontSize: 12,
+                                color: _emerald,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'IA Instantânea Sem Cadastro ou Free Tiers',
+                              style: TextStyle(
+                                color: _rose,
+                                fontSize: 11,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                      const Row(
-                        children: [
-                          Icon(Icons.settings, size: 14, color: Colors.white),
-                          SizedBox(width: 6),
-                          Text(
-                            'CENTRAL DE CONFIGURAÇÕES',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'O U.L.T.R.O.N. Mobile já vem com o Pollinations AI (Zero-Key) pré-configurado para responder de graça sem precisar de chave. Para velocidade máxima (2000+ tok/s), adicione chaves gratuitas da Groq, Gemini, OpenRouter (:free) ou Cerebras abaixo!',
+                        style: TextStyle(
+                          color: Color(0xFFCBD5E1),
+                          fontSize: 10,
+                          height: 1.35,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF280007),
+                            foregroundColor: _rose,
+                            side: const BorderSide(color: _crimson),
+                            padding: const EdgeInsets.symmetric(vertical: 9),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          onPressed: _activateZeroKeyFreeNow,
+                          icon: const Icon(Icons.bolt, size: 16, color: _crimson),
+                          label: const Text(
+                            'ATIVAR IA GRÁTIS SEM CHAVE AGORA (POLLINATIONS)',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(height: 14),
 
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    children: [
-                      // Section 1 Header: AI Providers (Failover)
-                      const Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
+                // 2. Interactive Catalog of 9 Free Providers
+                const Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'CATÁLOGO DE PROVEDORES 100% GRATUITOS (9 OPÇÕES)',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                    Text(
+                      'Deslize ↔',
+                      style: TextStyle(color: Color(0xFF64748B), fontSize: 9),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 156,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: FreeProviderPreset.catalog.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 10),
+                    itemBuilder: (context, index) {
+                      final preset = FreeProviderPreset.catalog[index];
+                      final isSelected = _selectedPreset.id == preset.id;
+                      return GestureDetector(
+                        onTap: () => _applyFreePreset(preset),
+                        child: Container(
+                          width: 245,
+                          padding: const EdgeInsets.all(11),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? const Color(0xFF1E0005)
+                                : const Color(0xFF0F0003),
+                            borderRadius: BorderRadius.circular(13),
+                            border: Border.all(
+                              color: isSelected ? _crimson : _border,
+                              width: isSelected ? 1.4 : 1.0,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(Icons.memory, size: 14, color: _rose),
-                              SizedBox(width: 6),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: preset.requiresKey
+                                          ? const Color(0xFF280007)
+                                          : _emerald.withValues(alpha: 0.18),
+                                      borderRadius: BorderRadius.circular(5),
+                                      border: Border.all(
+                                        color: preset.requiresKey
+                                            ? _crimson.withValues(alpha: 0.45)
+                                            : _emerald,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      preset.badge,
+                                      style: TextStyle(
+                                        color: preset.requiresKey
+                                            ? _rose
+                                            : _emerald,
+                                        fontSize: 8,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  if (isSelected)
+                                    const Icon(
+                                      Icons.check_circle,
+                                      size: 14,
+                                      color: _crimson,
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
                               Text(
-                                'PROVEDORES DE IA (FAILOVER)',
-                                style: TextStyle(
-                                  color: _rose,
-                                  fontSize: 11,
+                                preset.name,
+                                style: const TextStyle(
+                                  color: Color(0xFFE2E8F0),
+                                  fontSize: 12,
                                   fontWeight: FontWeight.bold,
                                 ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            ],
-                          ),
-                          Text(
-                            'ORDEM POR PRIORIDADE',
-                            style: TextStyle(
-                              color: Color(0xFF64748B),
-                              fontSize: 9,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-
-                      // Status Banner
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF180004),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(
-                            color: _crimson.withValues(alpha: 0.35),
-                          ),
-                        ),
-                        child: Text(
-                          status,
-                          style: const TextStyle(
-                            color: _rose,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-
-                      // Configured Providers List
-                      if (providers.isEmpty)
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: _card,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: _border),
-                          ),
-                          child: const Text(
-                            'Nenhum provedor cadastrado ainda. Adicione sua chave Groq ou OpenAI abaixo.',
-                            style: TextStyle(
-                              color: Color(0xFF94A3B8),
-                              fontSize: 11,
-                            ),
-                          ),
-                        ),
-                      for (var idx = 0; idx < providers.length; idx++)
-                        Builder(
-                          builder: (context) {
-                            final p = providers[idx];
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: _card,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: _border),
+                              const SizedBox(height: 3),
+                              Expanded(
+                                child: Text(
+                                  preset.description,
+                                  style: const TextStyle(
+                                    color: Color(0xFF94A3B8),
+                                    fontSize: 9.5,
+                                    height: 1.25,
+                                  ),
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                              const SizedBox(height: 6),
+                              Row(
                                 children: [
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          '#${idx + 1} ${p.name}',
-                                          style: const TextStyle(
-                                            color: Color(0xFFE2E8F0),
-                                            fontSize: 11,
+                                  Expanded(
+                                    child: InkWell(
+                                      onTap: () => _applyFreePreset(preset),
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 5,
+                                        ),
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF220006),
+                                          borderRadius:
+                                              BorderRadius.circular(6),
+                                          border: Border.all(
+                                            color: _crimson.withValues(
+                                              alpha: 0.5,
+                                            ),
+                                          ),
+                                        ),
+                                        child: const Text(
+                                          'USAR PRESET',
+                                          style: TextStyle(
+                                            color: _rose,
+                                            fontSize: 9,
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
                                       ),
-                                      InkWell(
-                                        onTap: () => _toggle(p),
-                                        borderRadius: BorderRadius.circular(6),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 3,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: p.enabled
-                                                ? const Color(0x3310B981)
-                                                : const Color(0xFF200004),
-                                            borderRadius:
-                                                BorderRadius.circular(6),
-                                            border: Border.all(
-                                              color: p.enabled
-                                                  ? const Color(0x6610B981)
-                                                  : _border,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            p.enabled ? 'ATIVO' : 'INATIVO',
-                                            style: TextStyle(
-                                              color: p.enabled
-                                                  ? const Color(0xFF34D399)
-                                                  : const Color(0xFF64748B),
-                                              fontSize: 9,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    'MODELO: ${p.model}\nENDPOINT: ${p.baseUrl}\nCHAVE: ${_maskKey(p.apiKey)}',
-                                    style: const TextStyle(
-                                      color: Color(0xFF94A3B8),
-                                      fontSize: 10,
-                                      height: 1.35,
                                     ),
                                   ),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          IconButton(
-                                            visualDensity:
-                                                VisualDensity.compact,
-                                            tooltip: 'Subir prioridade',
-                                            onPressed: idx > 0
-                                                ? () => _movePriority(idx, -1)
-                                                : null,
-                                            icon: Icon(
-                                              Icons.keyboard_arrow_up,
-                                              size: 16,
-                                              color: idx > 0
-                                                  ? const Color(0xFFCBD5E1)
-                                                  : const Color(0xFF334155),
+                                  if (preset.requiresKey) ...[
+                                    const SizedBox(width: 6),
+                                    InkWell(
+                                      onTap: () => _openKeyPage(preset),
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 5,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF140004),
+                                          borderRadius:
+                                              BorderRadius.circular(6),
+                                          border: Border.all(color: _border),
+                                        ),
+                                        child: const Row(
+                                          children: [
+                                            Icon(
+                                              Icons.key,
+                                              size: 10,
+                                              color: _emerald,
                                             ),
-                                          ),
-                                          IconButton(
-                                            visualDensity:
-                                                VisualDensity.compact,
-                                            tooltip: 'Descer prioridade',
-                                            onPressed:
-                                                idx < providers.length - 1
-                                                    ? () =>
-                                                        _movePriority(idx, 1)
-                                                    : null,
-                                            icon: Icon(
-                                              Icons.keyboard_arrow_down,
-                                              size: 16,
-                                              color: idx < providers.length - 1
-                                                  ? const Color(0xFFCBD5E1)
-                                                  : const Color(0xFF334155),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      Row(
-                                        children: [
-                                          TextButton.icon(
-                                            onPressed:
-                                                busy ? null : () => _test(p),
-                                            icon: const Icon(
-                                              Icons.wifi_tethering,
-                                              size: 14,
-                                              color: _crimson,
-                                            ),
-                                            label: const Text(
-                                              'TESTAR',
+                                            SizedBox(width: 3),
+                                            Text(
+                                              'CHAVE GRÁTIS',
                                               style: TextStyle(
-                                                color: _crimson,
-                                                fontSize: 10,
+                                                color: _emerald,
+                                                fontSize: 8.5,
                                                 fontWeight: FontWeight.bold,
                                               ),
                                             ),
-                                          ),
-                                          TextButton.icon(
-                                            onPressed: () => _delete(p),
-                                            icon: const Icon(
-                                              Icons.delete_outline,
-                                              size: 14,
-                                              color: Color(0xFFFB7185),
-                                            ),
-                                            label: const Text(
-                                              'REMOVER',
-                                              style: TextStyle(
-                                                color: Color(0xFFFB7185),
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-
-                      // Add Provider Card
-                      const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: _card,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: _border),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'ADICIONAR PROVEDOR (CHAT COMPLETIONS)',
-                              style: TextStyle(
-                                color: _rose,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            DropdownButtonFormField<String>(
-                              initialValue: providerPreset,
-                              dropdownColor: const Color(0xFF160004),
-                              style: const TextStyle(
-                                color: Color(0xFFE2E8F0),
-                                fontSize: 11,
-                                fontFamily: 'monospace',
-                              ),
-                              decoration: _hudInput('Preset do Provedor'),
-                              items: const [
-                                DropdownMenuItem(
-                                  value: 'Groq',
-                                  child: Text('Groq (GPT-OSS 120B / Qwen3)'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Gemini',
-                                  child: Text('Google Gemini (2.5 Flash)'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'OpenAI',
-                                  child: Text('OpenAI Official (GPT-4.1 Mini)'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Custom',
-                                  child: Text(
-                                    'OpenAI-Compatible (OpenRouter / DeepSeek)',
-                                  ),
-                                ),
-                              ],
-                              onChanged: (v) {
-                                if (v != null) _selectPreset(v);
-                              },
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: name,
-                              style: const TextStyle(fontSize: 11),
-                              decoration: _hudInput('Nome do provedor'),
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: url,
-                              keyboardType: TextInputType.url,
-                              style: const TextStyle(fontSize: 11),
-                              decoration: _hudInput(
-                                'URL base',
-                                hint: 'https://api.groq.com/openai/v1',
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: model,
-                              style: const TextStyle(fontSize: 11),
-                              decoration: _hudInput(
-                                'Modelo (Auto-fallback se expirar)',
-                              ),
-                            ),
-                            if (discoveredModels.isNotEmpty) ...[
-                              const SizedBox(height: 6),
-                              Wrap(
-                                spacing: 6,
-                                runSpacing: 6,
-                                children: discoveredModels
-                                    .map(
-                                      (m) => InkWell(
-                                        onTap: () =>
-                                            setState(() => model.text = m),
-                                        borderRadius: BorderRadius.circular(6),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: model.text == m
-                                                ? const Color(0x33FF1A24)
-                                                : const Color(0xFF160004),
-                                            borderRadius:
-                                                BorderRadius.circular(6),
-                                            border: Border.all(
-                                              color: model.text == m
-                                                  ? _crimson
-                                                  : _border,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            m,
-                                            style: TextStyle(
-                                              color: model.text == m
-                                                  ? _crimson
-                                                  : const Color(0xFFCBD5E1),
-                                              fontSize: 9,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                          ),
+                                          ],
                                         ),
                                       ),
-                                    )
-                                    .toList(),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ],
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: key,
-                              obscureText: !showKey,
-                              style: const TextStyle(fontSize: 11),
-                              decoration: _hudInput(
-                                'API Key',
-                                hint: 'Cole sua chave...',
-                                suffixIcon: IconButton(
-                                  icon: Icon(
-                                    showKey
-                                        ? Icons.visibility_off
-                                        : Icons.visibility,
-                                    size: 16,
-                                    color: const Color(0xFF94A3B8),
-                                  ),
-                                  onPressed: () =>
-                                      setState(() => showKey = !showKey),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 14),
+
+                // 3. Active Providers Queue (Failover Order)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'FILA DE FAILOVER ATIVA (${_providers.length})',
+                      style: const TextStyle(
+                        color: _crimson,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                    const Text(
+                      'Ordem de prioridade ↓',
+                      style: TextStyle(color: Color(0xFF64748B), fontSize: 9),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                for (var i = 0; i < _providers.length; i++)
+                  Container(
+                    key: ValueKey(_providers[i].id),
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(11),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F0003),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _providers[i].enabled
+                            ? _crimson.withValues(alpha: 0.45)
+                            : _border,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF240006),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                i == 0 ? '#1 PRIMÁRIO' : '#${i + 1} BACKUP',
+                                style: const TextStyle(
+                                  color: _crimson,
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.bold,
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 8),
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: busy ? null : _detectModels,
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: _rose,
-                                  backgroundColor: const Color(0xFF180004),
-                                  side: const BorderSide(color: _border),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                ),
-                                icon: const Icon(
-                                  Icons.travel_explore,
-                                  size: 14,
-                                ),
-                                label: const Text(
-                                  'DETECTAR MODELOS ATIVOS NA API (/MODELS)',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: _providers[i].isKeylessProvider
+                                    ? _emerald.withValues(alpha: 0.15)
+                                    : const Color(0xFF1A0004),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                _providers[i].isKeylessProvider
+                                    ? 'SEM CHAVE (GRÁTIS)'
+                                    : 'CHAVE AES-GCM',
+                                style: TextStyle(
+                                  color: _providers[i].isKeylessProvider
+                                      ? _emerald
+                                      : const Color(0xFF94A3B8),
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.bold,
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 10),
-                            SizedBox(
-                              width: double.infinity,
-                              child: FilledButton.icon(
-                                onPressed: _save,
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: _crimson,
-                                  foregroundColor: Colors.black,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _providers[i].name,
+                                style: const TextStyle(
+                                  color: Color(0xFFE2E8F0),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
                                 ),
-                                icon: const Icon(Icons.add, size: 15),
-                                label: const Text(
-                                  'SALVAR PROVEDOR NO COFRE',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Switch(
+                              value: _providers[i].enabled,
+                              activeThumbColor: _crimson,
+                              onChanged: (v) {
+                                final copy = [..._providers];
+                                copy[i] = copy[i].copyWith(enabled: v);
+                                _persist(copy);
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.memory,
+                              size: 12,
+                              color: _rose,
+                            ),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                '${_providers[i].model}  •  ${_providers[i].baseUrl}',
+                                style: const TextStyle(
+                                  color: Color(0xFF94A3B8),
+                                  fontSize: 10,
                                 ),
+                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
                           ],
                         ),
-                      ),
-
-                      const SizedBox(height: 14),
-
-                      // Section 2: GitHub Releases Updater
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: _card,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: _border),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Row(
+                            InkWell(
+                              onTap: _testingProviderId == _providers[i].id
+                                  ? null
+                                  : () => _testProvider(_providers[i]),
+                              borderRadius: BorderRadius.circular(6),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1F0005),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: _crimson.withValues(alpha: 0.4),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(
-                                      Icons.cloud_download_outlined,
-                                      size: 14,
-                                      color: _rose,
-                                    ),
-                                    SizedBox(width: 6),
-                                    Text(
-                                      'ATUALIZADOR GITHUB',
+                                    if (_testingProviderId == _providers[i].id)
+                                      const SizedBox(
+                                        width: 10,
+                                        height: 10,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: _crimson,
+                                        ),
+                                      )
+                                    else
+                                      const Icon(
+                                        Icons.bolt,
+                                        size: 12,
+                                        color: _crimson,
+                                      ),
+                                    const SizedBox(width: 4),
+                                    const Text(
+                                      'TESTAR CONEXÃO',
                                       style: TextStyle(
                                         color: _rose,
-                                        fontSize: 11,
+                                        fontSize: 9,
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
                                   ],
                                 ),
-                                Text(
-                                  'VERSÃO ATUAL: $installedVersion',
-                                  style: const TextStyle(
-                                    color: Color(0xFF94A3B8),
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            const Text(
-                              'Repositório: viniciusnpaula-bit/U.L.T.R.O.N.-Mobile',
-                              style: TextStyle(
-                                color: Color(0xFF94A3B8),
-                                fontSize: 10,
                               ),
                             ),
-                            const SizedBox(height: 10),
-                            if (latestUpdate != null)
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF180004),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: _crimson.withValues(alpha: 0.35),
+                            const Spacer(),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              icon: const Icon(
+                                Icons.arrow_upward,
+                                size: 15,
+                                color: Color(0xFF94A3B8),
+                              ),
+                              onPressed: i == 0
+                                  ? null
+                                  : () {
+                                      final copy = [..._providers];
+                                      final item = copy.removeAt(i);
+                                      copy.insert(i - 1, item);
+                                      _persist(copy);
+                                    },
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              icon: const Icon(
+                                Icons.arrow_downward,
+                                size: 15,
+                                color: Color(0xFF94A3B8),
+                              ),
+                              onPressed: i == _providers.length - 1
+                                  ? null
+                                  : () {
+                                      final copy = [..._providers];
+                                      final item = copy.removeAt(i);
+                                      copy.insert(i + 1, item);
+                                      _persist(copy);
+                                    },
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              icon: const Icon(
+                                Icons.delete_outline,
+                                size: 16,
+                                color: Color(0xFFF43F5E),
+                              ),
+                              onPressed: () {
+                                final copy = [..._providers]..removeAt(i);
+                                _persist(copy);
+                              },
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 8),
+
+                // 4. Add / Configure Provider Form
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F0003),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _border),
+                  ),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'CONFIGURAR / ADICIONAR PROVEDOR',
+                              style: TextStyle(
+                                color: _crimson,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.1,
+                              ),
+                            ),
+                            if (_selectedPreset.requiresKey)
+                              InkWell(
+                                onTap: () => _openKeyPage(_selectedPreset),
+                                child: const Text(
+                                  '🔑 Criar chave grátis ↗',
+                                  style: TextStyle(
+                                    color: _emerald,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '✓ Nova Versão Encontrada: ${latestUpdate!.version}',
-                                      style: const TextStyle(
-                                        color: Color(0xFF34D399),
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _name,
+                          style: const TextStyle(
+                            color: Color(0xFFE2E8F0),
+                            fontSize: 12,
+                          ),
+                          decoration: _hudInputDecoration(
+                            'Nome do Provedor',
+                            hint: 'Ex: Groq Cloud, OpenRouter Free, Gemini...',
+                          ),
+                          validator: (v) => (v == null || v.trim().isEmpty)
+                              ? 'Obrigatório'
+                              : null,
+                        ),
+                        const SizedBox(height: 10),
+                        TextFormField(
+                          controller: _url,
+                          style: const TextStyle(
+                            color: Color(0xFFE2E8F0),
+                            fontSize: 12,
+                          ),
+                          decoration: _hudInputDecoration(
+                            'URL Base (HTTPS)',
+                            hint: 'https://api.groq.com/openai/v1',
+                          ),
+                          validator: (v) {
+                            final uri = Uri.tryParse(v?.trim() ?? '');
+                            if (uri == null ||
+                                uri.scheme != 'https' ||
+                                uri.host.isEmpty) {
+                              return 'Use uma URL https:// válida';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 10),
+                        TextFormField(
+                          controller: _key,
+                          obscureText: true,
+                          style: const TextStyle(
+                            color: Color(0xFFE2E8F0),
+                            fontSize: 12,
+                          ),
+                          decoration: _hudInputDecoration(
+                            'Chave da API (ou "free" para Pollinations Sem Chave)',
+                            hint: 'gsk_... / AIza... / sk-or-... / free',
+                          ),
+                          validator: (v) {
+                            final isKeyless = _url.text
+                                .trim()
+                                .toLowerCase()
+                                .contains('pollinations.ai');
+                            if (!isKeyless && (v == null || v.trim().isEmpty)) {
+                              return 'Informe a chave gratuita (ou escolha Pollinations Zero-Key)';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 10),
+                        TextFormField(
+                          controller: _model,
+                          style: const TextStyle(
+                            color: Color(0xFFE2E8F0),
+                            fontSize: 12,
+                          ),
+                          decoration: _hudInputDecoration(
+                            'Modelo Ativo',
+                            hint: 'openai/gpt-oss-120b',
+                            suffixIcon: IconButton(
+                              tooltip: 'Buscar modelos ativos da API',
+                              onPressed:
+                                  _fetchingModels ? null : _fetchModelsFromApi,
+                              icon: _fetchingModels
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: _crimson,
                                       ),
+                                    )
+                                  : const Icon(
+                                      Icons.sync,
+                                      size: 16,
+                                      color: _crimson,
                                     ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      latestUpdate!.name,
-                                      style: const TextStyle(
-                                        color: Color(0xFFCBD5E1),
-                                        fontSize: 10,
+                            ),
+                          ),
+                          validator: (v) => (v == null || v.trim().isEmpty)
+                              ? 'Obrigatório'
+                              : null,
+                        ),
+                        if (activeModels.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          const Text(
+                            'MODELOS GRATUITOS RECOMENDADOS (TOQUE PARA SELECIONAR):',
+                            style: TextStyle(
+                              color: Color(0xFF94A3B8),
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: activeModels
+                                .take(10)
+                                .map(
+                                  (m) => GestureDetector(
+                                    onTap: () {
+                                      HapticFeedback.selectionClick();
+                                      setState(() => _model.text = m);
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
                                       ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: FilledButton(
-                                        onPressed: () =>
-                                            Navigator.of(context).push(
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                const UpdateScreen(),
-                                          ),
-                                        ),
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: _crimson,
-                                          foregroundColor: Colors.black,
-                                        ),
-                                        child: const Text(
-                                          'ABRIR INSTALADOR DE RELEASE',
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              )
-                            else
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: OutlinedButton.icon(
-                                      onPressed: checkingUpdate
-                                          ? null
-                                          : _checkGitHubRelease,
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: _crimson,
-                                        backgroundColor:
-                                            const Color(0xFF1E0004),
-                                        side: BorderSide(
-                                          color:
-                                              _crimson.withValues(alpha: 0.35),
-                                        ),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(8),
+                                      decoration: BoxDecoration(
+                                        color: _model.text.trim() == m
+                                            ? _crimson
+                                            : const Color(0xFF180004),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color: _model.text.trim() == m
+                                              ? _crimson
+                                              : _border,
                                         ),
                                       ),
-                                      icon: const Icon(Icons.refresh, size: 13),
-                                      label: Text(
-                                        checkingUpdate
-                                            ? 'CONSULTANDO GITHUB API...'
-                                            : 'VERIFICAR RELEASES NO GITHUB',
-                                        style: const TextStyle(
-                                          fontSize: 10,
+                                      child: Text(
+                                        m,
+                                        style: TextStyle(
+                                          color: _model.text.trim() == m
+                                              ? Colors.white
+                                              : _rose,
+                                          fontSize: 9.5,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),
                                     ),
                                   ),
-                                ],
-                              ),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 14),
-
-                      // Section 3: Android Preferences (A34 5G)
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: _card,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: _border),
-                        ),
-                        child: const Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'PREFERÊNCIAS ANDROID (A34 5G)',
-                              style: TextStyle(
-                                color: _rose,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
+                                )
+                                .toList(),
+                          ),
+                        ],
+                        const SizedBox(height: 14),
+                        FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _crimson,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
                             ),
-                            SizedBox(height: 8),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Síntese de Voz Robótica (TTS):',
-                                  style: TextStyle(
-                                    color: Color(0xFF94A3B8),
-                                    fontSize: 10,
-                                  ),
-                                ),
-                                Text(
-                                  'Pitch 0.55 Ativo',
-                                  style: TextStyle(
-                                    color: Color(0xFF34D399),
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
+                          ),
+                          onPressed: _add,
+                          icon: const Icon(Icons.add_circle_outline, size: 16),
+                          label: const Text(
+                            'SALVAR PROVEDOR GRATUITO NA FILA',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.8,
                             ),
-                            SizedBox(height: 6),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Vault Obsidian Vinculado:',
-                                  style: TextStyle(
-                                    color: Color(0xFF94A3B8),
-                                    fontSize: 10,
-                                  ),
-                                ),
-                                Text(
-                                  'Documents/ULTRON-Vault',
-                                  style: TextStyle(
-                                    color: Color(0xFFCBD5E1),
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: const Color(0xFF1A0003),
-                      foregroundColor: const Color(0xFFCBD5E1),
-                      side: const BorderSide(color: _border),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: const Text(
-                      'SALVAR E VOLTAR AO NÚCLEO',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      ],
                     ),
                   ),
                 ),
               ],
             ),
-          ),
-        ),
-      );
+    );
+  }
 }

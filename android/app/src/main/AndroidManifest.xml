@@ -6,9 +6,10 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <!-- local_auth uses Android BiometricPrompt (face or fingerprint). -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
-    <!-- Hardware controls: torch/flashlight, vibration, and system alarms/timers. -->
+    <!-- Hardware controls: torch/flashlight, vibration, voice recognition, and system alarms/timers. -->
     <uses-permission android:name="android.permission.FLASHLIGHT"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
 
     <application
@@ -54,6 +55,12 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH"/>
+        </intent>
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
         </intent>
         <intent>
             <action android:name="android.intent.action.MAIN"/>

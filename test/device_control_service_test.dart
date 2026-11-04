@@ -25,6 +25,8 @@ void main() {
           return 70;
         case 'openApp':
           return 'WhatsApp';
+        case 'listenVoice':
+          return 'ligar lanterna';
         default:
           return true;
       }
@@ -34,6 +36,14 @@ void main() {
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+  });
+
+  test('listenVoice invokes native speech recognizer and trims output', () async {
+    final service = DeviceControlService(channel: channel);
+    final spoken = await service.listenVoice();
+    expect(spoken, 'ligar lanterna');
+    expect(calls.last.method, 'listenVoice');
+    expect(calls.last.arguments['locale'], 'pt-BR');
   });
 
   test('executes natural language torch and volume commands', () async {

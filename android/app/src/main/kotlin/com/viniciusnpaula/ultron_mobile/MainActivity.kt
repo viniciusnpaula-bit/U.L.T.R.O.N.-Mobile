@@ -1,5 +1,6 @@
 package com.viniciusnpaula.ultron_mobile
 
+import android.app.Activity
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
@@ -22,6 +23,7 @@ import android.os.VibratorManager
 import android.provider.AlarmClock
 import android.provider.MediaStore
 import android.provider.Settings
+import android.speech.RecognizerIntent
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -32,6 +34,7 @@ import kotlin.math.roundToInt
 class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     companion object {
         private const val CHANNEL = "com.viniciusnpaula.ultron_mobile/device"
+        private const val SPEECH_REQUEST_CODE = 9042
     }
 
     private var torchEnabled: Boolean = false
@@ -41,6 +44,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
     private var isFaceDown: Boolean = false
+    private var pendingSpeechResult: MethodChannel.Result? = null
 
     private val torchCallback = object : CameraManager.TorchCallback() {
         override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
@@ -101,6 +105,23 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SPEECH_REQUEST_CODE) {
+            val callback = pendingSpeechResult
+            pendingSpeechResult = null
+            if (callback == null) return
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                val matches = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                val spoken = matches?.firstOrNull()?.trim() ?: ""
+                callback.success(spoken)
+            } else {
+                callback.success("")
+            }
+        }
+    }
 
     override fun onDestroy() {
         try {
@@ -216,6 +237,33 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 }
                 startActivity(chooser)
                 result.success(true)
+            }
+            "listenVoice" -> {
+                val prompt = call.argument<String>("prompt") ?: "U.L.T.R.O.N. escutando (fale seu comando)..."
+                val locale = call.argument<String>("locale") ?: "pt-BR"
+                pendingSpeechResult?.success("")
+                pendingSpeechResult = result
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                    )
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, locale)
+                    putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
+                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+                }
+                try {
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(intent, SPEECH_REQUEST_CODE)
+                } catch (e: Exception) {
+                    pendingSpeechResult = null
+                    result.error(
+                        "SPEECH_UNAVAILABLE",
+                        "Reconhecimento de voz não disponível neste dispositivo (${e.message}).",
+                        null
+                    )
+                }
             }
             else -> result.notImplemented()
         }

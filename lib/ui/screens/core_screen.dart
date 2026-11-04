@@ -68,6 +68,7 @@ class _CoreScreenState extends State<CoreScreen>
   _ActivePanel panel = _ActivePanel.main;
   bool active = false;
   bool sending = false;
+  bool listeningVoice = false;
   bool hasUpdate = false;
   bool isAudioOn = true;
   bool torchOn = false;
@@ -75,7 +76,7 @@ class _CoreScreenState extends State<CoreScreen>
   bool criticalBatteryAlerted = false;
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
-  String installedVersion = 'v0.6.0';
+  String installedVersion = 'v0.7.0';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -86,7 +87,7 @@ class _CoreScreenState extends State<CoreScreen>
       isUser: false,
       senderLabel: 'Kernel Local',
       text:
-          'U.L.T.R.O.N. Mobile v0.6 online. Controle Android, Obsidian Quick Captures, Skills (.md), Flip-to-Shush e Duress PIN ativos. Digite comandos ou /help.',
+          'U.L.T.R.O.N. Mobile v0.7 online. Escuta por Voz (STT pt-BR), Provedores 100% Gratuitos, Controle Android, Obsidian Quick Captures, Skills (.md), Flip-to-Shush e Duress PIN ativos. Toque no microfone 🎤 ou digite /help.',
       timestamp: 'ONLINE',
     ),
   ];
@@ -433,6 +434,36 @@ class _CoreScreenState extends State<CoreScreen>
     await _refreshDeviceStatus();
   }
 
+  Future<void> _startVoiceInput() async {
+    if (sending || listeningVoice) return;
+    HapticFeedback.mediumImpact();
+    await voiceService.stop();
+    setState(() => listeningVoice = true);
+    try {
+      final spoken = await deviceService.listenVoice(
+        prompt: 'Fale seu comando para o U.L.T.R.O.N...',
+      );
+      if (!mounted) return;
+      setState(() => listeningVoice = false);
+      if (spoken.isNotEmpty) {
+        commandController.text = spoken;
+        await saveCommand();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => listeningVoice = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Reconhecimento de voz indisponível: $e',
+            style: const TextStyle(fontSize: 11),
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
   Future<void> saveCommand() async {
     if (sending) return;
     final text = commandController.text.trim();
@@ -462,6 +493,10 @@ class _CoreScreenState extends State<CoreScreen>
       final parts = text.split(RegExp(r'\s+'));
       final cmdLower = parts.first.toLowerCase();
       final restArg = parts.length > 1 ? parts.sublist(1).join(' ').trim() : '';
+      if (cmdLower == '/voz' || cmdLower == '/voice' || cmdLower == '/falar') {
+        await _startVoiceInput();
+        return;
+      }
       if (cmdLower == '/device' || cmdLower == '/celular') {
         _appendFeed(
           _FeedEntry(
@@ -1164,13 +1199,41 @@ class _CoreScreenState extends State<CoreScreen>
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
-                      hintText: sending
-                          ? 'Consultando provedor ativo…'
-                          : 'Digite /help, /settings, palco ou fale...',
-                      hintStyle: const TextStyle(
-                        color: Color(0xFF475569),
+                      hintText: listeningVoice
+                          ? '🎤 Ouvindo sua voz (pt-BR)…'
+                          : sending
+                              ? 'Consultando provedor ativo…'
+                              : 'Digite /help, /settings ou toque no 🎤 para falar...',
+                      hintStyle: TextStyle(
+                        color: listeningVoice
+                            ? _crimson
+                            : const Color(0xFF475569),
                         fontSize: 11,
                       ),
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: (sending || listeningVoice) ? null : _startVoiceInput,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.all(7),
+                    margin: const EdgeInsets.only(right: 6),
+                    decoration: BoxDecoration(
+                      color: listeningVoice
+                          ? _crimson.withValues(alpha: 0.25)
+                          : const Color(0xFF200004),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: listeningVoice
+                            ? _crimson
+                            : _crimson.withValues(alpha: 0.35),
+                      ),
+                    ),
+                    child: Icon(
+                      listeningVoice ? Icons.graphic_eq : Icons.mic,
+                      size: 14,
+                      color: listeningVoice ? _rose : _crimson,
                     ),
                   ),
                 ),
@@ -1241,21 +1304,26 @@ class _CoreScreenState extends State<CoreScreen>
                 ),
               ),
               const SizedBox(height: 6),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 6,
+                runSpacing: 4,
                 children: [
+                  _StageChip(
+                    label: listeningVoice ? 'ESCUTANDO...' : 'FALAR POR VOZ',
+                    icon: listeningVoice ? Icons.graphic_eq : Icons.mic,
+                    onTap: _startVoiceInput,
+                  ),
                   _StageChip(
                     label: 'MODO PALCO',
                     icon: Icons.picture_in_picture_alt_outlined,
                     onTap: () => _setStage(CoreStage.corner),
                   ),
-                  const SizedBox(width: 8),
                   _StageChip(
                     label: 'TELA CHEIA',
                     icon: Icons.open_in_full,
                     onTap: () => _setStage(CoreStage.hidden),
                   ),
-                  const SizedBox(width: 8),
                   _StageChip(
                     label: nightFocusMode ? 'NOTURNO ON' : 'NOTURNO',
                     icon: Icons.nights_stay_outlined,

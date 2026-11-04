@@ -296,6 +296,17 @@ Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar 
     await _channel.invokeMethod<bool>('shareText', {'text': text});
   }
 
+  Future<String> listenVoice({
+    String prompt = 'U.L.T.R.O.N. escutando (fale seu comando)...',
+    String locale = 'pt-BR',
+  }) async {
+    final res = await _channel.invokeMethod<String>('listenVoice', {
+      'prompt': prompt,
+      'locale': locale,
+    });
+    return (res ?? '').trim();
+  }
+
   /// Parses direct natural-language hardware commands so they execute immediately
   /// with zero latency and even without internet/API keys.
   Future<DeviceActionResult?> tryExecuteNaturalCommand(String rawInput) async {

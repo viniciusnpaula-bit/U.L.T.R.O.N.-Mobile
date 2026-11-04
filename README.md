@@ -1,4 +1,4 @@
-# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v0.6.0`)
+# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v0.7.0`)
 
 Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado para operar com estética tática **AMOLED Carmesim**, segurança **Fail-Closed**, controle direto sobre o hardware do celular e integração nativa com múltiplos provedores de IA.
 
@@ -18,14 +18,20 @@ Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/de
 - **Telemetria Real de Hardware**: Lê em tempo real **nível e temperatura da bateria (`°C`)**, **status de carregamento**, **memória RAM usada/total/livre (`MB`)**, **modelo do aparelho**, **versão do Android** e **status de rede** (`"status da bateria"`, `"memória ram"`).
 - **Discador, Vibração e Web**: Abre o discador com número preenchido (`"ligar para ..."`), aciona o motor háptico (`"vibrar"`) e realiza buscas na web (`"pesquisar ..."`).
 
-### 2. 🧠 IA Multi-Provedor com Failover e Auto-Discovery
-- **Modelos Atualizados de Fábrica**:
-  - **Groq (`openai/gpt-oss-120b` e `qwen/qwen3-32b`)**
-  - **Google Gemini (`gemini-2.5-flash`)**
-  - **OpenAI (`gpt-4.1-mini`)**
-  - **API Customizada** (OpenRouter, DeepSeek, Ollama, etc.)
-- **Auto-Discovery (`/models`) e Migração Automática**: Se um modelo antigo (como Llama depreciado) estiver salvo ou sair do ar, o U.L.T.R.O.N. migra automaticamente e consulta a lista `/models` ativa da API para continuar respondendo sem falhar.
-- **Failover em Cadeia**: Alterna automaticamente para o próximo provedor configurado em caso de erro de rede ou limite de cota.
+### 2. 🧠 Central de IA 100% Gratuita (9 Provedores + Zero-Key Sem Cadastro)
+- **IA Grátis Sem Chave (Zero-Key Out-of-the-Box)**:
+  - **Pollinations AI (`openai`, `mistral`, `qwen-coder`, `deepseek-reasoning`)**: Já vem pré-configurado de fábrica para responder **100% de graça sem precisar criar conta nem chave de API**.
+- **Catálogo Visual de 9 Provedores Gratuitos (com botão 1-toque para gerar chave grátis)**:
+  1. **Pollinations AI (Zero-Key / Sem Chave)** — `openai`, `mistral`, `qwen-coder`
+  2. **Groq Cloud (Free Tier Ultra-Rápido)** — `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3-32b`, `moonshotai/kimi-k2-instruct`
+  3. **Google Gemini AI Studio (Free Tier)** — `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash`
+  4. **OpenRouter (Modelos `:free` 100% Gratuitos)** — `deepseek/deepseek-r1:free`, `deepseek/deepseek-chat-v3-0324:free`, `qwen/qwen3-235b-a22b:free`
+  5. **Cerebras Inference (Free Tier 2000+ tok/s)** — `llama-3.3-70b`, `qwen-3-32b`
+  6. **GitHub Models (Grátis com conta GitHub)** — `gpt-4o-mini`, `gpt-4o`, `DeepSeek-R1`
+  7. **Mistral La Plateforme (Experiment Plan Grátis)** — `mistral-small-latest`, `codestral-latest`
+  8. **SambaNova Cloud (Free Tier)** — `Meta-Llama-3.3-70B-Instruct`, `DeepSeek-R1`
+  9. **HuggingFace Inference Router (Free Tier)** — `Qwen/Qwen2.5-72B-Instruct`, `deepseek-ai/DeepSeek-R1`
+- **Auto-Discovery (`/models`) e Failover em Cadeia**: Consulta modelos ativos ao vivo e alterna automaticamente entre provedores/modelos caso um atinja limite.
 - **Tags de Ação (`[ACTION:...]`)**: A IA executa ações físicas no aparelho enquanto conversa com o operador.
 
 ### 3. 📓 Obsidian "Quick Captures" e Skills Locais (`.md`)
@@ -52,9 +58,10 @@ Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/de
 - **Kill Switch Remoto do PC (LAN / Webhook)**:
   - Envia um pacote JSON assinado com `HMAC-SHA256` para o endpoint do computador na rede local para travar/suspender a estação de trabalho e bloqueia a sessão mobile (`/killswitch`, `"travar pc"` ou botão de emergência em `/security`).
 
-### 6. 🎛️ Interface Tática, Voz e Atualizador OTA
+### 6. 🎛️ Interface Tática, Comando por Voz (STT + TTS) e Atualizador OTA
+- **Escuta por Voz Nativa (`RecognizerIntent` Speech-to-Text `pt-BR`)**: Botão de microfone (`🎤`) na barra `EI, ULTRON ›`, botão rápido `FALAR POR VOZ` abaixo do núcleo e comando `/voz` para falar diretamente com o U.L.T.R.O.N. sem digitar.
+- **Voz Sintetizada Nativa (`flutter_tts`)**: Timbre grave (`pitch: 0.55`) em `pt-BR` + Modo Sussurro noturno.
 - **Núcleo Orbital 60 FPS (`CorePainter`)**: Alterna entre **Modo Centro**, **Modo Palco** (relatórios isolados com núcleo no canto) e **Modo Tela Cheia** (GPU desligada).
-- **Voz Sintetizada Nativa (`flutter_tts`)**: Timbre grave (`pitch: 0.55`) em `pt-BR`.
 - **Histórico Local em SQLite (`/history`)**: Busca instantânea por mensagens e limpeza rápida, excluído de backups em nuvem (`allowBackup=false`).
 - **Atualizador GitHub OTA**: Verifica novas releases no GitHub, valida a integridade `SHA-256` do APK e dispara a instalação local.
 
