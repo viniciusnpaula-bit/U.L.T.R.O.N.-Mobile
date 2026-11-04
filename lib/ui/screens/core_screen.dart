@@ -270,6 +270,7 @@ class _CoreScreenState extends State<CoreScreen>
 
   Future<void> _summarizeMessagesWithAi() async {
     await _refreshDeviceStatus();
+    if (!mounted) return;
     if (recentMessages.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
