@@ -2485,8 +2485,7 @@ class _CoreScreenState extends State<CoreScreen>
     final s = deviceStatus;
     final batLevel = s != null && s.batteryLevel >= 0 ? s.batteryLevel : 84;
     final batCharging = s?.isCharging ?? false;
-    final batTemp =
-        s != null && s.batteryTemperatureC > 0 ? s.batteryTemperatureC : 31.2;
+    final batTemp = s != null && s.batteryTempC > 0 ? s.batteryTempC : 31.2;
     final batPct = batLevel / 100.0;
 
     final ramTotal = s != null && s.ramTotalMb > 0 ? s.ramTotalMb : 8192;
@@ -2495,8 +2494,10 @@ class _CoreScreenState extends State<CoreScreen>
     final ramVal = '${(ramPct * 100).toInt()}%';
     final ramSub = '${(ramUsed / 1024).toStringAsFixed(1)} GB';
 
-    final netType = s != null && s.networkType.isNotEmpty
-        ? s.networkType.toUpperCase()
+    final netType = s != null
+        ? (s.wifiConnected
+            ? 'WI-FI 6'
+            : (s.cellularConnected ? '4G/5G' : 'OFFLINE'))
         : 'WI-FI 6';
 
     final batText = s != null && s.batteryLevel >= 0
