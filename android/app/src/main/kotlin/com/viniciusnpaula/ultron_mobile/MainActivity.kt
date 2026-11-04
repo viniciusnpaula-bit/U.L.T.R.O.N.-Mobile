@@ -44,11 +44,22 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         @Volatile
         var isFaceDownGlobal: Boolean = false
 
+        @Volatile
+        var isUltronSpeakingGlobal: Boolean = false
+
+        @Volatile
+        var lastSpeechEndTimestampMs: Long = 0L
+
+        @Volatile
+        var isForegroundRecognizerActive: Boolean = false
+
         private var instance: MainActivity? = null
 
         fun notifyWakeWord(phrase: String) {
             instance?.runOnUiThread {
-                instance?.deviceChannel?.invokeMethod("onWakeWordDetected", phrase)
+                if (!isUltronSpeakingGlobal && !isForegroundRecognizerActive) {
+                    instance?.deviceChannel?.invokeMethod("onWakeWordDetected", phrase)
+                }
             }
         }
     }
@@ -129,6 +140,8 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == SPEECH_REQUEST_CODE) {
+            isForegroundRecognizerActive = false
+            lastSpeechEndTimestampMs = System.currentTimeMillis()
             val callback = pendingSpeechResult
             pendingSpeechResult = null
             if (callback == null) return
@@ -261,6 +274,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             "listenVoice" -> {
                 val prompt = call.argument<String>("prompt") ?: "U.L.T.R.O.N. escutando (fale seu comando)..."
                 val locale = call.argument<String>("locale") ?: "pt-BR"
+                // Para imediatamente qualquer áudio/TTS do Ultron antes de abrir o microfone do Google!
+                UltronTtsHelper.stopAll()
+                isUltronSpeakingGlobal = false
+                isForegroundRecognizerActive = true
                 pendingSpeechResult?.success("")
                 pendingSpeechResult = result
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -277,6 +294,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     @Suppress("DEPRECATION")
                     startActivityForResult(intent, SPEECH_REQUEST_CODE)
                 } catch (e: Exception) {
+                    isForegroundRecognizerActive = false
                     pendingSpeechResult = null
                     result.error(
                         "SPEECH_UNAVAILABLE",
@@ -284,6 +302,17 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                         null
                     )
                 }
+            }
+            "setUltronSpeaking" -> {
+                val speaking = call.argument<Boolean>("speaking") ?: false
+                if (!speaking && isUltronSpeakingGlobal) {
+                    lastSpeechEndTimestampMs = System.currentTimeMillis()
+                }
+                isUltronSpeakingGlobal = speaking
+                if (!speaking) {
+                    UltronTtsHelper.stopAll()
+                }
+                result.success(true)
             }
             "isNotificationListenerEnabled" -> {
                 result.success(isNotificationServiceEnabled())

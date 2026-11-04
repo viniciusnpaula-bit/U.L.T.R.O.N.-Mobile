@@ -125,15 +125,31 @@ class _CoreScreenState extends State<CoreScreen>
         );
       },
       onWakeWord: (phrase) {
-        if (!mounted) return;
+        if (!mounted || sending || listeningVoice || voiceService.isSpeaking) {
+          return;
+        }
         HapticFeedback.heavyImpact();
+        final inlineCmd = phrase
+            .replaceFirst(
+              RegExp(
+                r'^.*?\b(?:ultron|outron|uoltron)\b[,:\s]*',
+                caseSensitive: false,
+              ),
+              '',
+            )
+            .trim();
+        if (inlineCmd.length >= 3) {
+          commandController.text = inlineCmd;
+          saveCommand();
+          return;
+        }
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text(
-              '🎙️ Palavra de ativação detectada: "$phrase"',
-              style: const TextStyle(fontSize: 11),
+              '🎙️ "Ultron" detectado! Escutando seu comando…',
+              style: TextStyle(fontSize: 11),
             ),
-            duration: const Duration(seconds: 2),
+            duration: Duration(seconds: 2),
           ),
         );
         _startVoiceInput();
@@ -629,6 +645,9 @@ class _CoreScreenState extends State<CoreScreen>
     if (sending || listeningVoice) return;
     HapticFeedback.mediumImpact();
     await voiceService.stop();
+    // Aguarda 280ms após cortar o TTS para dissipar qualquer eco do alto-falante antes de abrir o microfone
+    await Future<void>.delayed(const Duration(milliseconds: 280));
+    if (!mounted || sending || listeningVoice) return;
     setState(() => listeningVoice = true);
     try {
       final spoken = await deviceService.listenVoice(

@@ -28,17 +28,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
 /**
- * UltronAudioService (Eco-VAD v2 — Consumo Ultra-Baixo):
- * 1. Adaptive Exponential Duty-Cycling (82% a 93.3% Sleep Ratio):
- *    - Amostra janelas curtas de 100ms em 8kHz (banda de voz humana).
- *    - Em ambiente ativo (< 20s de silêncio): dorme 450ms entre janelas (~82% ADC desligado).
- *    - Em silêncio moderado (20s a 120s): dorme 900ms (~90% ADC desligado).
- *    - Em silêncio profundo (> 120s, ex.: mesa/madrugada): dorme 1400ms (~93.3% ADC desligado).
- *    - Retorna instantaneamente ao modo rápido (450ms) ao menor sinal acústico.
- * 2. Zero WakeLock Infinito:
- *    - Nenhum PARTIAL_WAKE_LOCK fica retido em repouso. Só adquire WakeLock por 8 segundos
- *      no exato instante em que a voz humana dispara o gatilho.
- * 3. Pausa Inteligente em Chamadas, Flip-to-Shush (Tela p/ Baixo) e Bateria Crítica (< 15%).
+ * UltronAudioService (Eco-VAD v3 — Half-Duplex Anti-Eco):
+ * 1. Bloqueio Acústico Half-Duplex:
+ *    - Desativa 100% a escuta enquanto o próprio U.L.T.R.O.N. estiver falando
+ *      (via flutter_tts, UltronTtsHelper ou AudioManager.isMusicActive) + janela de
+ *      1.100ms pós-fala para dissipação do eco no ambiente.
+ *    - NUNCA reproduz áudio pelo alto-falante no momento em que o SpeechRecognizer do Google
+ *      é aberto, impedindo que o microfone grave a própria voz do Ultron.
+ * 2. Adaptive Exponential Duty-Cycling (82% a 93.3% Sleep Ratio).
  */
 class UltronAudioService : Service() {
 
@@ -54,11 +51,13 @@ class UltronAudioService : Service() {
         private const val SLEEP_QUIET_MS = 900L
         private const val SLEEP_DEEP_IDLE_MS = 1400L
         private const val SLEEP_PAUSED_STATE_MS = 5000L
+        private const val SLEEP_SPEAKER_GUARD_MS = 700L
         private const val SLEEP_LOW_BATTERY_MS = 10000L
+        private const val POST_SPEECH_ECHO_GUARD_MS = 1100L
 
         private const val AMBIENT_ACTIVITY_RMS = 850.0
         private const val VAD_RMS_THRESHOLD = 1950.0
-        private const val COOLDOWN_AFTER_TRIGGER_MS = 4500L
+        private const val COOLDOWN_AFTER_TRIGGER_MS = 5000L
 
         @Volatile
         var isRunning: Boolean = false
@@ -104,7 +103,7 @@ class UltronAudioService : Service() {
             return START_NOT_STICKY
         }
 
-        val notification = buildNotification("Eco-VAD Adaptativo ativo (82%–93% Sleep)")
+        val notification = buildNotification("Eco-VAD Anti-Eco ativo (82%–93% Sleep)")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -118,6 +117,16 @@ class UltronAudioService : Service() {
         isRunning = true
         startEcoVadLoop()
         return START_STICKY
+    }
+
+    private fun isSpeakerOrRecognizerBusy(audioManager: AudioManager?): Boolean {
+        val now = System.currentTimeMillis()
+        if (MainActivity.isForegroundRecognizerActive) return true
+        if (MainActivity.isUltronSpeakingGlobal || UltronTtsHelper.isSpeaking) return true
+        if (audioManager?.isMusicActive == true) return true
+        if (now - MainActivity.lastSpeechEndTimestampMs < POST_SPEECH_ECHO_GUARD_MS) return true
+        if (now - UltronTtsHelper.lastSpeechEndTimestampMs < POST_SPEECH_ECHO_GUARD_MS) return true
+        return false
     }
 
     private fun startEcoVadLoop() {
@@ -159,15 +168,30 @@ class UltronAudioService : Service() {
                     val inCall = audioManager != null &&
                         audioManager.mode != AudioManager.MODE_NORMAL
                     if (inCall || MainActivity.isFaceDownGlobal) {
+                        consecutiveVoiceFrames = 0
                         Thread.sleep(SLEEP_PAUSED_STATE_MS)
                         continue
                     }
 
-                    // 3. Captura Burst de apenas 100ms
+                    // 3. Bloqueio Half-Duplex Anti-Eco: NUNCA escuta enquanto o Ultron fala ou o mic principal está aberto!
+                    if (isSpeakerOrRecognizerBusy(audioManager)) {
+                        consecutiveVoiceFrames = 0
+                        Thread.sleep(SLEEP_SPEAKER_GUARD_MS)
+                        continue
+                    }
+
+                    // 4. Captura Burst de apenas 100ms
                     if (recorder.state == AudioRecord.STATE_INITIALIZED) {
                         recorder.startRecording()
                         val readCount = recorder.read(pcmBuffer, 0, windowSamples)
                         recorder.stop()
+
+                        // Se o Ultron começou a falar durante os 100ms, descarta o frame imediatamente
+                        if (isSpeakerOrRecognizerBusy(audioManager)) {
+                            consecutiveVoiceFrames = 0
+                            Thread.sleep(SLEEP_SPEAKER_GUARD_MS)
+                            continue
+                        }
 
                         if (readCount > 0) {
                             val rms = computeRms(pcmBuffer, readCount)
@@ -188,7 +212,7 @@ class UltronAudioService : Service() {
                         }
                     }
 
-                    // 4. Adaptive Exponential Sleep Backoff (450ms -> 900ms -> 1400ms)
+                    // 5. Adaptive Exponential Sleep Backoff (450ms -> 900ms -> 1400ms)
                     val silenceDurationMs = System.currentTimeMillis() - lastSoundDetectedMs
                     val sleepMs = when {
                         silenceDurationMs > 120_000L -> SLEEP_DEEP_IDLE_MS
@@ -225,16 +249,17 @@ class UltronAudioService : Service() {
     }
 
     private fun onVoiceWakeTriggered() {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        if (isSpeakerOrRecognizerBusy(audioManager)) return
+
         // Adquire WakeLock apenas por 8 segundos (nunca infinito!)
         wakeLock?.acquire(8_000L)
         val nowStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         lastTriggerTimestamp = nowStr
 
-        // Toca a assinatura Fish Audio para dar feedback auditivo de escuta
-        UltronTtsHelper.playFishVoiceAsset(applicationContext)
-        updateNotification("Identificando 'Ultron'... ($nowStr)")
+        // IMPORTANTE: NÃO tocar áudio pelo alto-falante aqui para não vazar no SpeechRecognizer!
+        updateNotification("Verificando palavra 'Ultron'... ($nowStr)")
 
-        // Ativa o reconhecedor pontual de palavra de ativação
         wakeWordRecognizer?.destroy()
         wakeWordRecognizer = UltronWakeWordRecognizer(
             context = applicationContext,
@@ -243,8 +268,7 @@ class UltronAudioService : Service() {
                 MainActivity.notifyWakeWord(matched)
             },
             onFinished = {
-                // Ao terminar, volta para a mensagem padrão do Eco-VAD
-                updateNotification("Eco-VAD Adaptativo ativo (82%–93% Sleep)")
+                updateNotification("Eco-VAD Anti-Eco ativo (82%–93% Sleep)")
             }
         ).also { it.startListening() }
     }
@@ -319,7 +343,7 @@ class UltronAudioService : Service() {
                 "U.L.T.R.O.N. Sentinela Eco-VAD",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Escuta inteligente em Duty-Cycle Adaptativo (82% a 93% Sleep)"
+                description = "Escuta inteligente em Duty-Cycle Adaptativo com bloqueio Anti-Eco"
                 setShowBadge(false)
             }
             val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager

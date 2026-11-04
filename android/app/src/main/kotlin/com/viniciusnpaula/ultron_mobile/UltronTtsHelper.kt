@@ -13,17 +13,23 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Wrapper de Voz Offline do U.L.T.R.O.N. (Ultra-Otimizado):
- * 1. Reproduz "ultron_fish_voice.wav" de assets/ via AssetFileDescriptor e libera o MediaPlayer
- *    imediatamente após o término (zero retenção de codec de hardware).
- * 2. Combina a assinatura vocal da Fish Audio com o motor neural offline nativo do Android
- *    (TextToSpeech em pitch grave 0.55f).
- * 3. Auto-Hibernação do Binder TTS: desliga automaticamente a instância do TextToSpeech
- *    após 25 segundos sem falar, liberando 100% da memória RAM e conexões IPC em repouso.
+ * Wrapper de Voz Offline do U.L.T.R.O.N. com Bloqueio Anti-Eco (Half-Duplex):
+ * 1. Mantém flags globais [isSpeaking] e [lastSpeechEndTimestampMs] para garantir que o
+ *    microfone (UltronAudioService / SpeechRecognizer) NUNCA seja aberto enquanto o
+ *    alto-falante do celular estiver reproduzindo a voz do Ultron.
+ * 2. Permite interromper imediatamente qualquer fala ([stopAll]) antes de abrir o microfone.
  */
 object UltronTtsHelper {
     private const val VOICE_ASSET_NAME = "ultron_fish_voice.wav"
     private const val IDLE_SHUTDOWN_DELAY_MS = 25_000L
+
+    @Volatile
+    var isSpeaking: Boolean = false
+        private set
+
+    @Volatile
+    var lastSpeechEndTimestampMs: Long = 0L
+        private set
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val idleShutdownRunnable = Runnable { shutdownTtsOnly() }
@@ -32,9 +38,28 @@ object UltronTtsHelper {
     private var offlineTts: TextToSpeech? = null
     private var ttsReady: Boolean = false
 
+    private fun markSpeechStarted() {
+        isSpeaking = true
+        MainActivity.isUltronSpeakingGlobal = true
+    }
+
+    private fun markSpeechEnded() {
+        val now = System.currentTimeMillis()
+        isSpeaking = false
+        lastSpeechEndTimestampMs = now
+        MainActivity.isUltronSpeakingGlobal = false
+        MainActivity.lastSpeechEndTimestampMs = now
+    }
+
     fun playFishVoiceAsset(context: Context, onComplete: (() -> Unit)? = null): Boolean {
+        // Nunca toca se o microfone de reconhecimento estiver aberto!
+        if (MainActivity.isForegroundRecognizerActive) {
+            onComplete?.invoke()
+            return false
+        }
         return try {
             releasePlayer()
+            markSpeechStarted()
             val afd = context.assets.openFd(VOICE_ASSET_NAME)
             val mp = MediaPlayer()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -49,10 +74,12 @@ object UltronTtsHelper {
             afd.close()
             mp.setOnCompletionListener {
                 releasePlayer()
+                markSpeechEnded()
                 onComplete?.invoke()
             }
             mp.setOnErrorListener { _, _, _ ->
                 releasePlayer()
+                markSpeechEnded()
                 onComplete?.invoke()
                 true
             }
@@ -61,12 +88,14 @@ object UltronTtsHelper {
             player = mp
             true
         } catch (_: Exception) {
+            markSpeechEnded()
             onComplete?.invoke()
             false
         }
     }
 
-    fun speak(context: Context, text: String, playSampleFirst: Boolean = true) {
+    fun speak(context: Context, text: String, playSampleFirst: Boolean = false) {
+        if (MainActivity.isForegroundRecognizerActive) return
         val clean = text.trim()
         if (clean.isEmpty()) {
             playFishVoiceAsset(context)
@@ -94,7 +123,7 @@ object UltronTtsHelper {
             }
             else -> query
         }
-        speak(context, reply, playSampleFirst = true)
+        speak(context, reply, playSampleFirst = false)
         return reply
     }
 
@@ -104,7 +133,9 @@ object UltronTtsHelper {
     }
 
     private fun speakWithOfflineEngine(appContext: Context, text: String) {
+        if (MainActivity.isForegroundRecognizerActive) return
         scheduleIdleShutdown()
+        markSpeechStarted()
         if (offlineTts != null && ttsReady) {
             offlineTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ultron_offline_utt")
             return
@@ -118,20 +149,42 @@ object UltronTtsHelper {
                 offlineTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
                         mainHandler.removeCallbacks(idleShutdownRunnable)
+                        markSpeechStarted()
                     }
 
                     override fun onDone(utteranceId: String?) {
+                        markSpeechEnded()
                         scheduleIdleShutdown()
                     }
 
                     @Deprecated("Deprecated in Java")
                     override fun onError(utteranceId: String?) {
+                        markSpeechEnded()
                         scheduleIdleShutdown()
                     }
+
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                        markSpeechEnded()
+                    }
                 })
-                offlineTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ultron_offline_utt")
+                if (!MainActivity.isForegroundRecognizerActive) {
+                    offlineTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ultron_offline_utt")
+                } else {
+                    markSpeechEnded()
+                }
+            } else {
+                markSpeechEnded()
             }
         }
+    }
+
+    fun stopAll() {
+        releasePlayer()
+        try {
+            offlineTts?.stop()
+        } catch (_: Exception) {
+        }
+        markSpeechEnded()
     }
 
     fun releasePlayer() {
@@ -154,6 +207,7 @@ object UltronTtsHelper {
         }
         offlineTts = null
         ttsReady = false
+        markSpeechEnded()
     }
 
     fun shutdown() {

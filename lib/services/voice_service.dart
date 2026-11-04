@@ -1,12 +1,29 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 class VoiceService {
-  VoiceService({FlutterTts? tts}) : _tts = tts ?? FlutterTts();
+  VoiceService({FlutterTts? tts, MethodChannel? deviceChannel})
+      : _tts = tts ?? FlutterTts(),
+        _deviceChannel = deviceChannel ??
+            const MethodChannel('com.viniciusnpaula.ultron_mobile/device');
+
   final FlutterTts _tts;
+  final MethodChannel _deviceChannel;
   Future<void>? _initializing;
   bool _ready = false;
   bool enabled = true;
   bool whisperMode = false;
+  bool isSpeaking = false;
+
+  Future<void> _notifyNativeSpeaking(bool speaking) async {
+    isSpeaking = speaking;
+    try {
+      await _deviceChannel.invokeMethod<bool>(
+        'setUltronSpeaking',
+        {'speaking': speaking},
+      );
+    } catch (_) {}
+  }
 
   Future<void> initialize() async {
     if (_ready) return;
@@ -20,6 +37,18 @@ class VoiceService {
     await _tts.setSpeechRate(0.48);
     await _tts.setVolume(1);
     await _tts.awaitSpeakCompletion(true);
+    _tts.setStartHandler(() {
+      _notifyNativeSpeaking(true);
+    });
+    _tts.setCompletionHandler(() {
+      _notifyNativeSpeaking(false);
+    });
+    _tts.setCancelHandler(() {
+      _notifyNativeSpeaking(false);
+    });
+    _tts.setErrorHandler((_) {
+      _notifyNativeSpeaking(false);
+    });
     _ready = true;
   }
 
@@ -35,11 +64,20 @@ class VoiceService {
     final message = text.trim();
     if (message.isEmpty) return;
     await initialize();
-    await _tts.stop();
-    await _tts.speak(message);
+    await _notifyNativeSpeaking(true);
+    try {
+      await _tts.stop();
+      await _tts.speak(message);
+    } finally {
+      await _notifyNativeSpeaking(false);
+    }
   }
 
   Future<void> stop() async {
-    await _tts.stop();
+    try {
+      await _tts.stop();
+    } finally {
+      await _notifyNativeSpeaking(false);
+    }
   }
 }

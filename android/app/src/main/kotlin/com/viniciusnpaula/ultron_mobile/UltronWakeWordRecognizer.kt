@@ -2,6 +2,7 @@ package com.viniciusnpaula.ultron_mobile
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,10 +12,11 @@ import android.speech.SpeechRecognizer
 import java.util.Locale
 
 /**
- * Reconhecedor de Palavra de Ativação ("ULTRON" / "EI ULTRON"):
- * Roda de forma pontual após o Eco-VAD detectar presença de voz.
- * Usa SpeechRecognizer nativo com extras de retorno parcial e offline (FREE_FORM pt-BR).
- * Se o usuário disse "Ultron" ou "Ei Ultron", dispara o callback com a frase reconhecida.
+ * Reconhecedor de Palavra de Ativação ("ULTRON" / "EI ULTRON") com Bloqueio Anti-Eco:
+ * 1. Aborta imediatamente se o próprio Ultron estiver falando (isUltronSpeakingGlobal /
+ *    UltronTtsHelper.isSpeaking / AudioManager.isMusicActive) ou se o microfone principal
+ *    já estiver aberto (isForegroundRecognizerActive).
+ * 2. Garante disparo único (alreadyDispatched) para não abrir duas janelas de microfone.
  */
 class UltronWakeWordRecognizer(
     private val context: Context,
@@ -24,35 +26,56 @@ class UltronWakeWordRecognizer(
     private var recognizer: SpeechRecognizer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var isListening = false
+    private var alreadyDispatched = false
+
+    private fun isSpeakerActive(): Boolean {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        return MainActivity.isUltronSpeakingGlobal ||
+            UltronTtsHelper.isSpeaking ||
+            MainActivity.isForegroundRecognizerActive ||
+            (am?.isMusicActive == true)
+    }
 
     fun startListening() {
         mainHandler.post {
             try {
-                if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+                if (isSpeakerActive() || !SpeechRecognizer.isRecognitionAvailable(context)) {
                     onFinished()
                     return@post
                 }
 
                 destroy()
+                alreadyDispatched = false
                 val sr = SpeechRecognizer.createSpeechRecognizer(context)
                 recognizer = sr
 
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                    )
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "pt-BR")
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-                    // Tenta preferência offline para respostas instantâneas
                     putExtra("android.speech.extra.PREFER_OFFLINE", true)
                 }
 
                 sr.setRecognitionListener(object : RecognitionListener {
                     override fun onReadyForSpeech(params: Bundle?) {
+                        if (isSpeakerActive()) {
+                            cleanupAndFinish()
+                            return
+                        }
                         isListening = true
                     }
 
-                    override fun onBeginningOfSpeech() {}
+                    override fun onBeginningOfSpeech() {
+                        if (isSpeakerActive()) {
+                            cleanupAndFinish()
+                        }
+                    }
+
                     override fun onRmsChanged(rmsdB: Float) {}
                     override fun onBufferReceived(buffer: ByteArray?) {}
                     override fun onEndOfSpeech() {}
@@ -64,18 +87,24 @@ class UltronWakeWordRecognizer(
 
                     override fun onResults(results: Bundle?) {
                         isListening = false
-                        val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        checkAndDispatch(matches)
+                        if (!alreadyDispatched && !isSpeakerActive()) {
+                            val matches =
+                                results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            checkHotword(matches)
+                        }
                         cleanupAndFinish()
                     }
 
                     override fun onPartialResults(partialResults: Bundle?) {
-                        val partials = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        if (alreadyDispatched || isSpeakerActive()) return
+                        val partials =
+                            partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         if (checkHotword(partials)) {
                             isListening = false
                             try {
                                 sr.stopListening()
-                            } catch (_: Exception) {}
+                            } catch (_: Exception) {
+                            }
                         }
                     }
 
@@ -84,15 +113,15 @@ class UltronWakeWordRecognizer(
 
                 sr.startListening(intent)
 
-                // Timeout de segurança de 4.5 segundos para não prender o microfone
+                // Timeout de segurança de 4.0 segundos
                 mainHandler.postDelayed({
                     if (isListening) {
                         try {
                             sr.stopListening()
-                        } catch (_: Exception) {}
+                        } catch (_: Exception) {
+                        }
                     }
-                }, 4500L)
-
+                }, 4000L)
             } catch (_: Exception) {
                 cleanupAndFinish()
             }
@@ -100,20 +129,16 @@ class UltronWakeWordRecognizer(
     }
 
     private fun checkHotword(candidates: List<String>?): Boolean {
-        if (candidates.isNullOrEmpty()) return false
+        if (alreadyDispatched || candidates.isNullOrEmpty() || isSpeakerActive()) return false
         for (candidate in candidates) {
             val lower = candidate.lowercase(Locale("pt", "BR"))
             if (lower.contains("ultron") || lower.contains("outron") || lower.contains("uoltron")) {
-                onHotwordDetected(candidate)
+                alreadyDispatched = true
+                onHotwordDetected(candidate.trim())
                 return true
             }
         }
         return false
-    }
-
-    private fun checkAndDispatch(matches: List<String>?) {
-        if (matches.isNullOrEmpty()) return
-        checkHotword(matches)
     }
 
     private fun cleanupAndFinish() {
@@ -123,8 +148,13 @@ class UltronWakeWordRecognizer(
 
     fun destroy() {
         try {
+            recognizer?.cancel()
+        } catch (_: Exception) {
+        }
+        try {
             recognizer?.destroy()
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         recognizer = null
         isListening = false
     }
