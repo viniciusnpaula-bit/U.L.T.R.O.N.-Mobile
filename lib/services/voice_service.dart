@@ -6,14 +6,14 @@ import 'speech_text.dart';
 
 /// Perfis de timbre da voz do U.L.T.R.O.N.
 enum VoiceProfile {
-  /// Grave e pausada, sem distorcer a voz neural.
-  grave('GRAVE', 0.80, 0.45),
+  /// Timbre grave, tático e militar característico do U.L.T.R.O.N. (pitch 0.55).
+  grave('GRAVE', 0.55, 0.45),
 
-  /// Timbre original do motor, ritmo normal.
+  /// Timbre padrão do motor nativo, ritmo normal.
   natural('NATURAL', 1.0, 0.50),
 
   /// Respostas mais rápidas para quem tem pressa.
-  agil('ÁGIL', 0.88, 0.58);
+  agil('ÁGIL', 0.70, 0.58);
 
   const VoiceProfile(this.label, this.pitch, this.rate);
   final String label;

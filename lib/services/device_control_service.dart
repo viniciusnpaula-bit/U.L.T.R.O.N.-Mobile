@@ -226,6 +226,44 @@ class DeviceControlService {
     }
   }
 
+  /// Calcula hash SHA-256 de um arquivo local para verificação de integridade tática.
+  Future<String> computeFileSha256(File file) async {
+    if (!await file.exists()) {
+      throw FileSystemException('Arquivo não encontrado', file.path);
+    }
+    final bytes = await file.readAsBytes();
+    return sha256.convert(bytes).toString();
+  }
+
+  /// Valida se o hash SHA-256 do arquivo confere com o esperado.
+  Future<bool> verifyFileIntegrity(File file, String expectedSha256) async {
+    final actual = await computeFileSha256(file);
+    return actual.toLowerCase().trim() == expectedSha256.toLowerCase().trim();
+  }
+
+  /// Prepara payload assinado com HMAC-SHA256 para sincronização com o nó PC.
+  Map<String, String> preparePcSyncPayload({
+    required String command,
+    Map<String, dynamic> data = const {},
+    String secret = 'ULTRON_LAN_GUARD',
+  }) {
+    final timestamp = DateTime.now().toUtc().toIso8601String();
+    final body = jsonEncode({
+      'command': command,
+      'source': 'ULTRON_MOBILE',
+      'timestamp': timestamp,
+      'payload': data,
+    });
+    final signature = Hmac(sha256, utf8.encode(secret))
+        .convert(utf8.encode(body))
+        .toString();
+    return {
+      'body': body,
+      'signature': 'sha256=$signature',
+      'timestamp': timestamp,
+    };
+  }
+
   static const aiSystemPrompt = '''
 Você é U.L.T.R.O.N. 2.0 Mobile, um assistente tático autônomo rodando nativamente em um smartphone Android (500x mais capaz que assistentes comuns).
 Responda sempre em português do Brasil, de forma direta, inteligente e concisa.

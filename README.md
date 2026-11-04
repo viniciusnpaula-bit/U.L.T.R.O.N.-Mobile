@@ -1,6 +1,6 @@
-# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.1.0`)
+# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.2.0`)
 
-Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado para operar com estética tática **AMOLED Carmesim**, segurança **Fail-Closed**, controle direto sobre o hardware do celular e integração nativa com múltiplos provedores de IA.
+Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado para operar com estética tática **AMOLED Carmesim**, segurança **Fail-Closed**, **Action Gate tático**, 16 **Slash Commands determinísticos**, **Visão Multimodal**, controle direto sobre o hardware do celular e integração nativa com múltiplos provedores de IA.
 
 > **Alvo de Referência**: Dispositivos Android `arm64-v8a` (ex.: Samsung Galaxy A34 5G — Dimensity 1080, Mali-G68, 6–8 GB RAM), sem pesos de LLM locais para preservar bateria, memória e temperatura.
 

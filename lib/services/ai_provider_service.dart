@@ -355,7 +355,11 @@ class AiProviderStore {
 
   /// Fallback models tried automatically if the primary model on a provider
   /// is unavailable, rate-limited, or decommissioned.
-  static List<String> fallbackModelsFor(String baseUrl, String primaryModel) {
+  static List<String> fallbackModelsFor(
+    String baseUrl,
+    String primaryModel, {
+    bool requiresVision = false,
+  }) {
     final lowerUrl = baseUrl.toLowerCase();
     final candidates = <String>[primaryModel];
     if (lowerUrl.contains('pollinations.ai')) {
@@ -367,13 +371,20 @@ class AiProviderStore {
         if (!candidates.contains(m)) candidates.add(m);
       }
     } else if (lowerUrl.contains('groq.com')) {
-      for (final m in const [
-        'openai/gpt-oss-120b',
-        'openai/gpt-oss-20b',
-        'qwen/qwen3-32b',
-        'moonshotai/kimi-k2-instruct',
-        'llama-3.3-70b-versatile',
-      ]) {
+      final groqModels = requiresVision
+          ? const [
+              'llama-3.2-11b-vision-preview',
+              'llama-3.2-90b-vision-preview',
+              'openai/gpt-oss-120b',
+            ]
+          : const [
+              'openai/gpt-oss-120b',
+              'openai/gpt-oss-20b',
+              'qwen/qwen3-32b',
+              'moonshotai/kimi-k2-instruct',
+              'llama-3.3-70b-versatile',
+            ];
+      for (final m in groqModels) {
         if (!candidates.contains(m)) candidates.add(m);
       }
     } else if (lowerUrl.contains('openai.com')) {
@@ -388,13 +399,20 @@ class AiProviderStore {
         if (!candidates.contains(m)) candidates.add(m);
       }
     } else if (lowerUrl.contains('openrouter.ai')) {
-      for (final m in const [
-        'deepseek/deepseek-r1:free',
-        'deepseek/deepseek-chat-v3-0324:free',
-        'qwen/qwen3-235b-a22b:free',
-        'google/gemini-2.0-flash-exp:free',
-        'meta-llama/llama-3.3-70b-instruct:free',
-      ]) {
+      final openRouterModels = requiresVision
+          ? const [
+              'google/gemini-2.0-flash-exp:free',
+              'meta-llama/llama-3.2-11b-vision-instruct:free',
+              'deepseek/deepseek-r1:free',
+            ]
+          : const [
+              'deepseek/deepseek-r1:free',
+              'deepseek/deepseek-chat-v3-0324:free',
+              'qwen/qwen3-235b-a22b:free',
+              'google/gemini-2.0-flash-exp:free',
+              'meta-llama/llama-3.3-70b-instruct:free',
+            ];
+      for (final m in openRouterModels) {
         if (!candidates.contains(m)) candidates.add(m);
       }
     } else if (lowerUrl.contains('cerebras.ai')) {
@@ -461,6 +479,7 @@ class AiFailover {
     String prompt, {
     List<Map<String, String>> history = const [],
     String? systemPrompt,
+    String? imageBase64,
     Duration timeout = const Duration(seconds: 20),
   }) async {
     final providers = (await _store.load())
@@ -472,11 +491,13 @@ class AiFailover {
       );
     }
 
+    final requiresVision = imageBase64 != null && imageBase64.isNotEmpty;
     Object? lastError;
     for (final p in providers) {
       final candidateModels = AiProviderStore.fallbackModelsFor(
         p.baseUrl,
         p.model,
+        requiresVision: requiresVision,
       );
       for (final candidateModel in candidateModels) {
         try {
@@ -487,6 +508,7 @@ class AiFailover {
             history,
             systemPrompt,
             timeout,
+            imageBase64: imageBase64,
           );
           final label = candidateModel == p.model
               ? p.name
@@ -505,8 +527,9 @@ class AiFailover {
     String prompt,
     List<Map<String, String>> history,
     String? systemPrompt,
-    Duration timeout,
-  ) async {
+    Duration timeout, {
+    String? imageBase64,
+  }) async {
     final cleanBase = p.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     final uri = _requireHttps('$cleanBase/chat/completions');
     final client = _httpFactory()..connectionTimeout = timeout;
@@ -517,10 +540,10 @@ class AiFailover {
         HttpHeaders.authorizationHeader,
         'Bearer ${p.effectiveToken}',
       );
-      final messages = <Map<String, String>>[
+      final messages = <Map<String, Object>>[
         if (systemPrompt != null && systemPrompt.trim().isNotEmpty)
           {'role': 'system', 'content': systemPrompt.trim()},
-        ...buildAiMessages(prompt, history),
+        ...buildAiMessages(prompt, history, imageBase64: imageBase64),
       ];
       request.add(
         utf8.encode(
@@ -561,20 +584,37 @@ class AiFailover {
 const _allowedHistoryRoles = {'user', 'assistant'};
 const _maxHistoryMessages = 12;
 
-List<Map<String, String>> buildAiMessages(
+List<Map<String, Object>> buildAiMessages(
   String prompt,
-  List<Map<String, String>> history,
-) {
-  final filtered = history
-      .where(
-        (m) =>
-            _allowedHistoryRoles.contains(m['role']) &&
-            (m['content']?.trim().isNotEmpty ?? false),
-      )
-      .take(_maxHistoryMessages)
-      .map((m) => {'role': m['role']!, 'content': m['content']!})
-      .toList();
-  filtered.add({'role': 'user', 'content': prompt});
+  List<Map<String, String>> history, {
+  String? imageBase64,
+}) {
+  final filtered = <Map<String, Object>>[];
+  for (final m in history) {
+    if (_allowedHistoryRoles.contains(m['role']) &&
+        (m['content']?.trim().isNotEmpty ?? false)) {
+      filtered.add({'role': m['role']!, 'content': m['content']!});
+      if (filtered.length >= _maxHistoryMessages) break;
+    }
+  }
+
+  if (imageBase64 != null && imageBase64.isNotEmpty) {
+    final imageUri = imageBase64.startsWith('data:')
+        ? imageBase64
+        : 'data:image/jpeg;base64,$imageBase64';
+    filtered.add({
+      'role': 'user',
+      'content': [
+        {'type': 'text', 'text': prompt},
+        {
+          'type': 'image_url',
+          'image_url': {'url': imageUri},
+        },
+      ],
+    });
+  } else {
+    filtered.add({'role': 'user', 'content': prompt});
+  }
   return filtered;
 }
 

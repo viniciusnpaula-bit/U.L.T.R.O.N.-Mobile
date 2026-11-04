@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ultron_mobile/services/device_control_service.dart';
@@ -147,5 +149,31 @@ void main() {
     expect(res.cleanText, 'Claro, ligando a lanterna e abrindo o WhatsApp.');
     expect(res.executedLogs.length, 2);
     expect(calls.map((c) => c.method), ['setTorch', 'openApp']);
+  });
+
+  test('computes file SHA-256 and verifies integrity', () async {
+    final service = DeviceControlService(channel: channel);
+    final tempDir = await Directory.systemTemp.createTemp('ultron_hash_test_');
+    try {
+      final file = File('${tempDir.path}/test_payload.txt');
+      await file.writeAsString('ULTRON_SECURE_PAYLOAD_TEST');
+      final hash = await service.computeFileSha256(file);
+      expect(hash.length, 64);
+      expect(await service.verifyFileIntegrity(file, hash), isTrue);
+      expect(await service.verifyFileIntegrity(file, 'wrong_hash_value'), isFalse);
+    } finally {
+      await tempDir.delete(recursive: true);
+    }
+  });
+
+  test('prepares PC sync payload with HMAC-SHA256 signature', () {
+    final service = DeviceControlService(channel: channel);
+    final sync = service.preparePcSyncPayload(
+      command: 'SYNC_TELEMETRY',
+      data: {'battery': 98, 'ram': 4096},
+    );
+    expect(sync['body'], contains('SYNC_TELEMETRY'));
+    expect(sync['signature'], startsWith('sha256='));
+    expect(sync['timestamp'], isNotEmpty);
   });
 }

@@ -29,6 +29,22 @@ void main() {
       expect(messages.first['content'], 'm0');
       expect(messages.last, {'role': 'user', 'content': 'agora'});
     });
+
+    test('formats multimodal vision payload when imageBase64 is supplied', () {
+      final messages = buildAiMessages(
+        'Analise esta imagem tática',
+        [],
+        imageBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      );
+      expect(messages.length, 1);
+      final turn = messages.first;
+      expect(turn['role'], 'user');
+      final content = turn['content'] as List;
+      expect(content.length, 2);
+      expect(content[0], {'type': 'text', 'text': 'Analise esta imagem tática'});
+      expect((content[1] as Map)['type'], 'image_url');
+      expect(((content[1] as Map)['image_url'] as Map)['url'], contains('data:image/jpeg;base64,'));
+    });
   });
 
   group('parseAiReply', () {

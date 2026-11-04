@@ -144,7 +144,8 @@ object UltronTtsHelper {
             if (status == TextToSpeech.SUCCESS) {
                 ttsReady = true
                 offlineTts?.language = Locale("pt", "BR")
-                offlineTts?.setPitch(0.80f)
+                // Calibração do timbre característico do U.L.T.R.O.N. (grave, tático, pitch: ~0.55)
+                offlineTts?.setPitch(0.55f)
                 offlineTts?.setSpeechRate(0.92f)
                 offlineTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {

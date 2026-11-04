@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/security/action_gate.dart';
 import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
 import '../../models/chat_message.dart';
@@ -83,7 +84,7 @@ class _CoreScreenState extends State<CoreScreen>
   VoiceProfile selectedVoiceProfile = VoiceProfile.grave;
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
-  String installedVersion = 'v1.1.0';
+  String installedVersion = 'v1.2.0';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -95,7 +96,7 @@ class _CoreScreenState extends State<CoreScreen>
       isUser: false,
       senderLabel: 'Kernel Local',
       text:
-          'U.L.T.R.O.N. Mobile v1.0 online. Motor de Voz Neural Limpo (Anti-Eco Half-Duplex), Reconhecimento de Voz Ao Vivo no HUD (🎤), Sentinela WhatsApp/SMS e 9 Provedores Gratuitos ativos!',
+          'U.L.T.R.O.N. Mobile v1.2.0 online. Action Gate tático ativo, 16 Slash Commands, Visão Multimodal e 9 Provedores Gratuitos prontos para comando!',
       timestamp: 'ONLINE',
     ),
   ];
@@ -723,185 +724,6 @@ class _CoreScreenState extends State<CoreScreen>
       return;
     }
     if (text.startsWith('/')) {
-      final parts = text.split(RegExp(r'\s+'));
-      final cmdLower = parts.first.toLowerCase();
-      final restArg = parts.length > 1 ? parts.sublist(1).join(' ').trim() : '';
-      if (cmdLower == '/voz' || cmdLower == '/voice' || cmdLower == '/falar') {
-        await _startVoiceInput();
-        return;
-      }
-      if (cmdLower == '/mensagens' ||
-          cmdLower == '/notificacoes' ||
-          cmdLower == '/ler') {
-        _appendFeed(
-          _FeedEntry(
-            isUser: true,
-            senderLabel: 'OPERADOR',
-            text: text,
-            timestamp: timeStr,
-          ),
-        );
-        final res = await deviceService.tryExecuteNaturalCommand(
-          'ler mensagens',
-        );
-        await _refreshDeviceStatus();
-        if (res != null) {
-          _appendFeed(
-            _FeedEntry(
-              isUser: false,
-              senderLabel: 'Sentinela de Mensagens',
-              text: res.message,
-              timestamp: timeStr,
-            ),
-          );
-          if (res.speakText != null) {
-            await voiceService.speak(res.speakText!);
-          }
-        }
-        return;
-      }
-      if (cmdLower == '/responder' || cmdLower == '/reply') {
-        _appendFeed(
-          _FeedEntry(
-            isUser: true,
-            senderLabel: 'OPERADOR',
-            text: text,
-            timestamp: timeStr,
-          ),
-        );
-        if (restArg.isEmpty) {
-          _appendFeed(
-            _FeedEntry(
-              isUser: false,
-              senderLabel: 'Sentinela de Mensagens',
-              text:
-                  'Uso: /responder <texto> ou "responder para Nome: <texto>"',
-              timestamp: timeStr,
-            ),
-          );
-        } else {
-          final res = await deviceService.tryExecuteNaturalCommand(
-            'responder: $restArg',
-          );
-          if (res != null) {
-            _appendFeed(
-              _FeedEntry(
-                isUser: false,
-                senderLabel: 'Sentinela de Mensagens',
-                text: res.message,
-                timestamp: timeStr,
-              ),
-            );
-            if (res.speakText != null) {
-              await voiceService.speak(res.speakText!);
-            }
-          }
-        }
-        return;
-      }
-      if (cmdLower == '/device' || cmdLower == '/celular') {
-        _appendFeed(
-          _FeedEntry(
-            isUser: true,
-            senderLabel: 'OPERADOR',
-            text: text,
-            timestamp: timeStr,
-          ),
-        );
-        await _refreshDeviceStatus();
-        _setPanel(_ActivePanel.device);
-        return;
-      }
-      if (cmdLower == '/lanterna' || cmdLower == '/torch') {
-        _appendFeed(
-          _FeedEntry(
-            isUser: true,
-            senderLabel: 'OPERADOR',
-            text: text,
-            timestamp: timeStr,
-          ),
-        );
-        await _toggleTorchQuick();
-        _appendFeed(
-          _FeedEntry(
-            isUser: false,
-            senderLabel: 'Hardware Bridge',
-            text: '🔦 Lanterna: ${torchOn ? 'LIGADA' : 'DESLIGADA'}.',
-            timestamp: timeStr,
-          ),
-        );
-        return;
-      }
-      if (cmdLower == '/note' || cmdLower == '/nota') {
-        _appendFeed(
-          _FeedEntry(
-            isUser: true,
-            senderLabel: 'OPERADOR',
-            text: text,
-            timestamp: timeStr,
-          ),
-        );
-        if (restArg.isEmpty) {
-          _appendFeed(
-            _FeedEntry(
-              isUser: false,
-              senderLabel: 'Obsidian Vault',
-              text: 'Uso: /note <texto da nota> (ex.: /note revisar sensores)',
-              timestamp: timeStr,
-            ),
-          );
-        } else {
-          await _saveQuickObsidianNote(restArg);
-        }
-        return;
-      }
-      if (cmdLower == '/skill' || cmdLower == '/skills') {
-        _appendFeed(
-          _FeedEntry(
-            isUser: true,
-            senderLabel: 'OPERADOR',
-            text: text,
-            timestamp: timeStr,
-          ),
-        );
-        final res = await deviceService.tryExecuteNaturalCommand(
-          restArg.isEmpty ? 'listar skills' : 'executar skill $restArg',
-        );
-        if (res != null) {
-          _appendFeed(
-            _FeedEntry(
-              isUser: false,
-              senderLabel: 'Skill Engine (.md)',
-              text: res.message,
-              timestamp: timeStr,
-            ),
-          );
-        }
-        return;
-      }
-      if (cmdLower == '/killswitch') {
-        _appendFeed(
-          _FeedEntry(
-            isUser: true,
-            senderLabel: 'OPERADOR',
-            text: text,
-            timestamp: timeStr,
-          ),
-        );
-        final msg = await deviceService.triggerPcKillSwitch(
-          reason: 'slash_killswitch',
-        );
-        _appendFeed(
-          _FeedEntry(
-            isUser: false,
-            senderLabel: 'Kill Switch',
-            text: msg,
-            timestamp: timeStr,
-          ),
-        );
-        _lockSession();
-        return;
-      }
       _appendFeed(
         _FeedEntry(
           isUser: true,
@@ -915,7 +737,7 @@ class _CoreScreenState extends State<CoreScreen>
           isUser: false,
           senderLabel: 'Local Gateway',
           text:
-              'Comando desconhecido: "$text". Use /help, /device, /note ou /skill.',
+              'Comando desconhecido: "$text". Digite /help para consultar todos os comandos disponíveis.',
           timestamp: timeStr,
         ),
       );
@@ -1084,10 +906,49 @@ class _CoreScreenState extends State<CoreScreen>
     }
   }
 
+  Future<bool> _confirmActionGate({
+    required String title,
+    required String message,
+    required String confirmText,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF140004),
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: _crimson,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Text(
+          message,
+          style: const TextStyle(color: Color(0xFFE2E8F0), fontSize: 11),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('CANCELAR', style: TextStyle(color: _rose)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _crimson),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(confirmText),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
   Future<void> _runCommand(
     UltronCommand command, [
     String argument = '',
   ]) async {
+    final now = DateTime.now();
+    final timeStr = _formatTime(now);
     switch (command) {
       case UltronCommand.help:
         _setPanel(_ActivePanel.help);
@@ -1114,6 +975,190 @@ class _CoreScreenState extends State<CoreScreen>
         break;
       case UltronCommand.settings:
         await _openSettings();
+        break;
+      case UltronCommand.device:
+        await _refreshDeviceStatus();
+        _setPanel(_ActivePanel.device);
+        break;
+      case UltronCommand.torch:
+        final arg = argument.trim().toLowerCase();
+        bool state;
+        if (arg == 'on' || arg == 'ligar' || arg == '1') {
+          state = await deviceService.setTorch(true);
+        } else if (arg == 'off' || arg == 'desligar' || arg == '0') {
+          state = await deviceService.setTorch(false);
+        } else {
+          state = await deviceService.toggleTorch();
+        }
+        if (mounted) setState(() => torchOn = state);
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Hardware Bridge',
+          text: '🔦 Lanterna: ${state ? 'LIGADA' : 'DESLIGADA'}.',
+          timestamp: timeStr,
+        ));
+        break;
+      case UltronCommand.skills:
+        final res = await deviceService.tryExecuteNaturalCommand(
+          argument.isEmpty ? 'listar skills' : 'executar skill $argument',
+        );
+        if (res != null) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Skill Engine (.md)',
+            text: res.message,
+            timestamp: timeStr,
+          ));
+          if (res.speakText != null) {
+            await voiceService.speak(res.speakText!);
+          }
+        }
+        break;
+      case UltronCommand.note:
+        if (argument.isEmpty) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Obsidian Vault',
+            text: 'Uso: /note <texto da nota> (ex.: /note revisar telemetria)',
+            timestamp: timeStr,
+          ));
+        } else {
+          await _saveQuickObsidianNote(argument);
+        }
+        break;
+      case UltronCommand.models:
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Central de IA',
+          text: 'Consultando modelos ativos no provedor...',
+          timestamp: timeStr,
+        ));
+        try {
+          final providers = (await providerStore.load()).where((p) => p.enabled).toList();
+          if (providers.isEmpty) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Central de IA',
+              text: 'Nenhum provedor ativo configurado.',
+              timestamp: timeStr,
+            ));
+          } else {
+            final activeP = providers.first;
+            final models = await activeP.fetchAvailableModels();
+            final modelsList = models.take(15).map((m) => '• $m').join('\n');
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Auto-Discovery (/models)',
+              text: 'Modelos disponíveis em ${activeP.name} (${activeP.baseUrl}):\n$modelsList',
+              timestamp: timeStr,
+            ));
+          }
+        } catch (e) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Central de IA',
+            text: 'Falha ao consultar modelos: $e',
+            timestamp: timeStr,
+          ));
+        }
+        break;
+      case UltronCommand.messages:
+        final res = await deviceService.tryExecuteNaturalCommand('ler mensagens');
+        await _refreshDeviceStatus();
+        if (res != null) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Sentinela de Mensagens',
+            text: res.message,
+            timestamp: timeStr,
+          ));
+          if (res.speakText != null) {
+            await voiceService.speak(res.speakText!);
+          }
+        }
+        break;
+      case UltronCommand.reply:
+        if (argument.isEmpty) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Sentinela de Mensagens',
+            text: 'Uso: /reply <texto da resposta> ou "responder para Nome: <texto>"',
+            timestamp: timeStr,
+          ));
+        } else {
+          final res = await deviceService.tryExecuteNaturalCommand('responder: $argument');
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Sentinela de Mensagens',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+            if (res.speakText != null) {
+              await voiceService.speak(res.speakText!);
+            }
+          }
+        }
+        break;
+      case UltronCommand.killswitch:
+        final confirmed = await _confirmActionGate(
+          title: '🚨 CONFIRMAÇÃO DE KILL SWITCH',
+          message:
+              'Atenção Operador: Isto transmitirá imediatamente um pacote assinado HMAC-SHA256 para travar sua estação PC na rede local e encerrar a sessão deste dispositivo móvel.',
+          confirmText: 'DISPARAR KILL SWITCH',
+        );
+        if (!confirmed) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Action Gate',
+            text: 'Operação de Kill Switch cancelada pelo Operador.',
+            timestamp: timeStr,
+          ));
+          return;
+        }
+        final msg = await deviceService.triggerPcKillSwitch(reason: 'slash_killswitch');
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Kill Switch',
+          text: msg,
+          timestamp: timeStr,
+        ));
+        _lockSession();
+        break;
+      case UltronCommand.voice:
+        await _startVoiceInput();
+        break;
+      case UltronCommand.clear:
+        final confirmed = await _confirmActionGate(
+          title: 'EXPURGAR HISTÓRICO LOCAL',
+          message:
+              'Deseja limpar as mensagens da sessão atual? Mensagens salvas no banco de dados não serão perdidas.',
+          confirmText: 'EXPURGAR',
+        );
+        if (confirmed) {
+          setState(() => feed = _defaultFeed);
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Memória Local',
+            text: 'Histórico da sessão purgado da memória RAM.',
+            timestamp: timeStr,
+          ));
+        }
+        break;
+      case UltronCommand.lock:
+        _lockSession();
+        break;
+      case UltronCommand.status:
+        await _refreshDeviceStatus();
+        final stat = deviceStatus;
+        if (stat != null) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Telemetria do Dispositivo',
+            text: stat.formatSummary(),
+            timestamp: timeStr,
+          ));
+        }
         break;
     }
   }
