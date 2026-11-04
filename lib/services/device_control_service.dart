@@ -144,17 +144,23 @@ class DeviceControlService {
   final Future<ObsidianService> Function()? obsidianProvider;
   static const _pcEndpointKey = 'ultron.pc.killswitch.v1';
 
-  void setFlipToShushHandler(VoidCallback? onFlip) {
-    if (onFlip == null) {
-      _channel.setMethodCallHandler(null);
-      return;
-    }
+  void setNativeEventHandlers({
+    VoidCallback? onFlip,
+    void Function(String phrase)? onWakeWord,
+  }) {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onFlipToShush') {
-        onFlip();
+        onFlip?.call();
+      } else if (call.method == 'onWakeWordDetected') {
+        final phrase = (call.arguments as String?) ?? 'Ultron';
+        onWakeWord?.call(phrase);
       }
       return null;
     });
+  }
+
+  void setFlipToShushHandler(VoidCallback? onFlip) {
+    setNativeEventHandlers(onFlip: onFlip);
   }
 
   Future<ObsidianService> _getObsidian() =>

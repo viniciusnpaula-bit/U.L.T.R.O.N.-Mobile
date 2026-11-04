@@ -74,6 +74,22 @@ void main() {
     expect(vadRes?.handled, isTrue);
     expect(calls.last.method, 'setAudioSentinel');
     expect(calls.last.arguments, {'enabled': true});
+
+    var triggeredWake = false;
+    service.setNativeEventHandlers(
+      onWakeWord: (phrase) {
+        if (phrase.contains('Ultron')) triggeredWake = true;
+      },
+    );
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+      channel.name,
+      channel.codec.encodeMethodCall(
+        const MethodCall('onWakeWordDetected', 'Ei Ultron'),
+      ),
+      (data) {},
+    );
+    expect(triggeredWake, isTrue);
   });
 
   test('reads, replies in background, and sends WhatsApp/SMS via natural language', () async {

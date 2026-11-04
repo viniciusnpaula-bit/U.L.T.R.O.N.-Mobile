@@ -72,6 +72,7 @@ class UltronAudioService : Service() {
     private val workerActive = AtomicBoolean(false)
     private var vadThread: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wakeWordRecognizer: UltronWakeWordRecognizer? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -229,8 +230,23 @@ class UltronAudioService : Service() {
         val nowStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         lastTriggerTimestamp = nowStr
 
+        // Toca a assinatura Fish Audio para dar feedback auditivo de escuta
         UltronTtsHelper.playFishVoiceAsset(applicationContext)
-        updateNotification("Voz detectada às $nowStr • Toque para falar")
+        updateNotification("Identificando 'Ultron'... ($nowStr)")
+
+        // Ativa o reconhecedor pontual de palavra de ativação
+        wakeWordRecognizer?.destroy()
+        wakeWordRecognizer = UltronWakeWordRecognizer(
+            context = applicationContext,
+            onHotwordDetected = { matched ->
+                updateNotification("Ativado por voz: \"$matched\"")
+                MainActivity.notifyWakeWord(matched)
+            },
+            onFinished = {
+                // Ao terminar, volta para a mensagem padrão do Eco-VAD
+                updateNotification("Eco-VAD Adaptativo ativo (82%–93% Sleep)")
+            }
+        ).also { it.startListening() }
     }
 
     private fun isBatteryCriticalUnplugged(): Boolean {
@@ -324,6 +340,8 @@ class UltronAudioService : Service() {
         workerActive.set(false)
         isRunning = false
         vadThread?.interrupt()
+        wakeWordRecognizer?.destroy()
+        wakeWordRecognizer = null
         releaseWakeLockSafely()
         super.onDestroy()
     }

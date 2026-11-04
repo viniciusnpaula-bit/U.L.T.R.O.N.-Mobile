@@ -43,6 +43,14 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
 
         @Volatile
         var isFaceDownGlobal: Boolean = false
+
+        private var instance: MainActivity? = null
+
+        fun notifyWakeWord(phrase: String) {
+            instance?.runOnUiThread {
+                instance?.deviceChannel?.invokeMethod("onWakeWordDetected", phrase)
+            }
+        }
     }
 
     private var torchEnabled: Boolean = false
@@ -64,6 +72,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        instance = this
         initTorchManager()
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as? SensorManager
         accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -134,6 +143,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     }
 
     override fun onDestroy() {
+        if (instance == this) instance = null
         try {
             sensorManager?.unregisterListener(this)
             cameraManager?.unregisterTorchCallback(torchCallback)

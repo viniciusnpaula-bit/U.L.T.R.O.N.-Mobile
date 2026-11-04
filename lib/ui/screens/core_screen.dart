@@ -109,20 +109,36 @@ class _CoreScreenState extends State<CoreScreen>
     ticker.start();
     active = true;
     voiceService.initialize();
-    deviceService.setFlipToShushHandler(() {
-      if (!mounted) return;
-      voiceService.stop();
-      HapticFeedback.lightImpact();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            '🤫 Flip-to-Shush ativado: voz do núcleo silenciada.',
-            style: TextStyle(fontSize: 11),
+    deviceService.setNativeEventHandlers(
+      onFlip: () {
+        if (!mounted) return;
+        voiceService.stop();
+        HapticFeedback.lightImpact();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '🤫 Flip-to-Shush ativado: voz do núcleo silenciada.',
+              style: TextStyle(fontSize: 11),
+            ),
+            duration: Duration(seconds: 2),
           ),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    });
+        );
+      },
+      onWakeWord: (phrase) {
+        if (!mounted) return;
+        HapticFeedback.heavyImpact();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '🎙️ Palavra de ativação detectada: "$phrase"',
+              style: const TextStyle(fontSize: 11),
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        _startVoiceInput();
+      },
+    );
     _loadInitialState();
     _checkUpdate();
   }
@@ -473,7 +489,7 @@ class _CoreScreenState extends State<CoreScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    deviceService.setFlipToShushHandler(null);
+    deviceService.setNativeEventHandlers(onFlip: null, onWakeWord: null);
     ticker.dispose();
     coreTime.dispose();
     voiceService.stop();
