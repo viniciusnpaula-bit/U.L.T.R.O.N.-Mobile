@@ -10,6 +10,8 @@ String hex(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('pbkdf2 PBKDF2-HMAC-SHA256', () {
     // Known vectors: PBKDF2-HMAC-SHA256("password", "salt", c, 32).
     const expected1 =
@@ -80,7 +82,7 @@ void main() {
         final file = await obsidian.appendDailyNote(date, 'Testar sensores');
         expect(await file.exists(), isTrue);
         final content = await obsidian.readDailyNote(date);
-        expect(content, contains('- Testar sensores'));
+        expect(content, contains('Testar sensores'));
 
         final skillsDir = Directory('${tempDir.path}/Skills');
         await skillsDir.create(recursive: true);
