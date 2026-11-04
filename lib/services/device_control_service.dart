@@ -134,12 +134,13 @@ class DeviceControlService {
   Future<void> savePcKillSwitchUrl(String url) =>
       _storage.write(key: _pcEndpointKey, value: url.trim());
 
-  Future<String> triggerPcKillSwitch({String? overrideUrl}) async {
+  Future<String> triggerPcKillSwitch({
+    String? overrideUrl,
+    String? reason,
+  }) async {
     final target = (overrideUrl ?? await loadPcKillSwitchUrl()).trim();
     if (target.isEmpty) {
-      throw StateError(
-        'Configure o IP/Webhook do PC no Painel de Segurança antes de acionar.',
-      );
+      return '⚠️ Kill Switch Local: Endpoint do PC não configurado (sessão mobile bloqueada).';
     }
     final normalized =
         target.startsWith('http://') || target.startsWith('https://')
@@ -150,6 +151,7 @@ class DeviceControlService {
     final payload = jsonEncode({
       'command': 'LOCK_WORKSTATION',
       'source': 'ULTRON_MOBILE',
+      'reason': reason ?? 'manual',
       'timestamp': timestamp,
     });
     final signature = Hmac(sha256, utf8.encode('ULTRON_LAN_GUARD'))
@@ -532,7 +534,22 @@ Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar 
         );
       }
 
-      // 12. Mobile Skills (.md) ("skill modo_estudo", "executar skill ...", "modo estudo")
+      // 12. Mobile Skills (.md) ("skill modo_estudo", "executar skill ...", "modo estudo", "listar skills")
+      if (RegExp(
+        r'^(?:listar\s+skills|skills\s+locais|quais\s+skills)$',
+        caseSensitive: false,
+      ).hasMatch(lower)) {
+        final vault = await _getObsidian();
+        final skills = await vault.listSkills();
+        final summary = skills.isEmpty
+            ? 'Nenhuma skill encontrada em Skills/.'
+            : skills.map((s) => '• ${s.id}.md (${s.title})').join('\n');
+        return DeviceActionResult(
+          handled: true,
+          message: '⚡ Skills Procedurais Mobile (Skills/*.md):\n$summary',
+          speakText: '${skills.length} skills disponíveis.',
+        );
+      }
       final skillMatch = RegExp(
         r'^(?:executar\s+skill|rodar\s+skill|ativar\s+skill|skill)\s+(.+)$|^(modo\s+estudo|foco\s+noturno|alerta\s+t[aá]tico)$',
         caseSensitive: false,

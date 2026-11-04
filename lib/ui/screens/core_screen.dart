@@ -148,7 +148,7 @@ class _CoreScreenState extends State<CoreScreen>
         authFailures = failures;
         hasPinConfigured = pinSet;
         hasDuressPinConfigured = duressSet;
-        if (killUrl != null && pcKillSwitchUrlController.text.isEmpty) {
+        if (killUrl.isNotEmpty && pcKillSwitchUrlController.text.isEmpty) {
           pcKillSwitchUrlController.text = killUrl;
         }
         mobileSkills = loadedSkills;

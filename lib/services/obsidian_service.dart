@@ -13,6 +13,8 @@ class MobileSkill {
   final String id;
   final String title;
   final String content;
+
+  String get slug => id;
 }
 
 class ObsidianService {
@@ -82,6 +84,9 @@ class ObsidianService {
     }
     return file;
   }
+
+  Future<File> appendDailyNote(DateTime now, String text) =>
+      dailyNote(now, text);
 
   Future<String> readDailyNote(DateTime now) async {
     final day =
