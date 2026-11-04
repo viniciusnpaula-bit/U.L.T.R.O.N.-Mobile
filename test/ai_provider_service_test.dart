@@ -72,13 +72,13 @@ void main() {
     });
   });
 
-  group('AiProviderConfig', () {
+  group('AiProviderConfig & model migration', () {
     test('copyWith and JSON serialization preserve fields', () {
       const original = AiProviderConfig(
         id: 'p1',
         name: 'Groq',
         baseUrl: 'https://api.groq.com/openai/v1',
-        model: 'llama-3.3-70b-versatile',
+        model: 'openai/gpt-oss-120b',
         apiKey: 'gsk_1234567890',
         enabled: true,
         priority: 0,
@@ -89,6 +89,43 @@ void main() {
       expect(restored.name, 'Groq');
       expect(restored.enabled, isFalse);
       expect(restored.priority, 2);
+    });
+
+    test('migrates old llama models on Groq to openai/gpt-oss-120b', () {
+      expect(
+        AiProviderStore.normalizeModelForUrl(
+          'https://api.groq.com/openai/v1',
+          'llama-3.3-70b-versatile',
+        ),
+        'openai/gpt-oss-120b',
+      );
+      expect(
+        AiProviderStore.normalizeModelForUrl(
+          'https://api.groq.com/openai/v1',
+          'llama3-70b-8192',
+        ),
+        'openai/gpt-oss-120b',
+      );
+      expect(
+        AiProviderStore.normalizeModelForUrl(
+          'https://api.openai.com/v1',
+          'gpt-4.1-mini',
+        ),
+        'gpt-4.1-mini',
+      );
+    });
+
+    test('parseChatModelsList filters audio/guard models and prioritizes GPT-OSS', () {
+      final raw = jsonEncode({
+        'data': [
+          {'id': 'whisper-large-v3'},
+          {'id': 'meta-llama/llama-prompt-guard-2-86m'},
+          {'id': 'qwen/qwen3-32b'},
+          {'id': 'openai/gpt-oss-120b'},
+        ],
+      });
+      final models = parseChatModelsList(raw);
+      expect(models, ['openai/gpt-oss-120b', 'qwen/qwen3-32b']);
     });
   });
 }

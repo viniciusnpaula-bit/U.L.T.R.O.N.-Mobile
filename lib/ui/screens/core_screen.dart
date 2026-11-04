@@ -10,6 +10,7 @@ import '../../models/chat_message.dart';
 import '../../services/ai_provider_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/conversation_history.dart';
+import '../../services/device_control_service.dart';
 import '../../services/slash_command_parser.dart';
 import '../../services/voice_service.dart';
 import 'ai_settings_screen.dart';
@@ -18,7 +19,7 @@ import 'update_screen.dart';
 
 enum CoreStage { center, corner, hidden }
 
-enum _ActivePanel { main, security, help }
+enum _ActivePanel { main, device, security, help }
 
 class _FeedEntry {
   const _FeedEntry({
@@ -57,6 +58,7 @@ class _CoreScreenState extends State<CoreScreen>
   final voiceService = VoiceService();
   final updateService = AppUpdateService();
   final providerStore = AiProviderStore();
+  final deviceService = DeviceControlService();
 
   CoreStage stage = CoreStage.center;
   _ActivePanel panel = _ActivePanel.main;
@@ -64,6 +66,8 @@ class _CoreScreenState extends State<CoreScreen>
   bool sending = false;
   bool hasUpdate = false;
   bool isAudioOn = true;
+  bool torchOn = false;
+  DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
   String installedVersion = 'v0.4.0';
   int authFailures = 0;
@@ -74,7 +78,7 @@ class _CoreScreenState extends State<CoreScreen>
       isUser: false,
       senderLabel: 'Kernel Local',
       text:
-          'U.L.T.R.O.N. Mobile online. Failover de provedores ativo. Digite comandos ou /help.',
+          'U.L.T.R.O.N. Mobile online. Controle nativo Android (lanterna, volume, apps, alarmes) e failover de IA ativos. Digite comandos ou /help.',
       timestamp: 'ONLINE',
     ),
   ];
@@ -106,12 +110,20 @@ class _CoreScreenState extends State<CoreScreen>
         ..sort((a, b) => a.priority.compareTo(b.priority));
       final failures = await widget.vault.failureCount();
       final pinSet = await widget.vault.hasPin;
+      DeviceStatus? hwStatus;
+      try {
+        hwStatus = await deviceService.getStatus();
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         authFailures = failures;
         hasPinConfigured = pinSet;
+        if (hwStatus != null) {
+          deviceStatus = hwStatus;
+          torchOn = hwStatus.torchOn;
+        }
         activeProviderUsed = enabledProviders.isNotEmpty
-            ? enabledProviders.first.name
+            ? '${enabledProviders.first.name} (${enabledProviders.first.model})'
             : 'Failover Pronto';
         feed = saved.isNotEmpty
             ? saved
@@ -129,6 +141,35 @@ class _CoreScreenState extends State<CoreScreen>
       });
       _scrollToBottom();
     } catch (_) {}
+  }
+
+  Future<void> _refreshDeviceStatus() async {
+    try {
+      final hwStatus = await deviceService.getStatus();
+      if (!mounted) return;
+      setState(() {
+        deviceStatus = hwStatus;
+        torchOn = hwStatus.torchOn;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _toggleTorchQuick() async {
+    HapticFeedback.mediumImpact();
+    try {
+      final state = await deviceService.toggleTorch();
+      if (!mounted) return;
+      setState(() => torchOn = state);
+      await _refreshDeviceStatus();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Falha na lanterna: $e', style: const TextStyle(fontSize: 11)),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<void> _checkUpdate() async {
@@ -272,6 +313,40 @@ class _CoreScreenState extends State<CoreScreen>
       return;
     }
     if (text.startsWith('/')) {
+      final cmdLower = text.split(RegExp(r'\s+')).first.toLowerCase();
+      if (cmdLower == '/device' || cmdLower == '/celular') {
+        _appendFeed(
+          _FeedEntry(
+            isUser: true,
+            senderLabel: 'OPERADOR',
+            text: text,
+            timestamp: timeStr,
+          ),
+        );
+        await _refreshDeviceStatus();
+        _setPanel(_ActivePanel.device);
+        return;
+      }
+      if (cmdLower == '/lanterna' || cmdLower == '/torch') {
+        _appendFeed(
+          _FeedEntry(
+            isUser: true,
+            senderLabel: 'OPERADOR',
+            text: text,
+            timestamp: timeStr,
+          ),
+        );
+        await _toggleTorchQuick();
+        _appendFeed(
+          _FeedEntry(
+            isUser: false,
+            senderLabel: 'Hardware Bridge',
+            text: '🔦 Lanterna: ${torchOn ? 'LIGADA' : 'DESLIGADA'}.',
+            timestamp: timeStr,
+          ),
+        );
+        return;
+      }
       _appendFeed(
         _FeedEntry(
           isUser: true,
@@ -285,7 +360,7 @@ class _CoreScreenState extends State<CoreScreen>
           isUser: false,
           senderLabel: 'Local Gateway',
           text:
-              'Comando desconhecido: "$text". Use /help para ver os comandos rápidos disponíveis.',
+              'Comando desconhecido: "$text". Use /help ou /device para ver os comandos disponíveis.',
           timestamp: timeStr,
         ),
       );
@@ -341,7 +416,33 @@ class _CoreScreenState extends State<CoreScreen>
       return;
     }
 
-    // 3. AI Conversation + Failover
+    // 3. Direct Android Hardware & OS Commands (instant, works offline)
+    final deviceAction = await deviceService.tryExecuteNaturalCommand(text);
+    if (deviceAction != null && deviceAction.handled) {
+      _appendFeed(
+        _FeedEntry(
+          isUser: true,
+          senderLabel: 'OPERADOR',
+          text: text,
+          timestamp: timeStr,
+        ),
+      );
+      _appendFeed(
+        _FeedEntry(
+          isUser: false,
+          senderLabel: 'Hardware Bridge',
+          text: deviceAction.message,
+          timestamp: timeStr,
+        ),
+      );
+      await _refreshDeviceStatus();
+      if (deviceAction.speakText != null) {
+        await voiceService.speak(deviceAction.speakText!);
+      }
+      return;
+    }
+
+    // 4. AI Conversation + Failover + AI Hardware Actions
     _appendFeed(
       _FeedEntry(
         isUser: true,
@@ -385,14 +486,20 @@ class _CoreScreenState extends State<CoreScreen>
       final reply = await AiFailover(store: providerStore).ask(
         text,
         history: aiHistory,
+        systemPrompt: DeviceControlService.aiSystemPrompt,
       );
+      final actionExec = await deviceService.executeAiActions(reply.text);
+      await _refreshDeviceStatus();
+      final displayReply = actionExec.executedLogs.isEmpty
+          ? actionExec.cleanText
+          : '${actionExec.cleanText}\n\n[Hardware: ${actionExec.executedLogs.join(' • ')}]';
       final replyNow = DateTime.now();
       await ConversationHistory.instance.save(
         ChatMessage(
           id: null,
           conversationId: 'default',
           role: ChatRole.assistant,
-          content: reply.text,
+          content: displayReply,
           createdAt: replyNow,
         ),
       );
@@ -402,11 +509,11 @@ class _CoreScreenState extends State<CoreScreen>
         _FeedEntry(
           isUser: false,
           senderLabel: reply.provider,
-          text: reply.text,
+          text: displayReply,
           timestamp: _formatTime(replyNow),
         ),
       );
-      await voiceService.speak(reply.text);
+      await voiceService.speak(actionExec.cleanText);
     } catch (error) {
       if (!mounted) return;
       _appendFeed(
@@ -508,6 +615,15 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                           const SizedBox(width: 4),
                           _TopNavPill(
+                            label: 'CELULAR',
+                            selected: panel == _ActivePanel.device,
+                            onTap: () {
+                              _refreshDeviceStatus();
+                              _setPanel(_ActivePanel.device);
+                            },
+                          ),
+                          const SizedBox(width: 4),
+                          _TopNavPill(
                             label: 'CONFIG',
                             selected: false,
                             onTap: _openSettings,
@@ -540,10 +656,11 @@ class _CoreScreenState extends State<CoreScreen>
                 ),
                 const SizedBox(height: 8),
 
-                // Main Screen Content (Main / Security / Help)
+                // Main Screen Content (Main / Device / Security / Help)
                 Expanded(
                   child: switch (panel) {
                     _ActivePanel.main => _buildMainPanel(),
+                    _ActivePanel.device => _buildDevicePanel(),
                     _ActivePanel.security => _buildSecurityPanel(),
                     _ActivePanel.help => _buildHelpPanel(),
                   },
@@ -608,6 +725,43 @@ class _CoreScreenState extends State<CoreScreen>
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      tooltip: torchOn
+                          ? 'Desligar Lanterna (/lanterna)'
+                          : 'Ligar Lanterna (/lanterna)',
+                      onPressed: _toggleTorchQuick,
+                      icon: Icon(
+                        torchOn
+                            ? Icons.flashlight_on
+                            : Icons.flashlight_off_outlined,
+                        size: 16,
+                        color: torchOn ? _crimson : const Color(0xFF94A3B8),
+                      ),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      tooltip: 'Controles do Celular (/device)',
+                      onPressed: () {
+                        _refreshDeviceStatus();
+                        _setPanel(_ActivePanel.device);
+                      },
+                      icon: const Icon(
+                        Icons.phonelink_setup,
+                        size: 16,
+                        color: Color(0xFF94A3B8),
+                      ),
+                    ),
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
@@ -1401,6 +1555,357 @@ class _CoreScreenState extends State<CoreScreen>
     );
   }
 
+  Widget _buildDevicePanel() {
+    final s = deviceStatus;
+    final batText = s != null && s.batteryLevel >= 0
+        ? '${s.batteryLevel}% ${s.isCharging ? '(Carregando ⚡)' : ''}'
+        : 'Consultando…';
+    final ramText = s != null && s.ramTotalMb > 0
+        ? '${s.ramUsedMb} / ${s.ramTotalMb} MB (${s.ramFreeMb} MB livres)'
+        : 'Consultando…';
+    final volText = s != null ? '${s.volumePercent}% (${s.ringerMode})' : '…';
+    final modelText = s != null
+        ? '${s.deviceModel} • ${s.androidVersion}'
+        : 'Android Node';
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Container(
+          padding: const EdgeInsets.only(bottom: 10),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: _border)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              InkWell(
+                onTap: () => _setPanel(_ActivePanel.main),
+                child: const Row(
+                  children: [
+                    Icon(Icons.arrow_back, size: 15, color: _crimson),
+                    SizedBox(width: 4),
+                    Text(
+                      'VOLTAR',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.phonelink_setup,
+                    size: 15,
+                    color: Colors.white,
+                  ),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'CONTROLE DO DISPOSITIVO',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  InkWell(
+                    onTap: _refreshDeviceStatus,
+                    child: const Icon(
+                      Icons.refresh,
+                      size: 15,
+                      color: _crimson,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            children: [
+              // 1. Hardware Telemetry Card
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F0003),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _crimson.withValues(alpha: 0.35)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      modelText,
+                      style: const TextStyle(
+                        color: _crimson,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _SecurityRow(
+                      label: 'Bateria:',
+                      value: batText,
+                      valueColor: const Color(0xFF34D399),
+                    ),
+                    const SizedBox(height: 4),
+                    _SecurityRow(
+                      label: 'Memória RAM:',
+                      value: ramText,
+                      valueColor: const Color(0xFFCBD5E1),
+                    ),
+                    const SizedBox(height: 4),
+                    _SecurityRow(
+                      label: 'Volume de Mídia:',
+                      value: volText,
+                      valueColor: _rose,
+                    ),
+                    const SizedBox(height: 4),
+                    _SecurityRow(
+                      label: 'Lanterna Traseira:',
+                      value: torchOn ? 'LIGADA (ON)' : 'DESLIGADA (OFF)',
+                      valueColor: torchOn
+                          ? const Color(0xFF34D399)
+                          : const Color(0xFF94A3B8),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 2. Flashlight & Haptics Primary Button
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _toggleTorchQuick,
+                  style: FilledButton.styleFrom(
+                    backgroundColor:
+                        torchOn ? const Color(0xFF34D399) : _crimson,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  icon: Icon(
+                    torchOn ? Icons.flashlight_off : Icons.flashlight_on,
+                    size: 16,
+                  ),
+                  label: Text(
+                    torchOn
+                        ? 'DESLIGAR LANTERNA DO CELULAR'
+                        : 'LIGAR LANTERNA DO CELULAR',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 3. Volume Controls
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0E0002),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'CONTROLE DE ÁUDIO DO SISTEMA',
+                      style: TextStyle(
+                        color: _rose,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        _StageChip(
+                          label: 'MUDO',
+                          icon: Icons.volume_off,
+                          onTap: () async {
+                            await deviceService.adjustVolume('mute');
+                            await _refreshDeviceStatus();
+                          },
+                        ),
+                        _StageChip(
+                          label: 'VOL -',
+                          icon: Icons.volume_down,
+                          onTap: () async {
+                            await deviceService.adjustVolume('down');
+                            await _refreshDeviceStatus();
+                          },
+                        ),
+                        _StageChip(
+                          label: '50%',
+                          icon: Icons.graphic_eq,
+                          onTap: () async {
+                            await deviceService.setVolume(50);
+                            await _refreshDeviceStatus();
+                          },
+                        ),
+                        _StageChip(
+                          label: '100%',
+                          icon: Icons.speaker,
+                          onTap: () async {
+                            await deviceService.setVolume(100);
+                            await _refreshDeviceStatus();
+                          },
+                        ),
+                        _StageChip(
+                          label: 'VOL +',
+                          icon: Icons.volume_up,
+                          onTap: () async {
+                            await deviceService.adjustVolume('up');
+                            await _refreshDeviceStatus();
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 4. System Panels & Hardware Actions
+              const Text(
+                'AÇÕES DE SISTEMA E SENSORES',
+                style: TextStyle(
+                  color: _rose,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 6),
+              GridView.count(
+                crossAxisCount: 2,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+                childAspectRatio: 2.5,
+                children: [
+                  _QuickCommandCard(
+                    command: '📷 CÂMERA',
+                    description: 'Abrir câmera nativa',
+                    onTap: () => deviceService.openApp('camera'),
+                  ),
+                  _QuickCommandCard(
+                    command: '📶 WI-FI / REDE',
+                    description: 'Painel de conectividade',
+                    onTap: () => deviceService.openSystemSettings('wifi'),
+                  ),
+                  _QuickCommandCard(
+                    command: '🦷 BLUETOOTH',
+                    description: 'Dispositivos pareados',
+                    onTap: () => deviceService.openSystemSettings('bluetooth'),
+                  ),
+                  _QuickCommandCard(
+                    command: '🔆 TELA / BRILHO',
+                    description: 'Ajustes de display',
+                    onTap: () => deviceService.openSystemSettings('display'),
+                  ),
+                  _QuickCommandCard(
+                    command: '⏰ ALARME / TIMER',
+                    description: 'Abrir relógio do sistema',
+                    onTap: () => deviceService.openApp('relogio'),
+                  ),
+                  _QuickCommandCard(
+                    command: '📳 VIBRAR',
+                    description: 'Testar motor háptico',
+                    onTap: () => deviceService.vibrate(durationMs: 350),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // 5. Quick App Launcher
+              const Text(
+                'LANÇADOR RÁPIDO DE APLICATIVOS',
+                style: TextStyle(
+                  color: _rose,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final app in const [
+                    ('WhatsApp', Icons.chat_bubble_outline, 'whatsapp'),
+                    ('YouTube', Icons.play_circle_outline, 'youtube'),
+                    ('Chrome', Icons.public, 'chrome'),
+                    ('Calculadora', Icons.calculate_outlined, 'calculadora'),
+                    ('Mapas', Icons.map_outlined, 'maps'),
+                    ('Telefone', Icons.phone_outlined, 'telefone'),
+                    ('Ajustes', Icons.settings_outlined, 'configuracoes'),
+                  ])
+                    _StageChip(
+                      label: app.$1,
+                      icon: app.$2,
+                      onTap: () async {
+                        try {
+                          await deviceService.openApp(app.$3);
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                '$e',
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            onPressed: () => _setPanel(_ActivePanel.main),
+            style: OutlinedButton.styleFrom(
+              backgroundColor: const Color(0xFF1E0004),
+              foregroundColor: _crimson,
+              side: BorderSide(color: _crimson.withValues(alpha: 0.35)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: const Text(
+              'VOLTAR AO NÚCLEO',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildHelpPanel() => Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
@@ -1451,7 +1956,7 @@ class _CoreScreenState extends State<CoreScreen>
               padding: const EdgeInsets.symmetric(vertical: 10),
               children: const [
                 Text(
-                  'Comandos rápidos executados localmente sem gastar tokens:',
+                  'Comandos rápidos e controles do celular (funcionam offline e pela IA):',
                   style: TextStyle(
                     color: Color(0xFF94A3B8),
                     fontSize: 10,
@@ -1459,38 +1964,45 @@ class _CoreScreenState extends State<CoreScreen>
                 ),
                 SizedBox(height: 8),
                 _HelpSyntaxItem(
-                  cmd: '/help',
-                  desc: 'Abre este manual rápido com a lista de comandos.',
+                  cmd: '/device | /lanterna',
+                  desc:
+                      'Abre o painel de controle do celular ou liga/desliga a lanterna.',
                   highlight: true,
                 ),
                 _HelpSyntaxItem(
-                  cmd: '/security | /security lock',
+                  cmd: 'ligar lanterna | apagar lanterna',
                   desc:
-                      'Exibe a auditoria do AuthGate ou trava a sessão imediatamente.',
+                      'Liga ou desliga o flash LED traseiro do celular imediatamente.',
                   highlight: true,
                 ),
                 _HelpSyntaxItem(
-                  cmd: '/history',
+                  cmd: 'volume 80 | aumentar volume | silenciar',
                   desc:
-                      'Abre a lista de conversas salvas localmente no dispositivo.',
-                  highlight: true,
-                ),
-                _HelpSyntaxItem(
-                  cmd: '/settings',
-                  desc:
-                      'Configuração de IA, chaves, failover e releases do GitHub.',
-                  highlight: true,
-                ),
-                _HelpSyntaxItem(
-                  cmd: 'palco | mostrar documento',
-                  desc:
-                      'Transiciona para o Modo Palco, encolhendo o núcleo para o canto.',
+                      'Controla o volume de mídia do Android de 0% a 100%.',
                   highlight: false,
                 ),
                 _HelpSyntaxItem(
-                  cmd: 'tela cheia | expandir',
+                  cmd: 'abrir whatsapp | abrir câmera | abrir wifi',
                   desc:
-                      'Oculta o núcleo e libera visualização total com economia de GPU.',
+                      'Inicia qualquer aplicativo instalado ou painel do Android.',
+                  highlight: false,
+                ),
+                _HelpSyntaxItem(
+                  cmd: 'alarme 07:30 | timer 5 minutos | bateria',
+                  desc:
+                      'Cria alarmes/timers no relógio do sistema ou lê telemetria real.',
+                  highlight: false,
+                ),
+                _HelpSyntaxItem(
+                  cmd: '/security | /security lock | /settings | /history',
+                  desc:
+                      'Auditoria AuthGate, trava imediata, provedores de IA e histórico.',
+                  highlight: true,
+                ),
+                _HelpSyntaxItem(
+                  cmd: 'palco | tela cheia',
+                  desc:
+                      'Alterna entre o Modo Palco e visualização em Tela Cheia.',
                   highlight: false,
                 ),
               ],

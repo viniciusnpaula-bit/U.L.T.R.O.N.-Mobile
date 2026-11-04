@@ -21,16 +21,18 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
 
   final store = AiProviderStore();
   final updateService = AppUpdateService();
-  final name = TextEditingController(text: 'Groq (Native Llama)');
+  final name = TextEditingController(text: 'Groq (GPT-OSS 120B)');
   final url = TextEditingController(text: 'https://api.groq.com/openai/v1');
-  final model = TextEditingController(text: 'llama-3.3-70b-versatile');
+  final model = TextEditingController(text: 'openai/gpt-oss-120b');
   final key = TextEditingController();
 
   List<AiProviderConfig> providers = [];
+  List<String> discoveredModels = [];
   bool busy = false;
   bool showKey = false;
   String providerPreset = 'Groq';
-  String status = 'Chaves ficam no armazenamento seguro do Android.';
+  String status =
+      'Auto-discovery ativo: modelos obsoletos (Llama antigos) são trocados automaticamente.';
   String installedVersion = '…';
   UpdateInfo? latestUpdate;
   bool checkingUpdate = false;
@@ -52,19 +54,71 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   }
 
   void _selectPreset(String value) {
-    setState(() => providerPreset = value);
+    setState(() {
+      providerPreset = value;
+      discoveredModels = [];
+    });
     if (value == 'Groq') {
-      name.text = 'Groq (Native Llama)';
+      name.text = 'Groq (GPT-OSS 120B)';
       url.text = 'https://api.groq.com/openai/v1';
-      model.text = 'llama-3.3-70b-versatile';
+      model.text = 'openai/gpt-oss-120b';
+    } else if (value == 'Gemini') {
+      name.text = 'Google Gemini 2.5';
+      url.text = 'https://generativelanguage.googleapis.com/v1beta/openai';
+      model.text = 'gemini-2.5-flash';
     } else if (value == 'OpenAI') {
       name.text = 'OpenAI Official';
       url.text = 'https://api.openai.com/v1';
-      model.text = 'gpt-4o-mini';
+      model.text = 'gpt-4.1-mini';
     } else {
       name.text = 'OpenRouter / Custom';
       url.text = 'https://openrouter.ai/api/v1';
-      model.text = 'meta-llama/llama-3.3-70b-instruct';
+      model.text = 'openai/gpt-4o-mini';
+    }
+  }
+
+  Future<void> _detectModels() async {
+    final base = url.text.trim();
+    final apiKey = key.text.trim();
+    if (base.isEmpty || apiKey.isEmpty) {
+      setState(
+        () => status =
+            'Informe a URL base e a API Key para buscar os modelos ativos.',
+      );
+      return;
+    }
+    setState(() {
+      busy = true;
+      status = 'Consultando modelos ativos na API (/models)…';
+    });
+    try {
+      final probe = AiProviderConfig(
+        id: 'probe',
+        name: name.text.trim(),
+        baseUrl: base,
+        model: model.text.trim(),
+        apiKey: apiKey,
+      );
+      final models = await AiFailover(store: store).fetchAvailableModels(probe);
+      if (!mounted) return;
+      if (models.isEmpty) {
+        setState(
+          () => status =
+              'Nenhum modelo listado pelo endpoint /models. Verifique a chave ou digite manualmente.',
+        );
+      } else {
+        setState(() {
+          discoveredModels = models.take(8).toList();
+          model.text = discoveredModels.first;
+          status =
+              '${models.length} modelos ativos detectados! Selecionado: ${discoveredModels.first}';
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => status = 'Falha ao buscar modelos: $e');
+    } finally {
+      if (mounted) setState(() => busy = false);
     }
   }
 
@@ -182,6 +236,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
     });
     try {
       final answer = await AiFailover(store: store).test(p);
+      await _load();
       if (!mounted) return;
       setState(() => status = 'Conexão OK (${p.name}): $answer');
     } catch (e) {
@@ -562,16 +617,20 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               items: const [
                                 DropdownMenuItem(
                                   value: 'Groq',
-                                  child: Text('Groq (Llama / Fast Inference)'),
+                                  child: Text('Groq (GPT-OSS 120B / Qwen3)'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'Gemini',
+                                  child: Text('Google Gemini (2.5 Flash)'),
                                 ),
                                 DropdownMenuItem(
                                   value: 'OpenAI',
-                                  child: Text('OpenAI Official'),
+                                  child: Text('OpenAI Official (GPT-4.1 Mini)'),
                                 ),
                                 DropdownMenuItem(
                                   value: 'Custom',
                                   child: Text(
-                                    'OpenAI-Compatible (Custom / OpenRouter)',
+                                    'OpenAI-Compatible (OpenRouter / DeepSeek)',
                                   ),
                                 ),
                               ],
@@ -599,8 +658,54 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                             TextField(
                               controller: model,
                               style: const TextStyle(fontSize: 11),
-                              decoration: _hudInput('Modelo'),
+                              decoration: _hudInput(
+                                'Modelo (Auto-fallback se expirar)',
+                              ),
                             ),
+                            if (discoveredModels.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                children: discoveredModels
+                                    .map(
+                                      (m) => InkWell(
+                                        onTap: () =>
+                                            setState(() => model.text = m),
+                                        borderRadius: BorderRadius.circular(6),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: model.text == m
+                                                ? const Color(0x33FF1A24)
+                                                : const Color(0xFF160004),
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                            border: Border.all(
+                                              color: model.text == m
+                                                  ? _crimson
+                                                  : _border,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            m,
+                                            style: TextStyle(
+                                              color: model.text == m
+                                                  ? _crimson
+                                                  : const Color(0xFFCBD5E1),
+                                              fontSize: 9,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ],
                             const SizedBox(height: 8),
                             TextField(
                               controller: key,
@@ -619,6 +724,32 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                   ),
                                   onPressed: () =>
                                       setState(() => showKey = !showKey),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: busy ? null : _detectModels,
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: _rose,
+                                  backgroundColor: const Color(0xFF180004),
+                                  side: const BorderSide(color: _border),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                icon: const Icon(
+                                  Icons.travel_explore,
+                                  size: 14,
+                                ),
+                                label: const Text(
+                                  'DETECTAR MODELOS ATIVOS NA API (/MODELS)',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ),
                             ),
