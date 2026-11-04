@@ -1,10 +1,12 @@
 package com.viniciusnpaula.ultron_mobile
 
+import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -21,9 +23,12 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.AlarmClock
+import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.RecognizerIntent
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -264,6 +269,56 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                         null
                     )
                 }
+            }
+            "isNotificationListenerEnabled" -> {
+                result.success(isNotificationServiceEnabled())
+            }
+            "openNotificationListenerSettings" -> {
+                val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+                result.success(true)
+            }
+            "getRecentMessages" -> {
+                val limit = (call.argument<Int>("limit") ?: 20).coerceIn(1, 40)
+                result.success(UltronNotificationService.getRecentMessages(limit))
+            }
+            "clearRecentMessages" -> {
+                UltronNotificationService.clearMessages()
+                result.success(true)
+            }
+            "replyNotification" -> {
+                val target = call.argument<String>("target") ?: ""
+                val text = call.argument<String>("text") ?: ""
+                val statusMsg = UltronNotificationService.replyToMessage(this, target, text)
+                result.success(statusMsg)
+            }
+            "sendWhatsApp" -> {
+                val target = call.argument<String>("target") ?: ""
+                val text = call.argument<String>("text") ?: ""
+                val statusMsg = sendWhatsAppMessage(target, text)
+                result.success(statusMsg)
+            }
+            "sendSms" -> {
+                val target = call.argument<String>("target") ?: ""
+                val text = call.argument<String>("text") ?: ""
+                val statusMsg = sendSmsMessage(target, text)
+                result.success(statusMsg)
+            }
+            "requestContactsPermission" -> {
+                val granted = ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.READ_CONTACTS
+                ) == PackageManager.PERMISSION_GRANTED
+                if (!granted) {
+                    ActivityCompat.requestPermissions(
+                        this,
+                        arrayOf(Manifest.permission.READ_CONTACTS),
+                        9043
+                    )
+                }
+                result.success(granted)
             }
             else -> result.notImplemented()
         }
@@ -526,6 +581,141 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             "wifiConnected" to wifiConnected,
             "cellularConnected" to cellularConnected
         )
+    }
+
+    private fun isNotificationServiceEnabled(): Boolean {
+        return try {
+            val flat = Settings.Secure.getString(
+                contentResolver,
+                "enabled_notification_listeners"
+            ) ?: return false
+            flat.contains(packageName)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun resolveContactPhone(query: String): Pair<String, String>? {
+        val clean = query.trim()
+        if (clean.isEmpty()) return null
+
+        // If the query already looks like a phone number
+        val digitsOnly = clean.replace(Regex("[^0-9+]"), "")
+        if (digitsOnly.length >= 8) {
+            return Pair(clean, digitsOnly)
+        }
+
+        // Otherwise query Android Contacts if permission is granted
+        val hasPerm = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.READ_CONTACTS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!hasPerm) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.READ_CONTACTS),
+                9043
+            )
+            return null
+        }
+
+        val cursor = contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+            ),
+            "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+            arrayOf("%$clean%"),
+            "${ContactsContract.CommonDataKinds.Phone.STARRED} DESC"
+        )
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val name = it.getString(0) ?: clean
+                val rawNum = it.getString(1) ?: ""
+                val normalized = rawNum.replace(Regex("[^0-9+]"), "")
+                if (normalized.isNotEmpty()) {
+                    return Pair(name, normalized)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun normalizeWhatsAppPhone(rawDigits: String): String {
+        val digits = rawDigits.replace(Regex("[^0-9]"), "")
+        // Default to Brazil (+55) when 10 or 11 digits are provided without country code
+        return if (digits.length in 10..11 && !digits.startsWith("55")) {
+            "55$digits"
+        } else {
+            digits
+        }
+    }
+
+    private fun sendWhatsAppMessage(target: String, message: String): String {
+        val cleanText = message.trim()
+        if (cleanText.isEmpty()) {
+            throw IllegalArgumentException("Informe o texto da mensagem.")
+        }
+
+        // 1. Try background inline reply if there is an active notification from this contact
+        if (target.isNotBlank()) {
+            try {
+                return UltronNotificationService.replyToMessage(this, target, cleanText)
+            } catch (_: Exception) {
+                // Fall through to WhatsApp deep-link / intent
+            }
+        }
+
+        // 2. Resolve phone number from target or Contacts
+        val resolved = resolveContactPhone(target)
+        if (resolved != null) {
+            val (contactLabel, rawPhone) = resolved
+            val waPhone = normalizeWhatsAppPhone(rawPhone)
+            val encodedText = Uri.encode(cleanText)
+            val uri = Uri.parse("https://api.whatsapp.com/send?phone=$waPhone&text=$encodedText")
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            return "WhatsApp aberto diretamente para $contactLabel ($waPhone) com a mensagem pronta."
+        }
+
+        // 3. Fallback: Open WhatsApp share chooser with message pre-filled
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, cleanText)
+            setPackage("com.whatsapp")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            startActivity(sendIntent)
+            return "WhatsApp aberto com a mensagem: \"$cleanText\" (selecione o contato)."
+        } catch (_: Exception) {
+            val encodedText = Uri.encode(cleanText)
+            val browserIntent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("https://api.whatsapp.com/send?text=$encodedText")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(browserIntent)
+            return "Link do WhatsApp aberto com a mensagem: \"$cleanText\"."
+        }
+    }
+
+    private fun sendSmsMessage(target: String, message: String): String {
+        val cleanText = message.trim()
+        val resolved = resolveContactPhone(target)
+        val phone = resolved?.second ?: target.replace(Regex("[^0-9+]"), "")
+        val label = resolved?.first ?: (phone.ifEmpty { "Destinatário" })
+        val uri = Uri.parse("smsto:$phone")
+        val intent = Intent(Intent.ACTION_SENDTO, uri).apply {
+            putExtra("sms_body", cleanText)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+        return "App de SMS aberto para $label com a mensagem: \"$cleanText\"."
     }
 }
 

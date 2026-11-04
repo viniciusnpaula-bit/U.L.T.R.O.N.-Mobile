@@ -27,6 +27,27 @@ void main() {
           return 'WhatsApp';
         case 'listenVoice':
           return 'ligar lanterna';
+        case 'isNotificationListenerEnabled':
+          return true;
+        case 'getRecentMessages':
+          return [
+            {
+              'id': 'm1',
+              'packageName': 'com.whatsapp',
+              'appLabel': 'WhatsApp',
+              'sender': 'Carlos',
+              'text': 'Reunião às 15h',
+              'timestampMs': 1700000000000,
+              'timeFormatted': '14:30',
+              'canReplyInline': true,
+            },
+          ];
+        case 'replyNotification':
+          return 'Resposta enviada em segundo plano para Carlos (WhatsApp): "${args['text']}"';
+        case 'sendWhatsApp':
+          return 'WhatsApp aberto para ${args['target']}: "${args['text']}"';
+        case 'sendSms':
+          return 'SMS aberto para ${args['target']}: "${args['text']}"';
         default:
           return true;
       }
@@ -36,6 +57,29 @@ void main() {
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
+  });
+
+  test('reads, replies in background, and sends WhatsApp/SMS via natural language', () async {
+    final service = DeviceControlService(channel: channel);
+
+    final readRes = await service.tryExecuteNaturalCommand('ler mensagens');
+    expect(readRes?.handled, isTrue);
+    expect(readRes?.message, contains('Carlos'));
+
+    final replyRes = await service.tryExecuteNaturalCommand(
+      'responder: Chego em 10 minutos',
+    );
+    expect(replyRes?.handled, isTrue);
+    expect(calls.last.method, 'replyNotification');
+    expect(calls.last.arguments['text'], 'Chego em 10 minutos');
+
+    final waRes = await service.tryExecuteNaturalCommand(
+      'mandar whatsapp para Maria: Já estou a caminho',
+    );
+    expect(waRes?.handled, isTrue);
+    expect(calls.last.method, 'sendWhatsApp');
+    expect(calls.last.arguments['target'], 'Maria');
+    expect(calls.last.arguments['text'], 'Já estou a caminho');
   });
 
   test('listenVoice invokes native speech recognizer and trims output', () async {

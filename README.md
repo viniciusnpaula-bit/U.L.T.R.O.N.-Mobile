@@ -1,4 +1,4 @@
-# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v0.7.0`)
+# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v0.8.0`)
 
 Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado para operar com estética tática **AMOLED Carmesim**, segurança **Fail-Closed**, controle direto sobre o hardware do celular e integração nativa com múltiplos provedores de IA.
 
@@ -17,6 +17,16 @@ Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/de
 - **Alarmes e Temporizadores (Timers)**: Cria despertadores e contagens regressivas direto no Relógio do sistema (`"alarme 07:30"`, `"timer 10 minutos"`).
 - **Telemetria Real de Hardware**: Lê em tempo real **nível e temperatura da bateria (`°C`)**, **status de carregamento**, **memória RAM usada/total/livre (`MB`)**, **modelo do aparelho**, **versão do Android** e **status de rede** (`"status da bateria"`, `"memória ram"`).
 - **Discador, Vibração e Web**: Abre o discador com número preenchido (`"ligar para ..."`), aciona o motor háptico (`"vibrar"`) e realiza buscas na web (`"pesquisar ..."`).
+
+### 1B. 📨 Sentinela de Mensagens & Comunicação Autônoma (`NotificationListenerService` + `RemoteInput`)
+- **Leitura Real de Mensagens (WhatsApp, Telegram, Instagram, SMS, Gmail, Discord)**:
+  - Captura notificações em tempo real e lê em voz alta (`pt-BR`) com `"ler mensagens"`, `/mensagens` ou pelo botão **🔊 LER EM VOZ ALTA** na aba **CELULAR**.
+- **Resumo Tático por IA**:
+  - Botão **🧠 RESUMO TÁTICO IA** que analisa todas as mensagens recentes, filtra ruído de grupos triviais, destaca o que é urgente e sugere respostas.
+- **Resposta Instantânea em 2º Plano (`RemoteInput` Nativo — Sem Abrir o App)**:
+  - Diga ou digite `"responder: Chego em 10 minutos"`, `"responder para João: Já estou indo"` ou `/responder <texto>` e o U.L.T.R.O.N. injeta a resposta direto na notificação do WhatsApp/Telegram/SMS em segundo plano, sem precisar abrir o aplicativo!
+- **Envio Ativo de WhatsApp e SMS com Busca na Agenda (`ContactsContract`)**:
+  - Diga `"mandar whatsapp para Mãe: Já cheguei"` ou `"enviar sms para Carlos: Reunião às 15h"`. O U.L.T.R.O.N. busca o telefone do contato na agenda do Android e dispara a mensagem (ou usa o painel rápido de envio na aba **CELULAR**).
 
 ### 2. 🧠 Central de IA 100% Gratuita (9 Provedores + Zero-Key Sem Cadastro)
 - **IA Grátis Sem Chave (Zero-Key Out-of-the-Box)**:

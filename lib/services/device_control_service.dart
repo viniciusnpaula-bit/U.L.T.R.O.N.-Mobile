@@ -96,6 +96,40 @@ class AiActionExecution {
   final List<String> executedLogs;
 }
 
+class CapturedNotification {
+  const CapturedNotification({
+    required this.id,
+    required this.packageName,
+    required this.appLabel,
+    required this.sender,
+    required this.text,
+    required this.timestampMs,
+    required this.timeFormatted,
+    required this.canReplyInline,
+  });
+
+  final String id;
+  final String packageName;
+  final String appLabel;
+  final String sender;
+  final String text;
+  final int timestampMs;
+  final String timeFormatted;
+  final bool canReplyInline;
+
+  factory CapturedNotification.fromMap(Map<Object?, Object?> map) =>
+      CapturedNotification(
+        id: (map['id'] as String?) ?? '',
+        packageName: (map['packageName'] as String?) ?? '',
+        appLabel: (map['appLabel'] as String?) ?? 'App',
+        sender: (map['sender'] as String?) ?? 'Desconhecido',
+        text: (map['text'] as String?) ?? '',
+        timestampMs: (map['timestampMs'] as num?)?.toInt() ?? 0,
+        timeFormatted: (map['timeFormatted'] as String?) ?? '',
+        canReplyInline: (map['canReplyInline'] as bool?) ?? false,
+      );
+}
+
 class DeviceControlService {
   DeviceControlService({
     MethodChannel? channel,
@@ -176,10 +210,14 @@ class DeviceControlService {
   }
 
   static const aiSystemPrompt = '''
-Você é U.L.T.R.O.N. 2.0 Mobile, um assistente tático autônomo rodando nativamente em um smartphone Android.
+Você é U.L.T.R.O.N. 2.0 Mobile, um assistente tático autônomo rodando nativamente em um smartphone Android (500x mais capaz que assistentes comuns).
 Responda sempre em português do Brasil, de forma direta, inteligente e concisa.
-Você possui controle direto sobre o hardware, cofre Obsidian e o sistema Android do usuário através de tags de ação.
-Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar lanterna, mudar volume, salvar uma nota no Obsidian, rodar uma skill, abrir um aplicativo, abrir câmera, abrir configurações de Wi-Fi/Bluetooth/Tela, criar alarme, criar timer, vibrar, discar número ou pesquisar na web), inclua a tag correspondente no final da sua resposta:
+Você possui controle direto sobre o hardware, mensagens (WhatsApp, Telegram, SMS, Notificações), cofre Obsidian e o sistema Android do usuário através de tags de ação.
+Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, responder notificação em segundo plano, enviar WhatsApp/SMS, ligar/desligar lanterna, mudar volume, salvar uma nota no Obsidian, rodar uma skill, abrir um aplicativo, abrir câmera, abrir configurações, criar alarme, criar timer, vibrar, discar número ou pesquisar na web), inclua a tag correspondente no final da sua resposta:
+- Ler mensagens/notificações recentes: [ACTION:READ_MESSAGES]
+- Responder mensagem/notificação em 2º plano (RemoteInput): [ACTION:REPLY_MESSAGE:ultimo_ou_nome:texto da resposta]
+- Enviar mensagem no WhatsApp (busca contato na agenda ou número): [ACTION:WHATSAPP:nome_ou_numero:texto da mensagem]
+- Enviar SMS (busca contato na agenda ou número): [ACTION:SMS:nome_ou_numero:texto da mensagem]
 - Ligar lanterna/flash: [ACTION:TORCH_ON]
 - Desligar lanterna/flash: [ACTION:TORCH_OFF]
 - Alternar lanterna: [ACTION:TORCH_TOGGLE]
@@ -305,6 +343,71 @@ Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar 
       'locale': locale,
     });
     return (res ?? '').trim();
+  }
+
+  Future<bool> isNotificationListenerEnabled() async {
+    final res = await _channel.invokeMethod<bool>(
+      'isNotificationListenerEnabled',
+    );
+    return res ?? false;
+  }
+
+  Future<void> openNotificationListenerSettings() async {
+    await _channel.invokeMethod<bool>('openNotificationListenerSettings');
+  }
+
+  Future<List<CapturedNotification>> getRecentMessages({int limit = 20}) async {
+    final raw = await _channel.invokeMethod<List<Object?>>(
+      'getRecentMessages',
+      {'limit': limit},
+    );
+    if (raw == null) return const [];
+    return raw
+        .whereType<Map<Object?, Object?>>()
+        .map(CapturedNotification.fromMap)
+        .toList();
+  }
+
+  Future<void> clearRecentMessages() async {
+    await _channel.invokeMethod<bool>('clearRecentMessages');
+  }
+
+  Future<String> replyNotification({
+    required String text,
+    String target = '',
+  }) async {
+    final res = await _channel.invokeMethod<String>('replyNotification', {
+      'target': target,
+      'text': text,
+    });
+    return res ?? 'Resposta enviada.';
+  }
+
+  Future<String> sendWhatsApp({
+    required String target,
+    required String text,
+  }) async {
+    final res = await _channel.invokeMethod<String>('sendWhatsApp', {
+      'target': target,
+      'text': text,
+    });
+    return res ?? 'WhatsApp iniciado.';
+  }
+
+  Future<String> sendSms({
+    required String target,
+    required String text,
+  }) async {
+    final res = await _channel.invokeMethod<String>('sendSms', {
+      'target': target,
+      'text': text,
+    });
+    return res ?? 'SMS iniciado.';
+  }
+
+  Future<bool> requestContactsPermission() async {
+    final res = await _channel.invokeMethod<bool>('requestContactsPermission');
+    return res ?? false;
   }
 
   /// Parses direct natural-language hardware commands so they execute immediately
@@ -594,7 +697,113 @@ Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar 
         );
       }
 
-      // 14. Open any installed app ("abrir whatsapp", "abrir youtube", etc.)
+      // 14. Read Messages / Notifications ("ler mensagens", "ler notificações", "quais mensagens", "tem mensagem nova")
+      if (RegExp(
+        r'\b(ler|ver|checar|mostrar|quais|tem)\s+(?:as\s+|minhas\s+|novas\s+)?(mensagens|mensagem|notifica[cç][oõ]es|whatsapp)\b|^mensagens$|^notifica[cç][oõ]es$',
+        caseSensitive: false,
+      ).hasMatch(lower)) {
+        final enabled = await isNotificationListenerEnabled();
+        if (!enabled) {
+          await openNotificationListenerSettings();
+          return const DeviceActionResult(
+            handled: true,
+            message:
+                '🔓 Permissão de Sentinela necessária: Ative "U.L.T.R.O.N. Sentinela de Mensagens" na tela do Android que acabou de abrir para ler e responder WhatsApp, Telegram e SMS em 2º plano.',
+            speakText:
+                'Ative a permissão de leitura de notificações para o Ultron.',
+          );
+        }
+        final msgs = await getRecentMessages(limit: 8);
+        if (msgs.isEmpty) {
+          return const DeviceActionResult(
+            handled: true,
+            message: '📭 Nenhuma mensagem ou notificação recente capturada.',
+            speakText: 'Você não tem novas mensagens no momento.',
+          );
+        }
+        final formatted = msgs
+            .take(5)
+            .map(
+              (m) =>
+                  '• [${m.timeFormatted}] ${m.appLabel} — ${m.sender}: "${m.text}"${m.canReplyInline ? ' [↩️ Responde em 2º plano]' : ''}',
+            )
+            .join('\n');
+        final spoken = msgs
+            .take(3)
+            .map((m) => '${m.appLabel} de ${m.sender}: ${m.text}')
+            .join('. ');
+        return DeviceActionResult(
+          handled: true,
+          message:
+              '📨 SENTINELA DE MENSAGENS (${msgs.length} recentes):\n$formatted\n\n💡 Diga "responder: <texto>" para responder instantaneamente sem abrir o app!',
+          speakText: 'Você tem ${msgs.length} mensagens. $spoken',
+        );
+      }
+
+      // 15. Inline Background Reply ("responder: ...", "responda: ...", "responder para Nome: ...")
+      final replyMatch = RegExp(
+        r'^(?:ultron[,\s]+)?(?:responder|responda|responde)(?:\s+para\s+([^:]+))?[:\s]+(.+)$',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (replyMatch != null) {
+        final target = (replyMatch.group(1) ?? '').trim();
+        final replyBody = replyMatch.group(2)!.trim();
+        try {
+          final status = await replyNotification(
+            target: target,
+            text: replyBody,
+          );
+          return DeviceActionResult(
+            handled: true,
+            message: '↩️ $status',
+            speakText: 'Resposta enviada em segundo plano.',
+          );
+        } catch (_) {
+          if (target.isNotEmpty) {
+            final waStatus = await sendWhatsApp(target: target, text: replyBody);
+            return DeviceActionResult(
+              handled: true,
+              message: '💬 $waStatus',
+              speakText: 'Abrindo WhatsApp para enviar a resposta.',
+            );
+          }
+          rethrow;
+        }
+      }
+
+      // 16. Send WhatsApp Message ("mandar whatsapp para Nome: texto", "enviar mensagem para Nome dizendo texto")
+      final waMatch = RegExp(
+        r'^(?:ultron[,\s]+)?(?:mandar|enviar|manda|envia)\s+(?:um\s+|uma\s+)?(?:whatsapp|zap|mensagem(?:\s+no\s+whatsapp)?)\s+para\s+([^:]+?)(?:\s+dizendo\s+|\s*:\s*)(.+)$',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (waMatch != null) {
+        final target = waMatch.group(1)!.trim();
+        final body = waMatch.group(2)!.trim();
+        final status = await sendWhatsApp(target: target, text: body);
+        return DeviceActionResult(
+          handled: true,
+          message: '💬 $status',
+          speakText: 'Enviando mensagem para $target.',
+        );
+      }
+
+      // 17. Send SMS ("enviar sms para Nome: texto", "mandar sms para 119999: texto")
+      final smsMatch = RegExp(
+        r'^(?:ultron[,\s]+)?(?:mandar|enviar|manda|envia)\s+(?:um\s+)?sms\s+para\s+([^:]+?)(?:\s+dizendo\s+|\s*:\s*)(.+)$',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (smsMatch != null) {
+        final target = smsMatch.group(1)!.trim();
+        final body = smsMatch.group(2)!.trim();
+        final status = await sendSms(target: target, text: body);
+        return DeviceActionResult(
+          handled: true,
+          message: '📲 $status',
+          speakText: 'Abrindo SMS para $target.',
+        );
+      }
+
+      // 18. Open any installed app ("abrir whatsapp", "abrir youtube", etc.)
       final openMatch = RegExp(
         r'^(?:abrir|iniciar|executar)\s+(?:o\s+|a\s+|app\s+|aplicativo\s+)?(.+)$',
       ).firstMatch(lower);
@@ -742,6 +951,43 @@ Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar 
           case 'KILL_SWITCH':
             await triggerPcKillSwitch();
             logs.add('🚨 Kill Switch PC disparado');
+            break;
+          case 'READ_MESSAGES':
+            final msgs = await getRecentMessages(limit: 5);
+            if (msgs.isEmpty) {
+              logs.add('📭 Sem novas mensagens');
+            } else {
+              final preview = msgs
+                  .take(3)
+                  .map((m) => '${m.sender} (${m.appLabel}): ${m.text}')
+                  .join(' | ');
+              logs.add('📨 Mensagens: $preview');
+            }
+            break;
+          case 'REPLY_MESSAGE':
+            final target = arg1 == 'ultimo' || arg1 == 'último' ? '' : arg1;
+            final replyText = parts.skip(2).join(':').trim();
+            if (replyText.isNotEmpty) {
+              final res = await replyNotification(
+                target: target,
+                text: replyText,
+              );
+              logs.add('↩️ $res');
+            }
+            break;
+          case 'WHATSAPP':
+            final body = parts.skip(2).join(':').trim();
+            if (body.isNotEmpty) {
+              final res = await sendWhatsApp(target: arg1, text: body);
+              logs.add('💬 $res');
+            }
+            break;
+          case 'SMS':
+            final body = parts.skip(2).join(':').trim();
+            if (body.isNotEmpty) {
+              final res = await sendSms(target: arg1, text: body);
+              logs.add('📲 $res');
+            }
             break;
         }
       } catch (e) {

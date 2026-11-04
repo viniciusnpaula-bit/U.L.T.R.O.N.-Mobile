@@ -57,6 +57,8 @@ class _CoreScreenState extends State<CoreScreen>
   final quickNoteController = TextEditingController();
   final duressPinController = TextEditingController();
   final pcKillSwitchUrlController = TextEditingController();
+  final messageTargetController = TextEditingController();
+  final messageBodyController = TextEditingController();
   final scrollController = ScrollController();
   final coreTime = ValueNotifier<double>(0);
   final voiceService = VoiceService();
@@ -74,6 +76,7 @@ class _CoreScreenState extends State<CoreScreen>
   bool torchOn = false;
   bool nightFocusMode = false;
   bool criticalBatteryAlerted = false;
+  bool notificationSentinelEnabled = false;
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
   String installedVersion = 'v0.7.0';
@@ -81,13 +84,14 @@ class _CoreScreenState extends State<CoreScreen>
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
   List<MobileSkill> mobileSkills = const [];
+  List<CapturedNotification> recentMessages = const [];
 
   static const _defaultFeed = <_FeedEntry>[
     _FeedEntry(
       isUser: false,
       senderLabel: 'Kernel Local',
       text:
-          'U.L.T.R.O.N. Mobile v0.7 online. Escuta por Voz (STT pt-BR), Provedores 100% Gratuitos, Controle Android, Obsidian Quick Captures, Skills (.md), Flip-to-Shush e Duress PIN ativos. Toque no microfone 🎤 ou digite /help.',
+          'U.L.T.R.O.N. Mobile v0.7 online. Sentinela de Mensagens (WhatsApp/Telegram/SMS com Resposta em 2º Plano), Escuta por Voz (🎤), 9 Provedores Gratuitos, Obsidian e Skills (.md) ativos!',
       timestamp: 'ONLINE',
     ),
   ];
@@ -141,14 +145,22 @@ class _CoreScreenState extends State<CoreScreen>
         loadedSkills = await obsidian.listSkills();
       } catch (_) {}
       DeviceStatus? hwStatus;
+      bool notifEnabled = false;
+      List<CapturedNotification> loadedMsgs = const [];
       try {
         hwStatus = await deviceService.getStatus();
+        notifEnabled = await deviceService.isNotificationListenerEnabled();
+        if (notifEnabled) {
+          loadedMsgs = await deviceService.getRecentMessages(limit: 12);
+        }
       } catch (_) {}
       if (!mounted) return;
       setState(() {
         authFailures = failures;
         hasPinConfigured = pinSet;
         hasDuressPinConfigured = duressSet;
+        notificationSentinelEnabled = notifEnabled;
+        recentMessages = loadedMsgs;
         if (killUrl.isNotEmpty && pcKillSwitchUrlController.text.isEmpty) {
           pcKillSwitchUrlController.text = killUrl;
         }
@@ -221,13 +233,170 @@ class _CoreScreenState extends State<CoreScreen>
   Future<void> _refreshDeviceStatus() async {
     try {
       final hwStatus = await deviceService.getStatus();
+      final notifEnabled = await deviceService.isNotificationListenerEnabled();
+      final msgs = notifEnabled
+          ? await deviceService.getRecentMessages(limit: 12)
+          : const <CapturedNotification>[];
       if (!mounted) return;
       setState(() {
         deviceStatus = hwStatus;
         torchOn = hwStatus.torchOn;
+        notificationSentinelEnabled = notifEnabled;
+        recentMessages = msgs;
       });
       _applyContextSensors(hwStatus);
     } catch (_) {}
+  }
+
+  Future<void> _readRecentMessagesAloud() async {
+    HapticFeedback.mediumImpact();
+    await _refreshDeviceStatus();
+    if (!notificationSentinelEnabled) {
+      await deviceService.openNotificationListenerSettings();
+      return;
+    }
+    if (recentMessages.isEmpty) {
+      await voiceService.speak('Você não tem novas mensagens no momento.');
+      return;
+    }
+    final spoken = recentMessages
+        .take(4)
+        .map((m) => '${m.appLabel} de ${m.sender}: ${m.text}')
+        .join('. ');
+    await voiceService.speak(
+      'Você tem ${recentMessages.length} mensagens recentes. $spoken',
+    );
+  }
+
+  Future<void> _summarizeMessagesWithAi() async {
+    await _refreshDeviceStatus();
+    if (recentMessages.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Nenhuma mensagem recente para resumir.',
+            style: TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+      return;
+    }
+    final dump = recentMessages
+        .take(10)
+        .map((m) => '[${m.timeFormatted}] ${m.appLabel} - ${m.sender}: ${m.text}')
+        .join('\n');
+    commandController.text =
+        'Faça um Resumo Tático inteligente das minhas mensagens recentes (separe o que é urgente de ruído e sugira respostas rápidas):\n$dump';
+    _setPanel(_ActivePanel.main);
+    await saveCommand();
+  }
+
+  Future<void> _promptReplyToMessage(CapturedNotification msg) async {
+    final replyCtrl = TextEditingController();
+    final sent = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF140004),
+        title: Text(
+          'Responder ${msg.sender} (${msg.appLabel})',
+          style: const TextStyle(
+            color: _crimson,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '"${msg.text}"',
+              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: replyCtrl,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+              decoration: const InputDecoration(
+                hintText: 'Digite sua resposta em 2º plano…',
+                hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 11),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('CANCELAR', style: TextStyle(color: _rose)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _crimson),
+            onPressed: () => Navigator.of(ctx).pop(replyCtrl.text.trim()),
+            child: const Text('ENVIAR AGORA'),
+          ),
+        ],
+      ),
+    );
+    if (sent == null || sent.isEmpty) return;
+    try {
+      final status = await deviceService.replyNotification(
+        target: msg.sender,
+        text: sent,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('↩️ $status', style: const TextStyle(fontSize: 11)),
+        ),
+      );
+      await voiceService.speak('Resposta enviada.');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erro ao responder: $e', style: const TextStyle(fontSize: 11)),
+        ),
+      );
+    }
+  }
+
+  Future<void> _sendQuickMessage({required bool viaSms}) async {
+    final target = messageTargetController.text.trim();
+    final body = messageBodyController.text.trim();
+    if (body.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Digite o texto da mensagem primeiro.',
+            style: TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    try {
+      final res = viaSms
+          ? await deviceService.sendSms(target: target, text: body)
+          : await deviceService.sendWhatsApp(target: target, text: body);
+      messageBodyController.clear();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(res, style: const TextStyle(fontSize: 11)),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Falha no envio: $e', style: const TextStyle(fontSize: 11)),
+        ),
+      );
+    }
   }
 
   Future<void> _toggleTorchQuick() async {
@@ -308,6 +477,8 @@ class _CoreScreenState extends State<CoreScreen>
     quickNoteController.dispose();
     duressPinController.dispose();
     pcKillSwitchUrlController.dispose();
+    messageTargetController.dispose();
+    messageBodyController.dispose();
     scrollController.dispose();
     super.dispose();
   }
@@ -495,6 +666,75 @@ class _CoreScreenState extends State<CoreScreen>
       final restArg = parts.length > 1 ? parts.sublist(1).join(' ').trim() : '';
       if (cmdLower == '/voz' || cmdLower == '/voice' || cmdLower == '/falar') {
         await _startVoiceInput();
+        return;
+      }
+      if (cmdLower == '/mensagens' ||
+          cmdLower == '/notificacoes' ||
+          cmdLower == '/ler') {
+        _appendFeed(
+          _FeedEntry(
+            isUser: true,
+            senderLabel: 'OPERADOR',
+            text: text,
+            timestamp: timeStr,
+          ),
+        );
+        final res = await deviceService.tryExecuteNaturalCommand(
+          'ler mensagens',
+        );
+        await _refreshDeviceStatus();
+        if (res != null) {
+          _appendFeed(
+            _FeedEntry(
+              isUser: false,
+              senderLabel: 'Sentinela de Mensagens',
+              text: res.message,
+              timestamp: timeStr,
+            ),
+          );
+          if (res.speakText != null) {
+            await voiceService.speak(res.speakText!);
+          }
+        }
+        return;
+      }
+      if (cmdLower == '/responder' || cmdLower == '/reply') {
+        _appendFeed(
+          _FeedEntry(
+            isUser: true,
+            senderLabel: 'OPERADOR',
+            text: text,
+            timestamp: timeStr,
+          ),
+        );
+        if (restArg.isEmpty) {
+          _appendFeed(
+            _FeedEntry(
+              isUser: false,
+              senderLabel: 'Sentinela de Mensagens',
+              text:
+                  'Uso: /responder <texto> ou "responder para Nome: <texto>"',
+              timestamp: timeStr,
+            ),
+          );
+        } else {
+          final res = await deviceService.tryExecuteNaturalCommand(
+            'responder: $restArg',
+          );
+          if (res != null) {
+            _appendFeed(
+              _FeedEntry(
+                isUser: false,
+                senderLabel: 'Sentinela de Mensagens',
+                text: res.message,
+                timestamp: timeStr,
+              ),
+            );
+            if (res.speakText != null) {
+              await voiceService.speak(res.speakText!);
+            }
+          }
+        }
         return;
       }
       if (cmdLower == '/device' || cmdLower == '/celular') {
@@ -2299,6 +2539,299 @@ class _CoreScreenState extends State<CoreScreen>
                       valueColor: nightFocusMode
                           ? const Color(0xFF34D399)
                           : const Color(0xFF94A3B8),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 1A. Sentinela de Mensagens & Comunicação Autônoma (500x)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF120004),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _crimson.withValues(alpha: 0.45),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          '📨 SENTINELA DE MENSAGENS & WHATSAPP',
+                          style: TextStyle(
+                            color: _crimson,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: notificationSentinelEnabled
+                                ? const Color(0xFF064E3B)
+                                : const Color(0xFF280007),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            notificationSentinelEnabled
+                                ? 'SENTINELA ATIVO'
+                                : 'PERMISSÃO PENDENTE',
+                            style: TextStyle(
+                              color: notificationSentinelEnabled
+                                  ? const Color(0xFF34D399)
+                                  : _rose,
+                              fontSize: 8,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    if (!notificationSentinelEnabled)
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: () =>
+                              deviceService.openNotificationListenerSettings(),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _crimson,
+                            foregroundColor: Colors.black,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          icon: const Icon(
+                            Icons.notifications_active,
+                            size: 14,
+                          ),
+                          label: const Text(
+                            'ATIVAR LEITURA E RESPOSTA EM 2º PLANO',
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      )
+                    else ...[
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          _StageChip(
+                            label: '🔊 LER EM VOZ ALTA',
+                            icon: Icons.record_voice_over,
+                            onTap: _readRecentMessagesAloud,
+                          ),
+                          _StageChip(
+                            label: '🧠 RESUMO TÁTICO IA',
+                            icon: Icons.auto_awesome,
+                            onTap: _summarizeMessagesWithAi,
+                          ),
+                          _StageChip(
+                            label: '📇 AGENDA',
+                            icon: Icons.contacts_outlined,
+                            onTap: () async {
+                              await deviceService.requestContactsPermission();
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Permissão de contatos solicitada ao Android.',
+                                    style: TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          if (recentMessages.isNotEmpty)
+                            _StageChip(
+                              label: 'LIMPAR',
+                              icon: Icons.clear_all,
+                              onTap: () async {
+                                await deviceService.clearRecentMessages();
+                                await _refreshDeviceStatus();
+                              },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      if (recentMessages.isEmpty)
+                        const Text(
+                          '📭 Nenhuma mensagem capturada ainda. Quando chegar WhatsApp, Telegram, Instagram ou SMS, o U.L.T.R.O.N. exibirá aqui para leitura ou resposta em 2º plano.',
+                          style: TextStyle(
+                            color: Color(0xFF94A3B8),
+                            fontSize: 9.5,
+                          ),
+                        )
+                      else
+                        for (final m in recentMessages.take(4))
+                          Container(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0A0002),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: _border),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '[${m.timeFormatted}] ${m.appLabel} • ${m.sender}',
+                                        style: const TextStyle(
+                                          color: _rose,
+                                          fontSize: 9,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        m.text,
+                                        style: const TextStyle(
+                                          color: Color(0xFFE2E8F0),
+                                          fontSize: 10.5,
+                                        ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (m.canReplyInline)
+                                  InkWell(
+                                    onTap: () => _promptReplyToMessage(m),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 7,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF240006),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color:
+                                              _crimson.withValues(alpha: 0.5),
+                                        ),
+                                      ),
+                                      child: const Text(
+                                        '↩️ RESPONDER',
+                                        style: TextStyle(
+                                          color: _crimson,
+                                          fontSize: 8.5,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                    ],
+                    const Divider(color: _border, height: 14),
+                    const Text(
+                      'ENVIAR WHATSAPP OU SMS (NOME DO CONTATO OU NÚMERO):',
+                      style: TextStyle(
+                        color: _rose,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 2,
+                          child: TextField(
+                            controller: messageTargetController,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                            ),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: 'Contato ou 1199999...',
+                              hintStyle: TextStyle(
+                                color: Color(0xFF475569),
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          flex: 3,
+                          child: TextField(
+                            controller: messageBodyController,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                            ),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: 'Texto da mensagem…',
+                              hintStyle: TextStyle(
+                                color: Color(0xFF475569),
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () => _sendQuickMessage(viaSms: false),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _crimson,
+                              foregroundColor: Colors.black,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: const Icon(Icons.chat_bubble, size: 13),
+                            label: const Text(
+                              'WHATSAPP',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () => _sendQuickMessage(viaSms: true),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF240006),
+                              foregroundColor: _rose,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: const Icon(Icons.sms, size: 13),
+                            label: const Text(
+                              'ENVIAR SMS',
+                              style: TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
