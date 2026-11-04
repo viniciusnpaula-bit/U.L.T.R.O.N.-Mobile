@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ultron_mobile/core/security/auth_gate.dart';
 import 'package:ultron_mobile/core/security/pin_vault.dart';
+import 'package:ultron_mobile/services/obsidian_service.dart';
 
 String hex(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
@@ -50,6 +53,48 @@ void main() {
     test('caps the wait at 15 minutes', () {
       expect(PinVault.lockDelay(11), const Duration(minutes: 15));
       expect(PinVault.lockDelay(1000), const Duration(minutes: 15));
+    });
+  });
+
+  group('AuthGate Duress & ObsidianService Phase 1', () {
+    test('grantDuress sets AccessLevel.guarded and isDuressMode=true', () {
+      final gate = AuthGate();
+      expect(gate.isAuthenticated, isFalse);
+      expect(gate.isDuressMode, isFalse);
+
+      gate.grantDuress();
+      expect(gate.isAuthenticated, isTrue);
+      expect(gate.isDuressMode, isTrue);
+      expect(gate.level, AccessLevel.guarded);
+
+      gate.lock();
+      expect(gate.isAuthenticated, isFalse);
+      expect(gate.isDuressMode, isFalse);
+    });
+
+    test('ObsidianService appends daily note and parses MobileSkill', () async {
+      final tempDir = await Directory.systemTemp.createTemp('ultron_vault_');
+      try {
+        final obsidian = ObsidianService(tempDir);
+        final date = DateTime(2026, 11, 3);
+        final file = await obsidian.appendDailyNote(date, 'Testar sensores');
+        expect(await file.exists(), isTrue);
+        final content = await obsidian.readDailyNote(date);
+        expect(content, contains('- Testar sensores'));
+
+        final skillsDir = Directory('${tempDir.path}/Skills');
+        await skillsDir.create(recursive: true);
+        await File('${skillsDir.path}/modo_estudo.md').writeAsString(
+          '# Modo Estudo\nSilencia notificações e abre timer.\n[ACTION:TIMER:25]\n',
+        );
+
+        final skills = await obsidian.listSkills();
+        expect(skills.length, 1);
+        expect(skills.first.slug, 'modo_estudo');
+        expect(skills.first.title, 'Modo Estudo');
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
     });
   });
 }

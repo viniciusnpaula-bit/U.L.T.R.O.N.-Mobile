@@ -6,6 +6,7 @@ class VoiceService {
   Future<void>? _initializing;
   bool _ready = false;
   bool enabled = true;
+  bool whisperMode = false;
 
   Future<void> initialize() async {
     if (_ready) return;
@@ -20,6 +21,13 @@ class VoiceService {
     await _tts.setVolume(1);
     await _tts.awaitSpeakCompletion(true);
     _ready = true;
+  }
+
+  Future<void> setWhisperMode(bool whisper) async {
+    whisperMode = whisper;
+    await initialize();
+    await _tts.setVolume(whisper ? 0.28 : 1.0);
+    await _tts.setSpeechRate(whisper ? 0.38 : 0.48);
   }
 
   Future<void> speak(String text) async {

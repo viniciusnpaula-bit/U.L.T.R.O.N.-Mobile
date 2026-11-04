@@ -7,6 +7,7 @@ import 'package:local_auth/local_auth.dart';
 
 import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
+import '../../services/conversation_history.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key, required this.gate, required this.vault});
@@ -172,7 +173,24 @@ class _AuthScreenState extends State<AuthScreen> {
       pinStatus = 'AUTENTICANDO AUTHGATE...';
     });
     try {
-      final ok = await widget.gate.authenticatePin(pin, widget.vault.verify);
+      final mode = await widget.vault.verifyWithDuress(pin);
+      if (!mounted) return;
+      if (mode == PinAuthMode.duress) {
+        try {
+          await ConversationHistory.instance.clear();
+        } catch (_) {}
+        HapticFeedback.mediumImpact();
+        if (!mounted) return;
+        setState(() {
+          busy = false;
+          pin = '';
+          pinStatus = 'PORTÃO LIBERADO';
+        });
+        widget.gate.grantDuress();
+        return;
+      }
+      final ok = mode == PinAuthMode.normal &&
+          await widget.gate.authenticatePin(pin, (_) async => true);
       if (!mounted) return;
       if (!ok) {
         HapticFeedback.heavyImpact();

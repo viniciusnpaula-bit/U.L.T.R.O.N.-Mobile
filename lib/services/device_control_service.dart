@@ -1,4 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+import 'obsidian_service.dart';
 
 class DeviceStatus {
   const DeviceStatus({
@@ -90,17 +97,87 @@ class AiActionExecution {
 }
 
 class DeviceControlService {
-  DeviceControlService({MethodChannel? channel})
-      : _channel =
-            channel ?? const MethodChannel('com.viniciusnpaula.ultron_mobile/device');
+  DeviceControlService({
+    MethodChannel? channel,
+    FlutterSecureStorage? storage,
+    this.obsidianProvider,
+  })  : _channel = channel ??
+            const MethodChannel('com.viniciusnpaula.ultron_mobile/device'),
+        _storage = storage ?? const FlutterSecureStorage();
 
   final MethodChannel _channel;
+  final FlutterSecureStorage _storage;
+  final Future<ObsidianService> Function()? obsidianProvider;
+  static const _pcEndpointKey = 'ultron.pc.killswitch.v1';
+
+  void setFlipToShushHandler(VoidCallback? onFlip) {
+    if (onFlip == null) {
+      _channel.setMethodCallHandler(null);
+      return;
+    }
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onFlipToShush') {
+        onFlip();
+      }
+      return null;
+    });
+  }
+
+  Future<ObsidianService> _getObsidian() =>
+      obsidianProvider != null
+          ? obsidianProvider!()
+          : ObsidianService.openDefaultVault();
+
+  Future<String> loadPcKillSwitchUrl() async =>
+      (await _storage.read(key: _pcEndpointKey))?.trim() ?? '';
+
+  Future<void> savePcKillSwitchUrl(String url) =>
+      _storage.write(key: _pcEndpointKey, value: url.trim());
+
+  Future<String> triggerPcKillSwitch({String? overrideUrl}) async {
+    final target = (overrideUrl ?? await loadPcKillSwitchUrl()).trim();
+    if (target.isEmpty) {
+      throw StateError(
+        'Configure o IP/Webhook do PC no Painel de Segurança antes de acionar.',
+      );
+    }
+    final normalized =
+        target.startsWith('http://') || target.startsWith('https://')
+            ? target
+            : 'http://$target/killswitch';
+    final uri = Uri.parse(normalized);
+    final timestamp = DateTime.now().toUtc().toIso8601String();
+    final payload = jsonEncode({
+      'command': 'LOCK_WORKSTATION',
+      'source': 'ULTRON_MOBILE',
+      'timestamp': timestamp,
+    });
+    final signature = Hmac(sha256, utf8.encode('ULTRON_LAN_GUARD'))
+        .convert(utf8.encode(payload))
+        .toString();
+
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 6);
+    try {
+      final req =
+          await client.postUrl(uri).timeout(const Duration(seconds: 8));
+      req.headers.contentType = ContentType.json;
+      req.headers.set('X-Ultron-Signature', 'sha256=$signature');
+      req.headers.set('X-Ultron-Timestamp', timestamp);
+      req.write(payload);
+      final resp = await req.close().timeout(const Duration(seconds: 8));
+      await resp.drain<void>();
+      return '🚨 Pacote Kill Switch enviado para ${uri.host} (HTTP ${resp.statusCode}).';
+    } finally {
+      client.close(force: true);
+    }
+  }
 
   static const aiSystemPrompt = '''
 Você é U.L.T.R.O.N. 2.0 Mobile, um assistente tático autônomo rodando nativamente em um smartphone Android.
 Responda sempre em português do Brasil, de forma direta, inteligente e concisa.
-Você possui controle direto sobre o hardware e o sistema Android do usuário através de tags de ação.
-Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar lanterna, mudar volume, abrir um aplicativo, abrir câmera, abrir configurações de Wi-Fi/Bluetooth/Tela, criar alarme, criar timer, vibrar, discar número ou pesquisar na web), inclua a tag correspondente no final da sua resposta:
+Você possui controle direto sobre o hardware, cofre Obsidian e o sistema Android do usuário através de tags de ação.
+Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar lanterna, mudar volume, salvar uma nota no Obsidian, rodar uma skill, abrir um aplicativo, abrir câmera, abrir configurações de Wi-Fi/Bluetooth/Tela, criar alarme, criar timer, vibrar, discar número ou pesquisar na web), inclua a tag correspondente no final da sua resposta:
 - Ligar lanterna/flash: [ACTION:TORCH_ON]
 - Desligar lanterna/flash: [ACTION:TORCH_OFF]
 - Alternar lanterna: [ACTION:TORCH_TOGGLE]
@@ -108,6 +185,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar 
 - Aumentar volume: [ACTION:VOLUME_UP]
 - Diminuir volume: [ACTION:VOLUME_DOWN]
 - Silenciar / mudo: [ACTION:VOLUME_MUTE]
+- Salvar nota rápida no Cofre Obsidian: [ACTION:NOTE:texto da anotação]
+- Executar Skill Mobile (.md): [ACTION:SKILL:modo_estudo]
 - Abrir aplicativo (ex: whatsapp, youtube, instagram, chrome, spotify, calculadora, camera, relogio, maps): [ACTION:OPEN_APP:whatsapp]
 - Abrir câmera: [ACTION:OPEN_CAMERA]
 - Abrir configurações (wifi, bluetooth, display, sound, battery, location, security, apps, general): [ACTION:OPEN_SETTINGS:wifi]
@@ -436,7 +515,58 @@ Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar 
         );
       }
 
-      // 11. Open any installed app ("abrir whatsapp", "abrir youtube", etc.)
+      // 11. Obsidian Quick Capture ("anote: ...", "ultron, anote: ...", "nota: ...")
+      final noteMatch = RegExp(
+        r'^(?:ultron[,\s]+)?(?:anote|anotar|nota r[aá]pida|salvar nota)[:\s]+(.+)$',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (noteMatch != null) {
+        final noteText = noteMatch.group(1)!.trim();
+        final vault = await _getObsidian();
+        final file = await vault.dailyNote(DateTime.now(), noteText);
+        return DeviceActionResult(
+          handled: true,
+          message:
+              '📝 Quick Capture salvo no Cofre Obsidian (${file.uri.pathSegments.last}):\n"$noteText"',
+          speakText: 'Nota registrada no cofre.',
+        );
+      }
+
+      // 12. Mobile Skills (.md) ("skill modo_estudo", "executar skill ...", "modo estudo")
+      final skillMatch = RegExp(
+        r'^(?:executar\s+skill|rodar\s+skill|ativar\s+skill|skill)\s+(.+)$|^(modo\s+estudo|foco\s+noturno|alerta\s+t[aá]tico)$',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (skillMatch != null) {
+        final query = (skillMatch.group(1) ?? skillMatch.group(2) ?? '').trim();
+        final vault = await _getObsidian();
+        final skill = await vault.findSkill(query);
+        if (skill != null) {
+          final exec = await executeAiActions(skill.content);
+          return DeviceActionResult(
+            handled: true,
+            message:
+                '⚡ Skill Mobile "${skill.title}" (${skill.id}.md) executada!\n'
+                '${exec.executedLogs.isEmpty ? exec.cleanText : exec.executedLogs.join(' • ')}',
+            speakText: 'Skill ${skill.title} ativada.',
+          );
+        }
+      }
+
+      // 13. PC Remote Kill Switch
+      if (RegExp(
+        r'^(travar\s+pc|bloquear\s+pc|kill\s*switch)$',
+        caseSensitive: false,
+      ).hasMatch(lower)) {
+        final resultMsg = await triggerPcKillSwitch();
+        return DeviceActionResult(
+          handled: true,
+          message: resultMsg,
+          speakText: 'Kill switch enviado ao computador.',
+        );
+      }
+
+      // 14. Open any installed app ("abrir whatsapp", "abrir youtube", etc.)
       final openMatch = RegExp(
         r'^(?:abrir|iniciar|executar)\s+(?:o\s+|a\s+|app\s+|aplicativo\s+)?(.+)$',
       ).firstMatch(lower);
@@ -562,6 +692,28 @@ Sempre que o usuário pedir para realizar uma ação no celular (ligar/desligar 
               await webSearch(q);
               logs.add('🌐 Busca: $q');
             }
+            break;
+          case 'NOTE':
+            final noteBody = parts.skip(1).join(':').trim();
+            if (noteBody.isNotEmpty) {
+              final vault = await _getObsidian();
+              await vault.dailyNote(DateTime.now(), noteBody);
+              logs.add('📝 Nota salva no Obsidian');
+            }
+            break;
+          case 'SKILL':
+            if (arg1.isNotEmpty) {
+              final vault = await _getObsidian();
+              final skill = await vault.findSkill(arg1);
+              if (skill != null) {
+                final sub = await executeAiActions(skill.content);
+                logs.add('⚡ Skill ${skill.id}: ${sub.executedLogs.join(', ')}');
+              }
+            }
+            break;
+          case 'KILL_SWITCH':
+            await triggerPcKillSwitch();
+            logs.add('🚨 Kill Switch PC disparado');
             break;
         }
       } catch (e) {

@@ -4,6 +4,10 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
@@ -22,9 +26,10 @@ import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
-class MainActivity : FlutterFragmentActivity() {
+class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     companion object {
         private const val CHANNEL = "com.viniciusnpaula.ultron_mobile/device"
     }
@@ -32,6 +37,10 @@ class MainActivity : FlutterFragmentActivity() {
     private var torchEnabled: Boolean = false
     private var torchCameraId: String? = null
     private var cameraManager: CameraManager? = null
+    private var deviceChannel: MethodChannel? = null
+    private var sensorManager: SensorManager? = null
+    private var accelerometer: Sensor? = null
+    private var isFaceDown: Boolean = false
 
     private val torchCallback = object : CameraManager.TorchCallback() {
         override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
@@ -44,19 +53,58 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         initTorchManager()
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
-            .setMethodCallHandler { call, result ->
-                try {
-                    handleDeviceCall(call, result)
-                } catch (e: Exception) {
-                    result.error("DEVICE_ERROR", e.message ?: "Falha na execução nativa Android", null)
-                }
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+        deviceChannel = channel
+        channel.setMethodCallHandler { call, result ->
+            try {
+                handleDeviceCall(call, result)
+            } catch (e: Exception) {
+                result.error("DEVICE_ERROR", e.message ?: "Falha na execução nativa Android", null)
             }
+        }
     }
+
+    override fun onResume() {
+        super.onResume()
+        try {
+            accelerometer?.let {
+                sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    override fun onPause() {
+        try {
+            sensorManager?.unregisterListener(this)
+        } catch (_: Exception) {
+        }
+        super.onPause()
+    }
+
+    override fun onSensorChanged(event: SensorEvent?) {
+        if (event?.sensor?.type != Sensor.TYPE_ACCELEROMETER) return
+        val x = event.values[0]
+        val y = event.values[1]
+        val z = event.values[2]
+        if (z < -8.5f && abs(x) < 3.5f && abs(y) < 3.5f) {
+            if (!isFaceDown) {
+                isFaceDown = true
+                deviceChannel?.invokeMethod("onFlipToShush", null)
+            }
+        } else if (z > 2.5f) {
+            isFaceDown = false
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onDestroy() {
         try {
+            sensorManager?.unregisterListener(this)
             cameraManager?.unregisterTorchCallback(torchCallback)
         } catch (_: Exception) {
         }

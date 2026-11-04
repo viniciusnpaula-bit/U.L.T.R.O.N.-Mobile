@@ -11,6 +11,7 @@ import '../../services/ai_provider_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/conversation_history.dart';
 import '../../services/device_control_service.dart';
+import '../../services/obsidian_service.dart';
 import '../../services/slash_command_parser.dart';
 import '../../services/voice_service.dart';
 import 'ai_settings_screen.dart';
@@ -53,6 +54,9 @@ class _CoreScreenState extends State<CoreScreen>
 
   late final Ticker ticker;
   final commandController = TextEditingController();
+  final quickNoteController = TextEditingController();
+  final duressPinController = TextEditingController();
+  final pcKillSwitchUrlController = TextEditingController();
   final scrollController = ScrollController();
   final coreTime = ValueNotifier<double>(0);
   final voiceService = VoiceService();
@@ -67,18 +71,22 @@ class _CoreScreenState extends State<CoreScreen>
   bool hasUpdate = false;
   bool isAudioOn = true;
   bool torchOn = false;
+  bool nightFocusMode = false;
+  bool criticalBatteryAlerted = false;
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
-  String installedVersion = 'v0.4.0';
+  String installedVersion = 'v0.6.0';
   int authFailures = 0;
   bool? hasPinConfigured;
+  bool hasDuressPinConfigured = false;
+  List<MobileSkill> mobileSkills = const [];
 
   static const _defaultFeed = <_FeedEntry>[
     _FeedEntry(
       isUser: false,
       senderLabel: 'Kernel Local',
       text:
-          'U.L.T.R.O.N. Mobile online. Controle nativo Android (lanterna, volume, apps, alarmes) e failover de IA ativos. Digite comandos ou /help.',
+          'U.L.T.R.O.N. Mobile v0.6 online. Controle Android, Obsidian Quick Captures, Skills (.md), Flip-to-Shush e Duress PIN ativos. Digite comandos ou /help.',
       timestamp: 'ONLINE',
     ),
   ];
@@ -95,6 +103,20 @@ class _CoreScreenState extends State<CoreScreen>
     ticker.start();
     active = true;
     voiceService.initialize();
+    deviceService.setFlipToShushHandler(() {
+      if (!mounted) return;
+      voiceService.stop();
+      HapticFeedback.lightImpact();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '🤫 Flip-to-Shush ativado: voz do núcleo silenciada.',
+            style: TextStyle(fontSize: 11),
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    });
     _loadInitialState();
     _checkUpdate();
   }
@@ -110,6 +132,13 @@ class _CoreScreenState extends State<CoreScreen>
         ..sort((a, b) => a.priority.compareTo(b.priority));
       final failures = await widget.vault.failureCount();
       final pinSet = await widget.vault.hasPin;
+      final duressSet = await widget.vault.hasDuressPin;
+      final killUrl = await deviceService.loadPcKillSwitchUrl();
+      List<MobileSkill> loadedSkills = const [];
+      try {
+        final obsidian = await ObsidianService.openDefaultVault();
+        loadedSkills = await obsidian.listSkills();
+      } catch (_) {}
       DeviceStatus? hwStatus;
       try {
         hwStatus = await deviceService.getStatus();
@@ -118,6 +147,11 @@ class _CoreScreenState extends State<CoreScreen>
       setState(() {
         authFailures = failures;
         hasPinConfigured = pinSet;
+        hasDuressPinConfigured = duressSet;
+        if (killUrl != null && pcKillSwitchUrlController.text.isEmpty) {
+          pcKillSwitchUrlController.text = killUrl;
+        }
+        mobileSkills = loadedSkills;
         if (hwStatus != null) {
           deviceStatus = hwStatus;
           torchOn = hwStatus.torchOn;
@@ -139,8 +173,48 @@ class _CoreScreenState extends State<CoreScreen>
                 .toList()
             : _defaultFeed;
       });
+      _applyContextSensors(hwStatus);
       _scrollToBottom();
     } catch (_) {}
+  }
+
+  void _applyContextSensors(DeviceStatus? hwStatus) {
+    if (hwStatus == null || !mounted) return;
+    // 1. Critical Battery Vigilance (< 15% and not charging -> auto pause 60 FPS GPU core)
+    if (hwStatus.batteryLevel > 0 &&
+        hwStatus.batteryLevel <= 15 &&
+        !hwStatus.isCharging &&
+        !criticalBatteryAlerted) {
+      setState(() {
+        criticalBatteryAlerted = true;
+        stage = CoreStage.hidden;
+      });
+      _syncTickerWithState();
+      _appendFeed(
+        _FeedEntry(
+          isUser: false,
+          senderLabel: 'Vigilância Energética',
+          text:
+              '⚠️ Bateria crítica (${hwStatus.batteryLevel}%). Renderizador 60 FPS descarregado da GPU automaticamente para economia profunda.',
+          timestamp: _formatTime(DateTime.now()),
+        ),
+      );
+    }
+
+    // 2. Night Focus Mode (Charging + between 22:00 and 06:00)
+    final hour = DateTime.now().hour;
+    final isNightWindow = hour >= 22 || hour < 6;
+    if (hwStatus.isCharging && isNightWindow && !nightFocusMode) {
+      setState(() => nightFocusMode = true);
+      voiceService.setWhisperMode(true);
+    }
+  }
+
+  Future<void> _toggleNightFocusMode() async {
+    HapticFeedback.selectionClick();
+    final next = !nightFocusMode;
+    setState(() => nightFocusMode = next);
+    await voiceService.setWhisperMode(next);
   }
 
   Future<void> _refreshDeviceStatus() async {
@@ -151,6 +225,7 @@ class _CoreScreenState extends State<CoreScreen>
         deviceStatus = hwStatus;
         torchOn = hwStatus.torchOn;
       });
+      _applyContextSensors(hwStatus);
     } catch (_) {}
   }
 
@@ -224,10 +299,14 @@ class _CoreScreenState extends State<CoreScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    deviceService.setFlipToShushHandler(null);
     ticker.dispose();
     coreTime.dispose();
     voiceService.stop();
     commandController.dispose();
+    quickNoteController.dispose();
+    duressPinController.dispose();
+    pcKillSwitchUrlController.dispose();
     scrollController.dispose();
     super.dispose();
   }
@@ -287,6 +366,73 @@ class _CoreScreenState extends State<CoreScreen>
     _scrollToBottom();
   }
 
+  Future<void> _saveQuickObsidianNote(String noteText) async {
+    final trimmed = noteText.trim();
+    if (trimmed.isEmpty) return;
+    HapticFeedback.mediumImpact();
+    try {
+      final obsidian = await ObsidianService.openDefaultVault();
+      final now = DateTime.now();
+      final ts = _formatTime(now);
+      final file = await obsidian.appendDailyNote(now, '[$ts] $trimmed');
+      quickNoteController.clear();
+      if (!mounted) return;
+      final fileName = file.path.split(RegExp(r'[/\\]')).last;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '📓 Anotado em Diario/$fileName: "$trimmed"',
+            style: const TextStyle(fontSize: 11),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      _appendFeed(
+        _FeedEntry(
+          isUser: false,
+          senderLabel: 'Obsidian Vault',
+          text: '📓 Quick Capture salvo em Diario/$fileName: "$trimmed"',
+          timestamp: ts,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erro ao salvar no Vault: $e', style: const TextStyle(fontSize: 11)),
+        ),
+      );
+    }
+  }
+
+  Future<void> _executeSkillCard(MobileSkill skill) async {
+    HapticFeedback.mediumImpact();
+    final res = await deviceService.tryExecuteNaturalCommand(
+      'executar skill ${skill.slug}',
+    );
+    if (!mounted) return;
+    if (res != null) {
+      _appendFeed(
+        _FeedEntry(
+          isUser: false,
+          senderLabel: 'Skill Engine (.md)',
+          text: res.message,
+          timestamp: _formatTime(DateTime.now()),
+        ),
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(res.message, style: const TextStyle(fontSize: 11)),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      if (res.speakText != null) {
+        await voiceService.speak(res.speakText!);
+      }
+    }
+    await _refreshDeviceStatus();
+  }
+
   Future<void> saveCommand() async {
     if (sending) return;
     final text = commandController.text.trim();
@@ -313,7 +459,9 @@ class _CoreScreenState extends State<CoreScreen>
       return;
     }
     if (text.startsWith('/')) {
-      final cmdLower = text.split(RegExp(r'\s+')).first.toLowerCase();
+      final parts = text.split(RegExp(r'\s+'));
+      final cmdLower = parts.first.toLowerCase();
+      final restArg = parts.length > 1 ? parts.sublist(1).join(' ').trim() : '';
       if (cmdLower == '/device' || cmdLower == '/celular') {
         _appendFeed(
           _FeedEntry(
@@ -347,6 +495,76 @@ class _CoreScreenState extends State<CoreScreen>
         );
         return;
       }
+      if (cmdLower == '/note' || cmdLower == '/nota') {
+        _appendFeed(
+          _FeedEntry(
+            isUser: true,
+            senderLabel: 'OPERADOR',
+            text: text,
+            timestamp: timeStr,
+          ),
+        );
+        if (restArg.isEmpty) {
+          _appendFeed(
+            _FeedEntry(
+              isUser: false,
+              senderLabel: 'Obsidian Vault',
+              text: 'Uso: /note <texto da nota> (ex.: /note revisar sensores)',
+              timestamp: timeStr,
+            ),
+          );
+        } else {
+          await _saveQuickObsidianNote(restArg);
+        }
+        return;
+      }
+      if (cmdLower == '/skill' || cmdLower == '/skills') {
+        _appendFeed(
+          _FeedEntry(
+            isUser: true,
+            senderLabel: 'OPERADOR',
+            text: text,
+            timestamp: timeStr,
+          ),
+        );
+        final res = await deviceService.tryExecuteNaturalCommand(
+          restArg.isEmpty ? 'listar skills' : 'executar skill $restArg',
+        );
+        if (res != null) {
+          _appendFeed(
+            _FeedEntry(
+              isUser: false,
+              senderLabel: 'Skill Engine (.md)',
+              text: res.message,
+              timestamp: timeStr,
+            ),
+          );
+        }
+        return;
+      }
+      if (cmdLower == '/killswitch') {
+        _appendFeed(
+          _FeedEntry(
+            isUser: true,
+            senderLabel: 'OPERADOR',
+            text: text,
+            timestamp: timeStr,
+          ),
+        );
+        final msg = await deviceService.triggerPcKillSwitch(
+          reason: 'slash_killswitch',
+        );
+        _appendFeed(
+          _FeedEntry(
+            isUser: false,
+            senderLabel: 'Kill Switch',
+            text: msg,
+            timestamp: timeStr,
+          ),
+        );
+        _lockSession();
+        return;
+      }
       _appendFeed(
         _FeedEntry(
           isUser: true,
@@ -360,7 +578,7 @@ class _CoreScreenState extends State<CoreScreen>
           isUser: false,
           senderLabel: 'Local Gateway',
           text:
-              'Comando desconhecido: "$text". Use /help ou /device para ver os comandos disponíveis.',
+              'Comando desconhecido: "$text". Use /help, /device, /note ou /skill.',
           timestamp: timeStr,
         ),
       );
@@ -545,10 +763,12 @@ class _CoreScreenState extends State<CoreScreen>
         }
         final failures = await widget.vault.failureCount();
         final pinSet = await widget.vault.hasPin;
+        final duressSet = await widget.vault.hasDuressPin;
         if (!mounted) return;
         setState(() {
           authFailures = failures;
           hasPinConfigured = pinSet;
+          hasDuressPinConfigured = duressSet;
         });
         _setPanel(_ActivePanel.security);
         break;
@@ -561,8 +781,70 @@ class _CoreScreenState extends State<CoreScreen>
     }
   }
 
+  Widget _buildCamouflageScreen() => Scaffold(
+        backgroundColor: const Color(0xFF121212),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF1E1E1E),
+          title: const Text(
+            'Bloco de Notas Pessoal',
+            style: TextStyle(fontSize: 15, color: Colors.white70),
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'Sair',
+              onPressed: () => widget.gate.lock(),
+              icon: const Icon(Icons.lock_outline, color: Colors.white54),
+            ),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.all(16),
+          children: const [
+            Card(
+              color: Color(0xFF1E1E1E),
+              child: ListTile(
+                title: Text(
+                  'Lista de Compras da Semana',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+                subtitle: Text(
+                  '• Café em grãos\n• Pão integral\n• Pilhas AA\n• Detergente neutro',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ),
+            ),
+            SizedBox(height: 8),
+            Card(
+              color: Color(0xFF1E1E1E),
+              child: ListTile(
+                title: Text(
+                  'Leituras Recomendadas',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+                subtitle: Text(
+                  '• Arquitetura Limpa — Cap. 4\n• Revisar anotações da faculdade',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    if (widget.gate.isDuressMode) {
+      return _buildCamouflageScreen();
+    }
+    return Scaffold(
         backgroundColor: const Color(0xFF0A0002),
         body: SafeArea(
           child: Padding(
@@ -670,6 +952,7 @@ class _CoreScreenState extends State<CoreScreen>
           ),
         ),
       );
+  }
 
   Widget _buildMainPanel() => Column(
         children: [
@@ -928,15 +1211,19 @@ class _CoreScreenState extends State<CoreScreen>
                     builder: (context, time, child) => CustomPaint(
                       painter: CorePainter(
                         time,
-                        intensity: sending ? 2.2 : 1.0,
+                        intensity: nightFocusMode
+                            ? 0.35
+                            : (sending ? 2.2 : 1.0),
                       ),
                     ),
                   ),
                 ),
               ),
-              const Text(
-                'U.L.T.R.O.N. CORE',
-                style: TextStyle(
+              Text(
+                nightFocusMode
+                    ? 'U.L.T.R.O.N. CORE [FOCO NOTURNO]'
+                    : 'U.L.T.R.O.N. CORE',
+                style: const TextStyle(
                   color: _rose,
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
@@ -944,9 +1231,11 @@ class _CoreScreenState extends State<CoreScreen>
                 ),
               ),
               const SizedBox(height: 2),
-              const Text(
-                'Voz Nativa TTS • Pitch: 0.55 • Failover Pronto',
-                style: TextStyle(
+              Text(
+                nightFocusMode
+                    ? 'Modo Sussurro TTS Ativo • Flip-to-Shush Pronto'
+                    : 'Voz Nativa TTS • Pitch: 0.55 • Flip-to-Shush Pronto',
+                style: const TextStyle(
                   color: Color(0xFF64748B),
                   fontSize: 9,
                 ),
@@ -965,6 +1254,12 @@ class _CoreScreenState extends State<CoreScreen>
                     label: 'TELA CHEIA',
                     icon: Icons.open_in_full,
                     onTap: () => _setStage(CoreStage.hidden),
+                  ),
+                  const SizedBox(width: 8),
+                  _StageChip(
+                    label: nightFocusMode ? 'NOTURNO ON' : 'NOTURNO',
+                    icon: Icons.nights_stay_outlined,
+                    onTap: _toggleNightFocusMode,
                   ),
                 ],
               ),
@@ -1370,6 +1665,9 @@ class _CoreScreenState extends State<CoreScreen>
         : hasPinConfigured!
             ? 'Configurado (PBKDF2-SHA256)'
             : 'Não configurado';
+    final duressLabel = hasDuressPinConfigured
+        ? 'Ativo (Modo Camuflado)'
+        : 'Não configurado';
     return Column(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -1459,9 +1757,17 @@ class _CoreScreenState extends State<CoreScreen>
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
-                      label: 'Cofre de PIN:',
+                      label: 'Cofre de PIN Principal:',
                       value: pinLabel,
                       valueColor: const Color(0xFFCBD5E1),
+                    ),
+                    const SizedBox(height: 6),
+                    _SecurityRow(
+                      label: 'PIN de Coação (Duress):',
+                      value: duressLabel,
+                      valueColor: hasDuressPinConfigured
+                          ? const Color(0xFF34D399)
+                          : const Color(0xFF94A3B8),
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
@@ -1473,6 +1779,243 @@ class _CoreScreenState extends State<CoreScreen>
                 ),
               ),
               const SizedBox(height: 12),
+
+              // Duress PIN Configuration Card
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0E0002),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'PIN DE COAÇÃO (DURESS PIN - MODO CAMUFLADO)',
+                      style: TextStyle(
+                        color: _rose,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Se digitado na tela de desbloqueio, limpa o histórico de conversas silenciosamente e abre um Bloco de Notas falso.',
+                      style: TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 10,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: duressPinController,
+                            keyboardType: TextInputType.number,
+                            obscureText: true,
+                            maxLength: 8,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                            ),
+                            decoration: const InputDecoration(
+                              counterText: '',
+                              isDense: true,
+                              hintText: 'Novo PIN de Coação (4 a 8 dígitos)',
+                              hintStyle: TextStyle(
+                                color: Color(0xFF475569),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: () async {
+                            final pin = duressPinController.text.trim();
+                            try {
+                              await widget.vault.setDuressPin(pin);
+                              duressPinController.clear();
+                              if (!mounted) return;
+                              setState(() => hasDuressPinConfigured = true);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'PIN de Coação configurado com sucesso.',
+                                    style: TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                              );
+                            } catch (e) {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Erro no PIN de Coação: $e',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _crimson,
+                            foregroundColor: Colors.black,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text(
+                            'SALVAR',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        if (hasDuressPinConfigured) ...[
+                          const SizedBox(width: 6),
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            tooltip: 'Remover PIN de Coação',
+                            onPressed: () async {
+                              await widget.vault.clearDuressPin();
+                              if (!mounted) return;
+                              setState(() => hasDuressPinConfigured = false);
+                            },
+                            icon: const Icon(
+                              Icons.delete_outline,
+                              size: 16,
+                              color: Color(0xFFF43F5E),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Remote PC Kill Switch Card
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0E0002),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'KILL SWITCH REMOTO DO PC (LAN / WEBHOOK)',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Envia pacote assinado (HMAC-SHA256) para suspender/travar seu PC na rede local e bloqueia o celular.',
+                      style: TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 10,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: pcKillSwitchUrlController,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                            ),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: 'http://192.168.1.100:8765/kill',
+                              hintStyle: TextStyle(
+                                color: Color(0xFF475569),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton(
+                          onPressed: () async {
+                            await deviceService.savePcKillSwitchUrl(
+                              pcKillSwitchUrlController.text,
+                            );
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Endpoint do Kill Switch salvo.',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                              ),
+                            );
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _crimson,
+                            side: const BorderSide(color: _crimson),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text(
+                            'FIXAR IP',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: () async {
+                          final msg = await deviceService.triggerPcKillSwitch(
+                            reason: 'security_panel_panic',
+                          );
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                msg,
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                            ),
+                          );
+                          _lockSession();
+                        },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFFDC2626),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                        icon: const Icon(Icons.warning_amber_rounded, size: 16),
+                        label: const Text(
+                          'ACIONAR KILL SWITCH (PC + CELULAR)',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
@@ -1675,6 +2218,109 @@ class _CoreScreenState extends State<CoreScreen>
                           ? const Color(0xFF34D399)
                           : const Color(0xFF94A3B8),
                     ),
+                    const SizedBox(height: 4),
+                    const _SecurityRow(
+                      label: 'Flip-to-Shush (Acelerômetro):',
+                      value: 'ATIVO (Virar tela p/ baixo silencia)',
+                      valueColor: Color(0xFF34D399),
+                    ),
+                    const SizedBox(height: 4),
+                    _SecurityRow(
+                      label: 'Modo Foco Noturno:',
+                      value: nightFocusMode ? 'ATIVO (Sussurro TTS)' : 'INATIVO',
+                      valueColor: nightFocusMode
+                          ? const Color(0xFF34D399)
+                          : const Color(0xFF94A3B8),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 1B. Obsidian Quick Capture + Local Skills (.md)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0E0002),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'OBSIDIAN QUICK CAPTURE & SKILLS (.MD)',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: quickNoteController,
+                            textInputAction: TextInputAction.send,
+                            onSubmitted: _saveQuickObsidianNote,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                            ),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: 'Anexar nota rápida em Diario/AAAA-MM-DD.md…',
+                              hintStyle: TextStyle(
+                                color: Color(0xFF475569),
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: () =>
+                              _saveQuickObsidianNote(quickNoteController.text),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _crimson,
+                            foregroundColor: Colors.black,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text(
+                            'ANOTAR',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (mobileSkills.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      const Text(
+                        'SKILLS PROCEDURAIS LOCAIS (Skills/*.md):',
+                        style: TextStyle(
+                          color: _rose,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          for (final skill in mobileSkills)
+                            _StageChip(
+                              label: '⚡ ${skill.title}',
+                              icon: Icons.auto_awesome_outlined,
+                              onTap: () => _executeSkillCard(skill),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1964,16 +2610,28 @@ class _CoreScreenState extends State<CoreScreen>
                 ),
                 SizedBox(height: 8),
                 _HelpSyntaxItem(
-                  cmd: '/device | /lanterna',
+                  cmd: '/note <texto> | anote: <texto>',
                   desc:
-                      'Abre o painel de controle do celular ou liga/desliga a lanterna.',
+                      'Salva uma nota rápida com horário em Diario/AAAA-MM-DD.md (Obsidian Vault).',
                   highlight: true,
                 ),
                 _HelpSyntaxItem(
-                  cmd: 'ligar lanterna | apagar lanterna',
+                  cmd: '/skill <nome> | /skills | ativar modo estudo',
                   desc:
-                      'Liga ou desliga o flash LED traseiro do celular imediatamente.',
+                      'Executa ou lista as rotinas locais em Markdown (modo_estudo, foco_noturno, alerta_tatico).',
                   highlight: true,
+                ),
+                _HelpSyntaxItem(
+                  cmd: '/killswitch | travar pc',
+                  desc:
+                      'Dispara pacote HMAC-SHA256 de bloqueio remoto para o PC e trava a sessão mobile.',
+                  highlight: true,
+                ),
+                _HelpSyntaxItem(
+                  cmd: '/device | /lanterna | ligar lanterna',
+                  desc:
+                      'Abre o painel de controle do celular ou liga/desliga o flash LED traseiro.',
+                  highlight: false,
                 ),
                 _HelpSyntaxItem(
                   cmd: 'volume 80 | aumentar volume | silenciar',
@@ -1996,13 +2654,13 @@ class _CoreScreenState extends State<CoreScreen>
                 _HelpSyntaxItem(
                   cmd: '/security | /security lock | /settings | /history',
                   desc:
-                      'Auditoria AuthGate, trava imediata, provedores de IA e histórico.',
+                      'Configura Duress PIN (Modo Coação), Kill Switch, provedores de IA e histórico.',
                   highlight: true,
                 ),
                 _HelpSyntaxItem(
-                  cmd: 'palco | tela cheia',
+                  cmd: 'Flip-to-Shush (Gesto Físico)',
                   desc:
-                      'Alterna entre o Modo Palco e visualização em Tela Cheia.',
+                      'Vire o celular com a tela para baixo na mesa para calar a voz do núcleo imediatamente.',
                   highlight: false,
                 ),
               ],

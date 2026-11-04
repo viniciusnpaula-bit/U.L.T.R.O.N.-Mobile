@@ -13,6 +13,7 @@ class AuthGate extends ChangeNotifier {
 
   AccessLevel get level => _level;
   bool get isAuthenticated => _session;
+  bool get isDuressMode => _session && _level == AccessLevel.guarded;
 
   Future<bool> authenticateBiometric() async {
     try {
@@ -54,6 +55,12 @@ class AuthGate extends ChangeNotifier {
   void _grant() {
     _session = true;
     _level = AccessLevel.session;
+    notifyListeners();
+  }
+
+  void grantDuress() {
+    _session = true;
+    _level = AccessLevel.guarded;
     notifyListeners();
   }
 
