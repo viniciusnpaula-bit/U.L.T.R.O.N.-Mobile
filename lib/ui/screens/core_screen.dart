@@ -13,6 +13,7 @@ import '../../services/conversation_history.dart';
 import '../../services/device_control_service.dart';
 import '../../services/obsidian_service.dart';
 import '../../services/slash_command_parser.dart';
+import '../../services/speech_text.dart';
 import '../../services/voice_service.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
@@ -78,9 +79,11 @@ class _CoreScreenState extends State<CoreScreen>
   bool criticalBatteryAlerted = false;
   bool notificationSentinelEnabled = false;
   bool ecoVadSentinelRunning = false;
+  double speechRms = 0.0;
+  VoiceProfile selectedVoiceProfile = VoiceProfile.grave;
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
-  String installedVersion = 'v0.9.0';
+  String installedVersion = 'v1.0.0';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -92,7 +95,7 @@ class _CoreScreenState extends State<CoreScreen>
       isUser: false,
       senderLabel: 'Kernel Local',
       text:
-          'U.L.T.R.O.N. Mobile v0.7 online. Sentinela de Mensagens (WhatsApp/Telegram/SMS com Resposta em 2º Plano), Escuta por Voz (🎤), 9 Provedores Gratuitos, Obsidian e Skills (.md) ativos!',
+          'U.L.T.R.O.N. Mobile v1.0 online. Motor de Voz Neural Limpo (Anti-Eco Half-Duplex), Reconhecimento de Voz Ao Vivo no HUD (🎤), Sentinela WhatsApp/SMS e 9 Provedores Gratuitos ativos!',
       timestamp: 'ONLINE',
     ),
   ];
@@ -129,16 +132,8 @@ class _CoreScreenState extends State<CoreScreen>
           return;
         }
         HapticFeedback.heavyImpact();
-        final inlineCmd = phrase
-            .replaceFirst(
-              RegExp(
-                r'^.*?\b(?:ultron|outron|uoltron)\b[,:\s]*',
-                caseSensitive: false,
-              ),
-              '',
-            )
-            .trim();
-        if (inlineCmd.length >= 3) {
+        final inlineCmd = WakeWord.extractCommand(phrase);
+        if (inlineCmd.length >= 2) {
           commandController.text = inlineCmd;
           saveCommand();
           return;
@@ -153,6 +148,19 @@ class _CoreScreenState extends State<CoreScreen>
           ),
         );
         _startVoiceInput();
+      },
+      onSpeechPartial: (partial) {
+        if (!mounted || !listeningVoice) return;
+        setState(() {
+          commandController.text = partial;
+          commandController.selection = TextSelection.fromPosition(
+            TextPosition(offset: partial.length),
+          );
+        });
+      },
+      onSpeechRms: (rms) {
+        if (!mounted) return;
+        setState(() => speechRms = rms);
       },
     );
     _loadInitialState();
@@ -193,6 +201,7 @@ class _CoreScreenState extends State<CoreScreen>
         hasPinConfigured = pinSet;
         hasDuressPinConfigured = duressSet;
         notificationSentinelEnabled = notifEnabled;
+        selectedVoiceProfile = voiceService.profile;
         recentMessages = loadedMsgs;
         if (killUrl.isNotEmpty && pcKillSwitchUrlController.text.isEmpty) {
           pcKillSwitchUrlController.text = killUrl;
@@ -642,26 +651,40 @@ class _CoreScreenState extends State<CoreScreen>
   }
 
   Future<void> _startVoiceInput() async {
-    if (sending || listeningVoice) return;
+    if (sending) return;
+    if (listeningVoice) {
+      HapticFeedback.selectionClick();
+      await deviceService.stopListeningVoice();
+      return;
+    }
     HapticFeedback.mediumImpact();
     await voiceService.stop();
     // Aguarda 280ms após cortar o TTS para dissipar qualquer eco do alto-falante antes de abrir o microfone
     await Future<void>.delayed(const Duration(milliseconds: 280));
     if (!mounted || sending || listeningVoice) return;
-    setState(() => listeningVoice = true);
+    setState(() {
+      listeningVoice = true;
+      speechRms = 0.1;
+    });
     try {
       final spoken = await deviceService.listenVoice(
         prompt: 'Fale seu comando para o U.L.T.R.O.N...',
       );
       if (!mounted) return;
-      setState(() => listeningVoice = false);
+      setState(() {
+        listeningVoice = false;
+        speechRms = 0.0;
+      });
       if (spoken.isNotEmpty) {
         commandController.text = spoken;
         await saveCommand();
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() => listeningVoice = false);
+      setState(() {
+        listeningVoice = false;
+        speechRms = 0.0;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -1479,7 +1502,7 @@ class _CoreScreenState extends State<CoreScreen>
                       isDense: true,
                       border: InputBorder.none,
                       hintText: listeningVoice
-                          ? '🎤 Ouvindo sua voz (pt-BR)…'
+                          ? '🎤 Ouvindo ao vivo (toque no 🎤 para concluir)…'
                           : sending
                               ? 'Consultando provedor ativo…'
                               : 'Digite /help, /settings ou toque no 🎤 para falar...',
@@ -1493,7 +1516,7 @@ class _CoreScreenState extends State<CoreScreen>
                   ),
                 ),
                 InkWell(
-                  onTap: (sending || listeningVoice) ? null : _startVoiceInput,
+                  onTap: sending ? null : _startVoiceInput,
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
                     padding: const EdgeInsets.all(7),
@@ -1555,7 +1578,9 @@ class _CoreScreenState extends State<CoreScreen>
                         time,
                         intensity: nightFocusMode
                             ? 0.35
-                            : (sending ? 2.2 : 1.0),
+                            : listeningVoice
+                                ? (1.35 + speechRms * 1.25)
+                                : (sending ? 2.2 : 1.0),
                       ),
                     ),
                   ),
@@ -1564,7 +1589,9 @@ class _CoreScreenState extends State<CoreScreen>
               Text(
                 nightFocusMode
                     ? 'U.L.T.R.O.N. CORE [FOCO NOTURNO]'
-                    : 'U.L.T.R.O.N. CORE',
+                    : listeningVoice
+                        ? 'U.L.T.R.O.N. CORE [ESCUTANDO AO VIVO]'
+                        : 'U.L.T.R.O.N. CORE',
                 style: const TextStyle(
                   color: _rose,
                   fontSize: 10,
@@ -1576,7 +1603,7 @@ class _CoreScreenState extends State<CoreScreen>
               Text(
                 nightFocusMode
                     ? 'Modo Sussurro TTS Ativo • Flip-to-Shush Pronto'
-                    : 'Voz Nativa TTS • Pitch: 0.55 • Flip-to-Shush Pronto',
+                    : 'Voz Neural (${selectedVoiceProfile.label}) • Anti-Eco Half-Duplex • Flip-to-Shush',
                 style: const TextStyle(
                   color: Color(0xFF64748B),
                   fontSize: 9,
@@ -1589,9 +1616,17 @@ class _CoreScreenState extends State<CoreScreen>
                 runSpacing: 4,
                 children: [
                   _StageChip(
-                    label: listeningVoice ? 'ESCUTANDO...' : 'FALAR POR VOZ',
+                    label: listeningVoice ? 'CONCLUIR FALA' : 'FALAR POR VOZ',
                     icon: listeningVoice ? Icons.graphic_eq : Icons.mic,
                     onTap: _startVoiceInput,
+                  ),
+                  _StageChip(
+                    label: 'CALAR VOZ',
+                    icon: Icons.volume_off_outlined,
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      voiceService.stop();
+                    },
                   ),
                   _StageChip(
                     label: 'MODO PALCO',
@@ -2655,6 +2690,83 @@ class _CoreScreenState extends State<CoreScreen>
                                 fontSize: 9,
                                 fontWeight: FontWeight.bold,
                               ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'PERFIL DE TIMBRE NEURAL (PT-BR LIMPO SEM ROBÔ):',
+                      style: TextStyle(
+                        color: Color(0xFF94A3B8),
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        for (final prof in VoiceProfile.values) ...[
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: OutlinedButton(
+                                onPressed: () async {
+                                  HapticFeedback.selectionClick();
+                                  await voiceService.setProfile(prof);
+                                  if (!mounted) return;
+                                  setState(() => selectedVoiceProfile = prof);
+                                  await voiceService.preview();
+                                },
+                                style: OutlinedButton.styleFrom(
+                                  backgroundColor: selectedVoiceProfile == prof
+                                      ? _crimson
+                                      : const Color(0xFF1A0004),
+                                  foregroundColor: selectedVoiceProfile == prof
+                                      ? Colors.black
+                                      : _rose,
+                                  side: BorderSide(
+                                    color: selectedVoiceProfile == prof
+                                        ? _crimson
+                                        : _border,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 6,
+                                  ),
+                                ),
+                                child: Text(
+                                  prof.label,
+                                  style: const TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                        OutlinedButton(
+                          onPressed: () {
+                            HapticFeedback.selectionClick();
+                            voiceService.stop();
+                          },
+                          style: OutlinedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1A0004),
+                            foregroundColor: const Color(0xFFF43F5E),
+                            side: const BorderSide(color: _border),
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 6,
+                            ),
+                          ),
+                          child: const Text(
+                            'CALAR',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),

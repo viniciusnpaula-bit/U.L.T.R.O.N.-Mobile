@@ -144,7 +144,7 @@ object UltronTtsHelper {
             if (status == TextToSpeech.SUCCESS) {
                 ttsReady = true
                 offlineTts?.language = Locale("pt", "BR")
-                offlineTts?.setPitch(0.55f)
+                offlineTts?.setPitch(0.80f)
                 offlineTts?.setSpeechRate(0.92f)
                 offlineTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {

@@ -147,13 +147,24 @@ class DeviceControlService {
   void setNativeEventHandlers({
     VoidCallback? onFlip,
     void Function(String phrase)? onWakeWord,
+    void Function(String partial)? onSpeechPartial,
+    void Function(double rms)? onSpeechRms,
   }) {
     _channel.setMethodCallHandler((call) async {
-      if (call.method == 'onFlipToShush') {
-        onFlip?.call();
-      } else if (call.method == 'onWakeWordDetected') {
-        final phrase = (call.arguments as String?) ?? 'Ultron';
-        onWakeWord?.call(phrase);
+      switch (call.method) {
+        case 'onFlipToShush':
+          onFlip?.call();
+        case 'onWakeWordDetected':
+          final phrase = (call.arguments as String?) ?? 'Ultron';
+          onWakeWord?.call(phrase);
+        case 'onSpeechPartial':
+          final partial = (call.arguments as String?) ?? '';
+          if (partial.isNotEmpty) {
+            onSpeechPartial?.call(partial);
+          }
+        case 'onSpeechRms':
+          final rms = (call.arguments as num?)?.toDouble() ?? 0.0;
+          onSpeechRms?.call(rms.clamp(0.0, 1.0));
       }
       return null;
     });
@@ -349,6 +360,12 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       'locale': locale,
     });
     return (res ?? '').trim();
+  }
+
+  Future<void> stopListeningVoice() async {
+    try {
+      await _channel.invokeMethod<bool>('stopListeningVoice');
+    } catch (_) {}
   }
 
   Future<bool> isNotificationListenerEnabled() async {

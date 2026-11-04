@@ -130,9 +130,21 @@ class UltronWakeWordRecognizer(
 
     private fun checkHotword(candidates: List<String>?): Boolean {
         if (alreadyDispatched || candidates.isNullOrEmpty() || isSpeakerActive()) return false
+        val aliases = listOf(
+            "ultron",
+            "ultrom",
+            "outron",
+            "oultron",
+            "uoltron",
+            "hultron",
+            "utron",
+            "ultrao",
+            "ultrão",
+            "ultrón"
+        )
         for (candidate in candidates) {
             val lower = candidate.lowercase(Locale("pt", "BR"))
-            if (lower.contains("ultron") || lower.contains("outron") || lower.contains("uoltron")) {
+            if (aliases.any { lower.contains(it) }) {
                 alreadyDispatched = true
                 onHotwordDetected(candidate.trim())
                 return true

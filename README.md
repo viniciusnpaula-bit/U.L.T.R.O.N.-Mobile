@@ -1,4 +1,4 @@
-# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v0.8.0`)
+# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.0.0`)
 
 Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado para operar com estética tática **AMOLED Carmesim**, segurança **Fail-Closed**, controle direto sobre o hardware do celular e integração nativa com múltiplos provedores de IA.
 
@@ -27,6 +27,18 @@ Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/de
   - Diga ou digite `"responder: Chego em 10 minutos"`, `"responder para João: Já estou indo"` ou `/responder <texto>` e o U.L.T.R.O.N. injeta a resposta direto na notificação do WhatsApp/Telegram/SMS em segundo plano, sem precisar abrir o aplicativo!
 - **Envio Ativo de WhatsApp e SMS com Busca na Agenda (`ContactsContract`)**:
   - Diga `"mandar whatsapp para Mãe: Já cheguei"` ou `"enviar sms para Carlos: Reunião às 15h"`. O U.L.T.R.O.N. busca o telefone do contato na agenda do Android e dispara a mensagem (ou usa o painel rápido de envio na aba **CELULAR**).
+
+### 1C. 🎙️ Motor de Voz Neural Limpo & Reconhecimento Ao Vivo (`v1.0.0`)
+- **Reconhecimento de Voz In-App em Tempo Real (`SpeechRecognizer` + Fallback Automático)**:
+  - Transcrição parcial ao vivo direto na barra de comando do HUD enquanto você fala (`onSpeechPartial`), sem abrir popups brancos bloqueantes do sistema.
+  - Reação visual a 60 FPS do Núcleo Carmesim sincronizada com a amplitude da sua voz (`onSpeechRms`).
+  - Tolerância estendida de pausa (`1.8s`) para não cortar frases no meio e botão **🎤 CONCLUIR FALA** para enviar imediatamente.
+- **Hotword Fonético Tolerante a Ruído (`WakeWord` + `UltronWakeWordRecognizer`)**:
+  - Reconhece `"Ultron"`, `"Ei Ultron"`, `"Oi Ultron"` e variações fonéticas do STT em português (`"Outron"`, `"Uoltron"`, `"Ultrom"`, `"Ultrão"`) com extração direta de comando inline (ex.: `"Ei Ultron ligar lanterna"` executa direto em 1 passo).
+- **Fala Neural Limpa (`SpeechText` + `VoiceService` + Perfis de Timbre)**:
+  - Sanitizador inteligente que remove Markdown (`**`, `` ` ``, `#`), blocos de código, URLs, emojis e tags `[ACTION:...]` antes de falar, além de pronunciar `"Ultron"` naturalmente em vez de soletrar `"U ponto L ponto..."`.
+  - Divisão automática de respostas longas em sentenças naturais (`<= 220` caracteres) com interrupção instantânea (`CALAR VOZ` ou Flip-to-Shush).
+  - **3 Perfis de Timbre (`GRAVE` `0.80`, `NATURAL` `1.00`, `ÁGIL` `0.88`)** e seleção automática da melhor voz neural offline `pt-BR` instalada no Android, com **Bloqueio Anti-Eco Half-Duplex** para que o microfone nunca capte a própria voz do Ultron.
 
 ### 2. 🧠 Central de IA 100% Gratuita (9 Provedores + Zero-Key Sem Cadastro)
 - **IA Grátis Sem Chave (Zero-Key Out-of-the-Box)**:
