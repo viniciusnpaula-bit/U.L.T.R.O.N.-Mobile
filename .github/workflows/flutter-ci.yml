@@ -9,6 +9,12 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # ORG_GRADLE_PROJECT_* é lido automaticamente pelo Gradle como propriedade de projeto,
+    # então `flutter build apk` (e qualquer ./gradlew) herda a AccessKey sem passar -P.
+    # O segredo é mascarado automaticamente nos logs do GitHub Actions.
+    env:
+      ORG_GRADLE_PROJECT_porcupineAccessKey: ${{ secrets.PORCUPINE_ACCESS_KEY }}
+      PORCUPINE_ACCESS_KEY: ${{ secrets.PORCUPINE_ACCESS_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,8 +55,33 @@ jobs:
           sudo rm -rf "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/system-images
           sudo docker image prune -af
           df -h /
+      # Modelo Vosk (~45 MB compactado): baixado no CI e verificado pelo SHA-256 fixo.
+      # Executado depois do `git checkout -- android` (restaura só arquivos versionados) e
+      # antes do build, valendo para debug e release.
+      - name: Fetch Vosk model
+        run: |
+          mkdir -p android/app/src/main/assets/vosk
+          curl -sSL -o /tmp/vosk-model.zip \
+            https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip
+          echo "6e1ce909032e1afa7a88e68a3d628ecafff302bdf195befab308826c395e93b7  /tmp/vosk-model.zip" \
+            | sha256sum -c -
+          mv /tmp/vosk-model.zip android/app/src/main/assets/vosk/model-pt.zip
+
       - name: Build debug APK
-        run: flutter build apk --debug
+        run: |
+          if [ -z "$PORCUPINE_ACCESS_KEY" ]; then
+            echo "::warning::PORCUPINE_ACCESS_KEY ausente — APK sai sem palavra de ativacao"
+          fi
+          flutter build apk --debug
+
+      - name: Assert Porcupine AccessKey reached BuildConfig
+        if: env.PORCUPINE_ACCESS_KEY != ''
+        run: |
+          GREP_FILE="$(find android/app/build/generated/source/buildConfig -name BuildConfig.java | head -1)"
+          test -n "$GREP_FILE"
+          grep -q 'public static final String PORCUPINE_ACCESS_KEY' "$GREP_FILE"
+          # Garante que a chave de fato chegou (não é string vazia).
+          ! grep -q 'PORCUPINE_ACCESS_KEY = ""' "$GREP_FILE"
       - name: Upload debug APK
         if: success()
         uses: actions/upload-artifact@v4
