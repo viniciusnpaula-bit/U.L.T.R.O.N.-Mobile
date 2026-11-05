@@ -480,10 +480,6 @@ Adicione ao `.gitignore`:
 android/app/src/main/assets/vosk/
 ```
 
-- [ ] **Step 4: Verify the build without a key**
-
-Push; o CI deve concluir `Build debug APK` sem erro e sem key.
-
 - [ ] **Step 5: Verify the build without a key**
 
 Push; o CI deve concluir `Build debug APK` sem erro. O caminho com key é coberto pela
@@ -803,8 +799,23 @@ git commit -m "feat(kws): transcritor Vosk com pre-roll e descarga por inativida
 - Pausas (usuário, chamada, flip-to-shush, TTS, bateria) continuam liberando o microfone.
 - Texto vazio não vira ativação nem notificação.
 - `captureHealthy` continua falso quando não há leitura real.
+- Sem KWS configurado o loop **encerra** (não lê nem descarta áudio) e a notificação explica.
 
-- [ ] **Step 1: Replace the capture loop**
+- [ ] **Step 1: Fail fast when the spotter is not configured**
+
+```kotlin
+        Stats.kwsConfigured = spotter.isConfigured
+        Stats.kwsUnavailableReason = spotter.unavailableReason ?: ""
+        if (!spotter.isConfigured) {
+            captureHealthy = false
+            Stats.lastError = "KWS indisponível: ${Stats.kwsUnavailableReason}"
+            updateNotification("KWS não configurado — ativação por voz indisponível")
+            spotter.close()
+            return
+        }
+```
+
+- [ ] **Step 2: Replace the capture loop**
 
 Substitua o corpo de `runCaptureSession()` mantendo as guardas. Estrutura final:
 
@@ -812,6 +823,17 @@ Substitua o corpo de `runCaptureSession()` mantendo as guardas. Estrutura final:
     private fun runCaptureSession() {
         val spotter = PorcupineKeywordSpotter(applicationContext, BuildConfig.PORCUPINE_ACCESS_KEY)
         spotter.init()
+        Stats.kwsConfigured = spotter.isConfigured
+        Stats.kwsUnavailableReason = spotter.unavailableReason ?: ""
+        // Falha rápida: sem motor configurado o loop não pode ler e descartar áudio,
+        // nem deixar a UI dizendo "capturando" (mesmo pecado da v1.2.1).
+        if (!spotter.isConfigured) {
+            captureHealthy = false
+            Stats.lastError = "KWS indisponível: ${Stats.kwsUnavailableReason}"
+            updateNotification("KWS não configurado — ativação por voz indisponível")
+            spotter.close()
+            return
+        }
         val transcriber = VoskCommandTranscriber(applicationContext)
         val ring = AudioRingBuffer(PREROLL_SAMPLES)
         val backoff = FalseTriggerBackoff()
@@ -872,7 +894,7 @@ Substitua o corpo de `runCaptureSession()` mantendo as guardas. Estrutura final:
     }
 ```
 
-- [ ] **Step 2: Replace the wake handler**
+- [ ] **Step 3: Replace the wake handler**
 
 ```kotlin
     /** Retorna a frase a entregar, ou null quando não houve comando útil. */
@@ -914,7 +936,7 @@ Substitua o corpo de `runCaptureSession()` mantendo as guardas. Estrutura final:
     }
 ```
 
-- [ ] **Step 3: Update constants**
+- [ ] **Step 4: Update constants**
 
 ```kotlin
     private const val SAMPLE_RATE_HZ = 16_000
@@ -933,15 +955,18 @@ Ajuste também os inicializadores de `Stats`, que hoje referenciam as constantes
         @Volatile var threshold = 0.0 // sem gate; mantido só para não quebrar o contrato do Dart
 ```
 
-- [ ] **Step 4: Verify compile and tests**
+- [ ] **Step 5: Verify compile and tests**
 
 CI verde em `Native unit tests` e `Build debug APK`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit (dois commits, mesmo push)**
 
 ```bash
 git add android/app/src/main/kotlin/com/viniciusnpaula/ultron_mobile/UltronAudioService.kt
 git commit -m "feat(kws): captura unica de 16 kHz com Porcupine e pre-roll (Task 7)"
+# se o handler ficou em um segundo momento de edicao:
+git add android/app/src/main/kotlin/com/viniciusnpaula/ultron_mobile/UltronAudioService.kt
+git commit -m "feat(kws): handler de comando por Vosk com backoff (Task 7)"
 ```
 
 ---
@@ -990,12 +1015,9 @@ Em `diagnostics(context)`:
                 "voskResident" to Stats.voskResident,
 ```
 
-No início de `runCaptureSession`, depois de `spotter.init()`:
-
-```kotlin
-        Stats.kwsConfigured = spotter.isConfigured
-        Stats.kwsUnavailableReason = spotter.unavailableReason ?: ""
-```
+Os campos `kwsConfigured`/`kwsUnavailableReason` são preenchidos na Task 7 (fail fast);
+aqui só são expostos. `voskLoadMs` pode ser medido em `ensureLoaded()` — se preferir
+simplicidade, deixe em 0 e não invente número.
 
 - [ ] **Step 2: Extend the Dart status model**
 
@@ -1087,7 +1109,8 @@ git commit -m "refactor(kws): remove o reconhecedor de hotword do caminho de vol
 
 - [ ] **Step 1: Add model fetch step**
 
-Antes de `Build debug APK`:
+Depois de `Restore committed files` e de `Free disk space`, antes de `Build debug APK`
+(assim vale para debug e release):
 
 ```yaml
       - name: Fetch Vosk model
@@ -1100,30 +1123,45 @@ Antes de `Build debug APK`:
           mv /tmp/vosk-model.zip android/app/src/main/assets/vosk/model-pt.zip
 ```
 
-- [ ] **Step 2: Inject the secret and warn when absent**
+- [ ] **Step 2: Inject the secret into every Gradle invocation**
 
-No passo de build:
+O `env` do job (topo de `validate:`) propaga para `flutter build apk` **e** para qualquer
+`./gradlew`, via a convenção `ORG_GRADLE_PROJECT_`:
+
+```yaml
+    env:
+      ORG_GRADLE_PROJECT_porcupineAccessKey: ${{ secrets.PORCUPINE_ACCESS_KEY }}
+      PORCUPINE_ACCESS_KEY: ${{ secrets.PORCUPINE_ACCESS_KEY }}
+```
+
+E no passo de build:
 
 ```yaml
       - name: Build debug APK
-        env:
-          PORCUPINE_ACCESS_KEY: ${{ secrets.PORCUPINE_ACCESS_KEY }}
         run: |
           if [ -z "$PORCUPINE_ACCESS_KEY" ]; then
             echo "::warning::PORCUPINE_ACCESS_KEY ausente — APK sai sem palavra de ativacao"
-          else
-            ./gradlew :app:compileDebugKotlin -PporcupineAccessKey="$PORCUPINE_ACCESS_KEY" --no-daemon
-            grep -rq "PORCUPINE_ACCESS_KEY" android/app/build/generated/source/buildConfig/debug/
           fi
           flutter build apk --debug
 ```
 
-- [ ] **Step 3: Verify both paths**
+- [ ] **Step 3: Assert the generated BuildConfig after the build**
+
+```yaml
+      - name: Assert Porcupine key when configured
+        if: env.PORCUPINE_ACCESS_KEY != ''
+        run: |
+          GREP_FILE=$(find android/app/build/generated/source/buildConfig -name BuildConfig.java | head -1)
+          grep -q 'PORCUPINE_ACCESS_KEY' "$GREP_FILE"
+          ! grep -q 'PORCUPINE_ACCESS_KEY = ""' "$GREP_FILE"
+```
+
+- [ ] **Step 4: Verify both paths**
 
 Verde sem secret (push normal). Para o caminho com secret, registre no PR que o teste real
 depende de o secret existir no repositório — não invente um valor.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add .github/workflows/flutter-ci.yml
@@ -1328,3 +1366,40 @@ git commit -m "chore(release): 1.3.0+15 com motor KWS dedicado (Task 13)"
 - O `.ppn` e a AccessKey são do usuário; sem eles a Task 5 não tem verificação de detecção real.
 - `Porcupine.Builder`/`Porcupine.process` e `org.vosk.*` são usados pela API pública documentada; se a versão 3.0.1 divergir, o erro aparece na compilação do CI e deve ser corrigido na task correspondente — não no plano.
 - Os testes de loop continuam impossíveis em JVM; a cobertura real é compilação + protocolo físico.
+
+## Rollback
+
+Sem feature flag. Reverter os commits das tasks (`git revert <sha>...`) ou resetar a branch
+devolve o motor antigo, que permanece no histórico. Um flag "Porcupine ou porta de volume"
+recriaria os dois motores que a D7 eliminou.
+
+## Stress Test Results: plano KWS
+
+### Resolved Decisions
+- **Sem KWS configurado o loop encerra** (Task 7): `captureHealthy = false`, notificação
+  explica e o worker retorna. Nada de ler e descartar áudio.
+- **AccessKey via `ORG_GRADLE_PROJECT_porcupineAccessKey`** no `env` do job (Task 10), para
+  que `flutter build apk` e `./gradlew` herdem a propriedade; assert roda depois do build e
+  rejeita `PORCUPINE_ACCESS_KEY = ""`.
+- **Ordem no CI**: fetch do modelo depois de `Restore committed files` e de `Free disk
+  space`, antes do build; vale para debug e release.
+- **Task 7 unificada com dois commits** (captura, handler) no mesmo push.
+- **Rollback por git**, sem flag de runtime.
+
+### Changes Made
+- Task 7 ganhou o passo "fail fast when the spotter is not configured"; passos renumerados;
+  commit dividido em dois.
+- Task 8 deixou de duplicar a atribuição de `Stats.kwsConfigured`.
+- Task 10 reescrita: `env` do job, assert `if: env.PORCUPINE_ACCESS_KEY != ''`, comando de
+  grep em arquivo único (sem quebra de linha em caminho).
+- Seção "Rollback" adicionada.
+
+### Deferred / Parking Lot
+- Medição de `voskLoadMs` fica em 0 se não for instrumentada — não inventar número.
+- Treinar modelo próprio de KWS.
+
+### Confidence Assessment
+- Overall: **High** para o plano; **Medium** para o resultado final, limitado pela ausência
+  de `.ppn`, AccessKey e aparelho.
+- Áreas de preocupação: comportamento em runtime do Porcupine/Vosk só se prova com o modelo
+  e um telefone; task 7 é a de maior risco e deve ser revisada com atenção.
