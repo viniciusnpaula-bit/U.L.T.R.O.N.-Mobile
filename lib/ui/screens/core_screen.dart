@@ -151,15 +151,36 @@ class _CoreScreenState extends State<CoreScreen>
   }
 
   /// Processa uma ativação por "Ultron" (ao vivo ou pendente do segundo plano).
-  void _handleWakeWord(String phrase) {
-    if (!mounted || sending || listeningVoice || voiceService.isSpeaking) {
+  ///
+  /// Um comando em andamento não pode simplesmente descartar a ativação: espera curta
+  /// pelo pipeline atual (o nativo também reentrega a palavra enquanto o TTS fala).
+  Future<void> _handleWakeWord(String phrase) async {
+    if (!mounted) return;
+    for (var i = 0;
+        i < 32 && (sending || listeningVoice || voiceService.isSpeaking);
+        i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return;
+    }
+    if (!mounted) return;
+    if (sending || listeningVoice || voiceService.isSpeaking) {
+      // Nunca descarta em silêncio: o operador sabe que precisa repetir.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '⚙️ Núcleo ocupado. Repita "Ultron" quando a resposta terminar.',
+            style: TextStyle(fontSize: 11),
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
       return;
     }
     HapticFeedback.heavyImpact();
     final inlineCmd = WakeWord.extractCommand(phrase);
     if (inlineCmd.length >= 2) {
       commandController.text = inlineCmd;
-      saveCommand();
+      await saveCommand();
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
@@ -171,7 +192,7 @@ class _CoreScreenState extends State<CoreScreen>
         duration: Duration(seconds: 2),
       ),
     );
-    _startVoiceInput();
+    await _startVoiceInput();
   }
 
   Future<void> _consumePendingWakeWord() async {
@@ -239,10 +260,12 @@ class _CoreScreenState extends State<CoreScreen>
       } catch (_) {}
       DeviceStatus? hwStatus;
       bool notifEnabled = false;
+      var vadRunning = false;
       List<CapturedNotification> loadedMsgs = const [];
       try {
         hwStatus = await deviceService.getStatus();
         notifEnabled = await deviceService.isNotificationListenerEnabled();
+        vadRunning = await deviceService.isAudioSentinelRunning();
         if (notifEnabled) {
           loadedMsgs = await deviceService.getRecentMessages(limit: 12);
         }
@@ -253,6 +276,7 @@ class _CoreScreenState extends State<CoreScreen>
         hasPinConfigured = pinSet;
         hasDuressPinConfigured = duressSet;
         notificationSentinelEnabled = notifEnabled;
+        ecoVadSentinelRunning = vadRunning;
         selectedVoiceProfile = voiceService.profile;
         recentMessages = loadedMsgs;
         if (killUrl.isNotEmpty && pcKillSwitchUrlController.text.isEmpty) {
@@ -561,6 +585,8 @@ class _CoreScreenState extends State<CoreScreen>
       voiceService.stop();
     } else {
       _consumePendingWakeWord();
+      // Revalida permissões/serviço após o usuário voltar de um diálogo do Android.
+      _refreshDeviceStatus();
     }
     _syncTickerWithState(lifecycle: state);
   }
@@ -568,7 +594,7 @@ class _CoreScreenState extends State<CoreScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    deviceService.setNativeEventHandlers(onFlip: null, onWakeWord: null);
+    deviceService.clearNativeEventHandlers();
     ticker.dispose();
     coreTime.dispose();
     voiceService.stop();
@@ -2904,7 +2930,9 @@ class _CoreScreenState extends State<CoreScreen>
                               }
                               if (!mounted) return;
                               setState(() => ecoVadSentinelRunning = real);
-                              if (next && !real) {
+                              // requested == false => o Android abriu o diálogo de permissão;
+                              // o estado real é revalidado no retorno ao primeiro plano.
+                              if (next && requested && !real) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
                                     content: Text(

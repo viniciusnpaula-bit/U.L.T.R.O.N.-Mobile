@@ -272,6 +272,12 @@ class DeviceControlService {
     });
   }
 
+  /// Remove o handler de eventos. Sem handler, o nativo trata a entrega como
+  /// "not implemented" e mantém a wake word pendente em vez de descartá-la.
+  void clearNativeEventHandlers() {
+    _channel.setMethodCallHandler(null);
+  }
+
   void setFlipToShushHandler(VoidCallback? onFlip) {
     setNativeEventHandlers(onFlip: onFlip);
   }

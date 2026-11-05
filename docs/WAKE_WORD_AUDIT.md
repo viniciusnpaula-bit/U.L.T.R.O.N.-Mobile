@@ -90,3 +90,36 @@ Enquanto esses modelos específicos não forem fornecidos, o app mantém transpa
 - Restrições *while-in-use*: o serviço só é iniciado a partir da Activity em primeiro plano ou por ação direta do usuário.
 - Inicialização pós-reboot: em Android 11+, o `BootReceiver` não força a inicialização proibida de microfone em background; ele publica uma notificação de alta prioridade para o usuário reativar com um toque.
 - Compatibilidade com telas de bloqueio: `setShowWhenLocked` e `setTurnScreenOn` controlados exclusivamente pelo ciclo de vida da Activity quando acordada pelo alarme de ativação.
+
+---
+
+## 7. Fase 2 — Refinamento e Correções (auditoria sobre a Fase 1)
+
+### Defeitos encontrados e corrigidos
+
+| # | Defeito | Correção |
+|---|---|---|
+| 1 | UI podia dizer "capturando" enquanto o `SpeechRecognizer` detinha o microfone | `captureHealthy = false` ao liberar o `AudioRecord` antes do ASR |
+| 2 | `AudioRecord.read() == 0` mantinha `captureHealthy` antigo em `true` (loop sem áudio) | Leitura vazia agora conta para o watchdog e derruba `captureHealthy` |
+| 3 | Timeout do ASR deixava a notificação permanente presa em "Verificando palavra…" | Notificação restaurada no timeout, junto do erro de diagnóstico |
+| 4 | `startRecording()` com exceção vazava o `AudioRecord` | `release()` no catch antes de relançar |
+| 5 | Wake word detectada em segundo plano era entregue ao Flutter e abria o microfone sem o usuário ver o alerta | `deliverPendingWakeWord` só entrega com `isActivityResumed`; pendente fica para o `onResume` |
+| 6 | Se o TTS/reconhecedor estivesse ativo, a wake word pendente nunca era reentregue | Retry de 500 ms enquanto a Activity está em primeiro plano (com TTL de 30 s) |
+| 7 | Activity destruída no meio da escuta deixava `isForegroundRecognizerActive = true` para sempre (sentinela surdo) | `onDestroy` libera a flag, resolve o `pendingSpeechResult` e atualiza o timestamp |
+| 8 | Flip-to-Shush ficava preso em `true` ao ir para segundo plano (sensor desregistrado) e pausava a escuta para sempre | `onPause` zera `isFaceDown`/`isFaceDownGlobal` |
+| 9 | Wake word após a 4ª palavra ativava o nativo, mas `WakeWord.extractCommand` no Dart não encontrava o hotword (comando errado) | `WakeWordMatcher.hotwordIndex` limitado às 4 primeiras palavras, igual ao Dart |
+| 10 | Resultado ASR atrasado podia disparar ativação depois de `destroy()`/timeout | `dispatch()` ignora chamadas após `finished` |
+| 11 | Pausa do usuário podia ser desfeita por restart sticky | `ACTION_TOGGLE_PAUSE` pausado retorna `START_NOT_STICKY` |
+| 12 | HUD iniciava com "EM REPOUSO" mesmo com o sentinela ativo (nunca consultava o estado real no cold start) | `_loadInitialState` consulta `isAudioSentinelRunning`; resume revalida |
+| 13 | Ao conceder permissão, o toggle mostrava "não confirmou captura" antes do usuário responder ao diálogo | SnackBar de falha só quando o serviço foi de fato solicitado |
+| 14 | Wake word durante um comando em andamento era descartada sem feedback | Espera curta pelo pipeline e aviso explícito se ainda estiver ocupado |
+| 15 | `onTaskRemoved` registrava um falso erro no diagnóstico | Apenas log de operação |
+| 16 | Teste Kotlin do matcher nunca era executado no CI (`flutter build` não compila `src/test`) | Step `./gradlew testDebugUnitTest` no `flutter-ci.yml` |
+
+### O que continua pendente (não simulado)
+
+1. **Motor KWS dedicado** (Porcupine/openWakeWord/sherpa-onnx/Vosk com léxico customizado): nenhum modelo ou AccessKey foi fornecido. A detecção continua sendo porta de volume + `SpeechRecognizer`; `ENGINE_IS_DEDICATED_KWS = false` e o HUD reporta a pendência.
+2. **Pré-roll de áudio**: o `SpeechRecognizer` não aceita PCM injetado; as ~200 ms usadas pelo portão de volume podem cortar o início da palavra. Só um motor KWS com buffer contínuo resolve isso — não foi falsificado.
+3. **Testes físicos** (app aberto, segundo plano, tela bloqueada, alternância de apps, economia de bateria, eco do próprio TTS, interrupção/retomada): não executados nesta revisão por ausência de aparelho conectado.
+4. **`flutter analyze` / `flutter test` / build APK**: a máquina de revisão não possui Flutter/Android SDK instalados; a validação é feita no CI (workflow `Flutter CI`) e o resultado é anexado ao relatório da Fase 2.
+5. **Segredo HMAC fixo** em `preparePcSyncPayload` (`ULTRON_LAN_GUARD`): utilitário de sincronização com o nó PC, sem uso pelo fluxo de wake word. Trocar por segredo configurável exige atualizar o contrato do nó PC.

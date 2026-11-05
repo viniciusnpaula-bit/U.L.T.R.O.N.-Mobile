@@ -49,10 +49,16 @@ object WakeWordMatcher {
         return levenshtein(n, TARGET) <= 1
     }
 
-    /** Índice da palavra de ativação em [phrase], ou -1. */
+    /** Índice da palavra de ativação em [phrase], ou -1.
+     *
+     * Só as 4 primeiras palavras são consideradas, igual a `WakeWord.hotwordIndex` no Dart.
+     * Sem esse limite, uma conversa comum que cite "Ultron" no meio da frase ativaria o
+     * assistente e o comando extraído no Flutter ficaria inconsistente.
+     */
     fun hotwordIndex(phrase: String): Int {
         val words = phrase.trim().split(Regex("\\s+"))
         for (i in words.indices) {
+            if (i >= 4) break
             if (isHotwordToken(words[i])) return i
         }
         return -1

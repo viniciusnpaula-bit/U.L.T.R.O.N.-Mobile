@@ -43,6 +43,13 @@ class WakeWordMatcherTest {
     }
 
     @Test
+    fun ignoresHotwordAfterFirstFourWords() {
+        // Mesmo limite do Dart (WakeWord.hotwordIndex): evita ativar no meio de uma conversa.
+        assertEquals(-1, WakeWordMatcher.hotwordIndex("eu falei para o ultron fazer isso"))
+        assertEquals(2, WakeWordMatcher.hotwordIndex("por favor ultron"))
+    }
+
+    @Test
     fun firstMatchPicksCandidateWithHotword() {
         assertEquals(
             "oi ultron",

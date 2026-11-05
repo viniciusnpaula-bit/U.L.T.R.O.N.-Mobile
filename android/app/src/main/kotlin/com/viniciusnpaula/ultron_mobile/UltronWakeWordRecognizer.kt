@@ -87,7 +87,7 @@ class UltronWakeWordRecognizer(
                     putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-                    putExtra("android.speech.extra.PREFER_OFFLINE", true)
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                     putExtra(
                         RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
                         1200L
@@ -169,7 +169,8 @@ class UltronWakeWordRecognizer(
     }
 
     private fun dispatch(phrase: String) {
-        if (dispatched) return
+        // destroy()/timeout marcam finished: um resultado atrasado não pode ativar de novo.
+        if (dispatched || finished) return
         dispatched = true
         onHotwordDetected(phrase)
     }

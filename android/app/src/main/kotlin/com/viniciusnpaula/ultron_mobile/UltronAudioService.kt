@@ -207,7 +207,8 @@ class UltronAudioService : Service() {
                     if (userPaused) "Escuta PAUSADA — microfone liberado"
                     else "Escuta contínua ativa — diga \"Ultron\""
                 )
-                return START_STICKY
+                // Pausa escolhida pelo usuário não deve ser "ressuscitada" por um restart sticky.
+                return if (userPaused) START_NOT_STICKY else START_STICKY
             }
         }
 
@@ -345,7 +346,13 @@ class UltronAudioService : Service() {
             rec.release()
             throw IllegalStateException("AudioRecord não inicializou (microfone ocupado?)")
         }
-        rec.startRecording()
+        try {
+            rec.startRecording()
+        } catch (e: Exception) {
+            // Sem release aqui o AudioRecord nativo ficaria vazando a cada tentativa.
+            safely("AudioRecord.release após falha de start") { rec.release() }
+            throw e
+        }
         if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
             rec.release()
             throw IllegalStateException("AudioRecord não entrou em gravação")
@@ -421,7 +428,16 @@ class UltronAudioService : Service() {
                     consecutiveVoiceFrames = 0
                     continue
                 }
-                if (readCount == 0) continue
+                if (readCount == 0) {
+                    // Leitura vazia não é captura comprovada: conta para o watchdog para que
+                    // a UI nunca continue dizendo "escutando" com o microfone travado.
+                    captureHealthy = false
+                    if (++silentFrames >= SILENT_FRAMES_BEFORE_RESTART) {
+                        Stats.micSilencedEvents++
+                        throw IllegalStateException("AudioRecord sem dados por 30 s")
+                    }
+                    continue
+                }
 
                 val rms = computeRms(pcmBuffer, readCount)
 
@@ -450,6 +466,8 @@ class UltronAudioService : Service() {
                         consecutiveVoiceFrames = 0
                         // O microfone é exclusivo: libera antes de abrir o SpeechRecognizer.
                         releaseRecorder(recorder); recorder = null
+                        // Enquanto o ASR detém o microfone não há captura contínua real.
+                        captureHealthy = false
                         val detected = onVoiceWakeTriggered()
                         if (detected) {
                             consecutiveMisses = 0
@@ -533,6 +551,8 @@ class UltronAudioService : Service() {
             recognizer.destroy()
             Stats.recognizerErrors++
             Stats.lastError = "SpeechRecognizer não respondeu em ${RECOGNIZER_WAIT_MS / 1000}s"
+            // onFinished não virá: a notificação permanente não pode ficar presa em "Verificando".
+            updateNotification("Escuta contínua ativa — diga \"Ultron\"")
         }
         // WakeLock só pelo tempo estritamente necessário: solta assim que o reconhecedor termina.
         releaseWakeLockSafely()
@@ -701,14 +721,16 @@ class UltronAudioService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        // O foreground service sobrevive ao swipe do app; apenas registra para diagnóstico.
-        Stats.lastError = "app removido dos recentes (serviço mantido)"
+        // O foreground service sobrevive ao swipe do app; não é erro (não poluir o diagnóstico).
+        wakeLogW("app removido dos recentes; serviço mantido")
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
         workerActive.set(false)
         isRunning = false
+        captureHealthy = false
+        Stats.economyMode = false
         vadThread?.interrupt()
         wakeWordRecognizer?.destroy()
         wakeWordRecognizer = null

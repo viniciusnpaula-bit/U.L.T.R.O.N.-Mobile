@@ -20,6 +20,8 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -91,7 +93,22 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     /** Entrega a wake word pendente ao Flutter; se o canal falhar, ela permanece pendente. */
     private fun deliverPendingWakeWord() {
         val channel = deviceChannel ?: return
-        if (isUltronSpeakingGlobal || isForegroundRecognizerActive) return
+        // Em segundo plano ou com a tela bloqueada o Flutter não deve abrir o microfone
+        // por conta própria: a palavra fica pendente e é entregue no onResume.
+        if (!isActivityResumed) return
+        if (isUltronSpeakingGlobal || isForegroundRecognizerActive) {
+            // Ocupado (TTS/reconhecimento em andamento): tenta de novo em vez de perder a ativação.
+            val pending = pendingWakeWord
+            if (pending != null) {
+                if (System.currentTimeMillis() - pendingWakeTimestampMs <= PENDING_WAKE_TTL_MS) {
+                    wakeDeliveryHandler.removeCallbacks(deliverPendingWakeRunnable)
+                    wakeDeliveryHandler.postDelayed(deliverPendingWakeRunnable, 500L)
+                } else {
+                    pendingWakeWord = null // expirou enquanto o núcleo estava ocupado
+                }
+            }
+            return
+        }
         val phrase = consumePendingWakeWord() ?: return
         channel.invokeMethod("onWakeWordDetected", phrase, object : MethodChannel.Result {
             override fun success(result: Any?) {}
@@ -181,6 +198,8 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     private var pendingSpeechResult: MethodChannel.Result? = null
     private var inlineRecognizer: SpeechRecognizer? = null
     private var lastPartialSpeech: String = ""
+    private val wakeDeliveryHandler = Handler(Looper.getMainLooper())
+    private val deliverPendingWakeRunnable = Runnable { deliverPendingWakeWord() }
 
     private val torchCallback = object : CameraManager.TorchCallback() {
         override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
@@ -223,6 +242,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
 
     override fun onPause() {
         isActivityResumed = false
+        // Flip-to-Shush é um gesto de primeiro plano: sem o sensor registrado, o estado
+        // "virado para baixo" ficaria preso e pausaria o sentinela para sempre.
+        isFaceDown = false
+        isFaceDownGlobal = false
         try {
             sensorManager?.unregisterListener(this)
         } catch (_: Exception) {
@@ -277,13 +300,25 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     override fun onDestroy() {
         isActivityResumed = false
         if (instance == this) instance = null
+        wakeDeliveryHandler.removeCallbacksAndMessages(null)
         destroyInlineRecognizer()
+        // Sem isso, uma Activity destruída no meio da escuta deixaria o sentinela "surdo"
+        // (isForegroundRecognizerActive preso em true) e o Future do Flutter pendurado.
+        isForegroundRecognizerActive = false
+        lastSpeechEndTimestampMs = System.currentTimeMillis()
+        resolvePendingSpeech("")
         try {
             sensorManager?.unregisterListener(this)
             cameraManager?.unregisterTorchCallback(torchCallback)
         } catch (_: Exception) {
         }
         super.onDestroy()
+    }
+
+    private fun resolvePendingSpeech(spoken: String) {
+        val callback = pendingSpeechResult ?: return
+        pendingSpeechResult = null
+        safely("resolver pendingSpeechResult") { callback.success(spoken) }
     }
 
     private fun initTorchManager() {
