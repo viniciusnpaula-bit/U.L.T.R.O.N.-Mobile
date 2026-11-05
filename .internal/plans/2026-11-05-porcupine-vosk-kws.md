@@ -791,7 +791,7 @@ git commit -m "feat(kws): transcritor Vosk com pre-roll e descarga por inativida
 
 **Interfaces:**
 - Consumes: `AudioRingBuffer`, `PorcupineKeywordSpotter`, `VoskCommandTranscriber`, `WakePhraseComposer`, `FalseTriggerBackoff`
-- Produces: `onVoiceWakeTriggered(preroll: ShortArray, readMore: (ShortArray) -> Int): Boolean` (contrato interno)
+- Produces: `onVoiceWakeTriggered(preroll: ShortArray, transcriber: VoskCommandTranscriber, readMore: (ShortArray) -> Int): String?` (contrato interno)
 
 **Acceptance Criteria:**
 - Loop lê 512 amostras a 16 kHz e alimenta Porcupine + anel.
@@ -840,6 +840,7 @@ Substitua o corpo de `runCaptureSession()` mantendo as guardas. Estrutura final:
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         var recorder: AudioRecord? = null
         var silentFrames = 0
+        var frame = ShortArray(spotter.frameLength)
 
         try {
             while (workerActive.get()) {
@@ -852,7 +853,8 @@ Substitua o corpo de `runCaptureSession()` mantendo as guardas. Estrutura final:
                     silentFrames = 0
                 }
 
-                val frame = ShortArray(spotter.frameLength)
+                // Alocado uma vez: 512 amostras por frame a 32 ms, ~31 alocacoes/s seriam lixo.
+                if (frame.size != spotter.frameLength) frame = ShortArray(spotter.frameLength)
                 val readCount = recorder.read(frame, 0, frame.size)
                 if (readCount < 0) throw IllegalStateException("AudioRecord.read=$readCount")
                 if (isSpeakerOrRecognizerBusy(audioManager)) continue
@@ -875,7 +877,7 @@ Substitua o corpo de `runCaptureSession()` mantendo as guardas. Estrutura final:
 
                 captureHealthy = true
                 val activeRecorder = recorder ?: continue
-                val phrase = onVoiceWakeTriggered(ring.snapshot()) { buffer ->
+                val phrase = onVoiceWakeTriggered(ring.snapshot(), transcriber) { buffer ->
                     activeRecorder.read(buffer, 0, buffer.size)
                 }
                 ring.clear()
@@ -900,6 +902,7 @@ Substitua o corpo de `runCaptureSession()` mantendo as guardas. Estrutura final:
     /** Retorna a frase a entregar, ou null quando não houve comando útil. */
     private fun onVoiceWakeTriggered(
         preroll: ShortArray,
+        transcriber: VoskCommandTranscriber,
         readMore: (ShortArray) -> Int,
     ): String? {
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -936,11 +939,23 @@ Substitua o corpo de `runCaptureSession()` mantendo as guardas. Estrutura final:
     }
 ```
 
-- [ ] **Step 4: Update constants**
+- [ ] **Step 4: Update constants and Stats**
 
 ```kotlin
     private const val SAMPLE_RATE_HZ = 16_000
     private const val PREROLL_SAMPLES = 24_000 // 1,5 s a 16 kHz
+```
+
+Adicione os contadores novos em `Stats` (a Task 8 só os expõe):
+
+```kotlin
+        @Volatile var wakeDetections = 0
+        @Volatile var voskCommands = 0
+        @Volatile var voskLoadMs = 0L
+        @Volatile var lastCommandMs = 0L
+        @Volatile var voskResident = false
+        @Volatile var kwsConfigured = false
+        @Volatile var kwsUnavailableReason: String = "não inicializado"
 ```
 
 Remova `WINDOW_MS`, `MIN_VOICE_RMS`, `MAX_VOICE_RMS`, `NOISE_MARGIN`,
@@ -990,14 +1005,7 @@ git commit -m "feat(kws): handler de comando por Vosk com backoff (Task 7)"
 
 ```kotlin
     object Stats {
-        // ... campos existentes ...
-        @Volatile var wakeDetections = 0
-        @Volatile var voskCommands = 0
-        @Volatile var voskLoadMs = 0L
-        @Volatile var lastCommandMs = 0L
-        @Volatile var voskResident = false
-        @Volatile var kwsConfigured = false
-        @Volatile var kwsUnavailableReason: String = "não inicializado"
+        // ... campos existentes (os novos entram na Task 7) ...
     }
 ```
 
@@ -1277,7 +1285,7 @@ if (-not (adb devices | Select-String "device$")) { throw "Nenhum dispositivo ad
 adb install -r $Apk
 adb logcat -c
 Write-Host "Rode os cenarios. Ctrl+C encerra a coleta."
-adb logcat -s Ultron:V
+adb logcat -s UltronWake:V
 ```
 
 - [ ] **Step 3: Verify the script fails honestly**
