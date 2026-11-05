@@ -14,9 +14,9 @@ class AiSettingsScreen extends StatefulWidget {
 }
 
 class _AiSettingsScreenState extends State<AiSettingsScreen> {
-  static const _crimson = Color(0xFF75020F);
-  static const _rose = Color(0xFFFF707C);
-  static const _emerald = Color(0xFFFF707C);
+  static const _crimson = Color(0xFFE50914);
+  static const _rose = Color(0xFFFFA0A0);
+  static const _emerald = Color(0xFFFFA0A0);
   static const _border = Color(0xFF51080D);
 
   late final AiProviderStore _store = widget._store ?? AiProviderStore();
@@ -260,7 +260,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         suffixIcon: suffixIcon,
         isDense: true,
         filled: true,
-        fillColor: const Color(0xFF2B0307),
+        fillColor: const Color(0xFF2E0305),
         labelStyle: const TextStyle(color: Color(0xFFA89698), fontSize: 11),
         hintStyle: const TextStyle(color: Color(0xFF635355), fontSize: 11),
         enabledBorder: OutlineInputBorder(
@@ -273,11 +273,11 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFFFF707C)),
+          borderSide: const BorderSide(color: Color(0xFFFFA0A0)),
         ),
         focusedErrorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFFFF707C)),
+          borderSide: const BorderSide(color: Color(0xFFFFA0A0)),
         ),
       );
 
@@ -288,9 +288,9 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         : _selectedPreset.recommendedModels;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF19171B),
+      backgroundColor: const Color(0xFF0A0002),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF19171B),
+        backgroundColor: const Color(0xFF0A0002),
         foregroundColor: _crimson,
         elevation: 0,
         title: const Column(
@@ -325,7 +325,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [Color(0xFF2B0307), Color(0xFF19171B)],
+                      colors: [Color(0xFF2E0305), Color(0xFF0A0002)],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
@@ -392,7 +392,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         width: double.infinity,
                         child: FilledButton.icon(
                           style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF2B0307),
+                            backgroundColor: const Color(0xFF2E0305),
                             foregroundColor: _rose,
                             side: const BorderSide(color: _crimson),
                             padding: const EdgeInsets.symmetric(vertical: 9),
@@ -453,8 +453,8 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                           padding: const EdgeInsets.all(11),
                           decoration: BoxDecoration(
                             color: isSelected
-                                ? const Color(0xFF2B0307)
-                                : const Color(0xFF19171B),
+                                ? const Color(0xFF2E0305)
+                                : const Color(0xFF0A0002),
                             borderRadius: BorderRadius.circular(13),
                             border: Border.all(
                               color: isSelected ? _crimson : _border,
@@ -475,7 +475,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                     ),
                                     decoration: BoxDecoration(
                                       color: preset.requiresKey
-                                          ? const Color(0xFF2B0307)
+                                          ? const Color(0xFF2E0305)
                                           : _emerald.withValues(alpha: 0.18),
                                       borderRadius: BorderRadius.circular(5),
                                       border: Border.all(
@@ -540,7 +540,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                         ),
                                         alignment: Alignment.center,
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFF2B0307),
+                                          color: const Color(0xFF2E0305),
                                           borderRadius:
                                               BorderRadius.circular(6),
                                           border: Border.all(
@@ -571,7 +571,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                           vertical: 5,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFF2B0307),
+                                          color: const Color(0xFF2E0305),
                                           borderRadius:
                                               BorderRadius.circular(6),
                                           border: Border.all(color: _border),
@@ -634,7 +634,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.all(11),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF19171B),
+                      color: const Color(0xFF0A0002),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: _providers[i].enabled
@@ -653,7 +653,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF2B0307),
+                                color: const Color(0xFF2E0305),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
@@ -674,7 +674,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               decoration: BoxDecoration(
                                 color: _providers[i].isKeylessProvider
                                     ? _emerald.withValues(alpha: 0.15)
-                                    : const Color(0xFF2B0307),
+                                    : const Color(0xFF2E0305),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
@@ -749,7 +749,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                   vertical: 4,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF2B0307),
+                                  color: const Color(0xFF2E0305),
                                   borderRadius: BorderRadius.circular(6),
                                   border: Border.all(
                                     color: _crimson.withValues(alpha: 0.4),
@@ -824,7 +824,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               icon: const Icon(
                                 Icons.delete_outline,
                                 size: 16,
-                                color: Color(0xFFFF707C),
+                                color: Color(0xFFFFA0A0),
                               ),
                               onPressed: () {
                                 final copy = [..._providers]..removeAt(i);
@@ -842,7 +842,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF19171B),
+                    color: const Color(0xFF0A0002),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: _border),
                   ),
@@ -1000,7 +1000,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                       decoration: BoxDecoration(
                                         color: _model.text.trim() == m
                                             ? _crimson
-                                            : const Color(0xFF2B0307),
+                                            : const Color(0xFF2E0305),
                                         borderRadius: BorderRadius.circular(6),
                                         border: Border.all(
                                           color: _model.text.trim() == m
