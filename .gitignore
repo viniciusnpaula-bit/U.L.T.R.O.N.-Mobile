@@ -10,3 +10,7 @@ build/
 
 # Modelo Vosk (baixado no CI, verificado por SHA-256) — nao versionar.
 android/app/src/main/assets/vosk/
+
+# Artifacts de build e APKs locais
+ultron-release-apk/
+*.apk
