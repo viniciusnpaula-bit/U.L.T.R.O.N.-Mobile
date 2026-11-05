@@ -123,3 +123,42 @@ Enquanto esses modelos específicos não forem fornecidos, o app mantém transpa
 3. **Testes físicos** (app aberto, segundo plano, tela bloqueada, alternância de apps, economia de bateria, eco do próprio TTS, interrupção/retomada): não executados nesta revisão por ausência de aparelho conectado.
 4. **`flutter analyze` / `flutter test` / build APK**: a máquina de revisão não possui Flutter/Android SDK instalados; a validação é feita no CI (workflow `Flutter CI`) e o resultado é anexado ao relatório da Fase 2.
 5. **Segredo HMAC fixo** em `preparePcSyncPayload` (`ULTRON_LAN_GUARD`): utilitário de sincronização com o nó PC, sem uso pelo fluxo de wake word. Trocar por segredo configurável exige atualizar o contrato do nó PC.
+
+---
+
+## 8. Fase 3 — Motor KWS dedicado (v1.3.0+15)
+
+Status: **implementado no código; detecção real depende de artefatos do usuário** (`.ppn` treinado + AccessKey do Picovoice). Sem eles o app compila, roda e reporta "KWS não configurado" com motivo visível; a voz manual segue funcionando.
+
+### Decisões (D1–D9, spec `.internal/specs/2026-11-05-porcupine-vosk-kws-design.md`)
+
+| # | Decisão |
+|---|---|
+| D1 | **Porcupine (Picovoice)** para o KWS da palavra "ultron" em português. |
+| D2 | **Vosk offline** como transcritor do comando, alimentado por anel de pré-roll de 1,5 s. |
+| D3 | Modelo Vosk embarcado no APK via CI (`vosk-model-small-pt-0.3.zip`), verificado por SHA-256 fixo. |
+| D4 | AccessKey via GitHub Secret `PORCUPINE_ACCESS_KEY` → `BuildConfig.PORCUPINE_ACCESS_KEY`; nunca no repositório, nunca logada. |
+| D5 | Vosk descarregado da memória após 2 min de inatividade (nunca durante uma transcrição). |
+| D6 | Frase entregue ao Dart sempre começa com "ultron" (prefixo nativo quando necessário). |
+| D7 | **Sem fallback**: porta de volume RMS removida do caminho de ativação. Sem KWS, a feature fica off. |
+| D8 | Gatilho só vira ativação com texto útil (>= 2 caracteres) do Vosk; vazio = miss silencioso com cooldown de 1,5 s e backoff 5/10/20 s (teto 30 s). |
+| D9 | Versão **1.3.0+15** com nota de release explícita sobre a exigência de configuração. |
+
+### O que foi removido
+
+- Porta de volume RMS como gatilho de ativação (`MIN_VOICE_RMS`, `WINDOW_MS`, limiar adaptativo etc. eliminados do caminho de wake). O RMS continua calculado apenas como telemetria (`noiseFloor`/`threshold`), sem bloquear nada.
+- `UltronWakeWordRecognizer.kt` (caminho antigo via `SpeechRecognizer`). O reconhecedor de voz manual da Activity permanece inalterado.
+- Constantes `ENGINE_DESCRIPTION` / `ENGINE_IS_DEDICATED_KWS`. O diagnóstico agora calcula `engine` e `dedicatedKws` em tempo de execução a partir de `Stats.kwsConfigured`.
+
+### O que depende do usuário
+
+- `android/app/src/main/assets/porcupine/ultron_pt.ppn`, treinado no Picovoice Console (Portuguese, frase `ultron`, plataforma Android). Veja `android/app/src/main/assets/porcupine/README.md`.
+- GitHub Secret `PORCUPINE_ACCESS_KEY` no repositório (injetado no `env` do job de CI).
+- Medição de bateria (`scripts/battery-test.ps1`, `scripts/perfetto-ultron.cfg`) e os 12 cenários físicos (`docs/PHYSICAL_TEST_PROTOCOL.md`) executados pelo operador em aparelho real — não executáveis nesta revisão por ausência de aparelho conectado.
+- APK cresce ~32 MB (modelo Vosk ~45 MB compactado).
+
+### Segurança
+
+- Áudio nunca persistido: anel de 1,5 s vive só em RAM, é zerado em `stop`/`destroy`; não existe gravação WAV de diagnóstico.
+- AccessKey nunca logada nem incluída no diagnóstico. Como é injetada no `BuildConfig`, é extraível do APK (característica do Picovoice): APK compartilhado consome a quota da conta.
+- A palavra de ativação não autoriza ações sensíveis: PIN, biometria e Action Gate (`ULTRON_LAN_GUARD`) continuam intocados.
