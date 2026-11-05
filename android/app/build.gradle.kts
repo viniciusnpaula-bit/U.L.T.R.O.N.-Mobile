@@ -25,12 +25,23 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "com.viniciusnpaula.ultron_mobile"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // AccessKey do Porcupine via -PporcupineAccessKey ou env PORCUPINE_ACCESS_KEY.
+        // Vazia quando nao configurada: o app compila e reporta "KWS nao configurado".
+        buildConfigField(
+            "String",
+            "PORCUPINE_ACCESS_KEY",
+            "\"${(project.findProperty("porcupineAccessKey") as? String) ?: System.getenv("PORCUPINE_ACCESS_KEY") ?: ""}\""
+        )
     }
 
     signingConfigs {
@@ -68,5 +79,8 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    implementation("ai.picovoice:porcupine-android:3.0.1")
+    implementation("com.alphacephei:vosk-android:0.3.47@aar")
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
     testImplementation("junit:junit:4.13.2")
 }

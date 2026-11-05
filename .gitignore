@@ -7,3 +7,6 @@ build/
 .env
 .env.*
 !.env.example
+
+# Modelo Vosk (baixado no CI, verificado por SHA-256) — nao versionar.
+android/app/src/main/assets/vosk/
