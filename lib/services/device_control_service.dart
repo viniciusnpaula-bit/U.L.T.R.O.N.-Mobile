@@ -156,6 +156,13 @@ class WakeWordDiagnostics {
     this.noiseFloor = 0,
     this.threshold = 0,
     this.economyMode = false,
+    // Motor KWS dedicado (v1.3.0)
+    this.kwsUnavailableReason = '',
+    this.wakeDetections = 0,
+    this.voskCommands = 0,
+    this.voskLoadMs = 0,
+    this.lastCommandMs = 0,
+    this.voskResident = false,
   });
 
   factory WakeWordDiagnostics.fromMap(Map<Object?, Object?> m) {
@@ -186,6 +193,13 @@ class WakeWordDiagnostics {
       noiseFloor: i('noiseFloor'),
       threshold: i('threshold'),
       economyMode: b('economyMode'),
+      // Motor KWS dedicado (v1.3.0)
+      kwsUnavailableReason: s('kwsUnavailableReason', ''),
+      wakeDetections: i('wakeDetections'),
+      voskCommands: i('voskCommands'),
+      voskLoadMs: i('voskLoadMs'),
+      lastCommandMs: i('lastCommandMs'),
+      voskResident: b('voskResident'),
     );
   }
 
@@ -215,10 +229,23 @@ class WakeWordDiagnostics {
   final int noiseFloor;
   final int threshold;
   final bool economyMode;
+  /// Motivo pelo qual o KWS dedicado não está ativo (vazio quando configurado).
+  final String kwsUnavailableReason;
+  /// Gatilhos do Porcupine recebidos pelo serviço nativo.
+  final int wakeDetections;
+  /// Comandos transcritos com sucesso pelo Vosk.
+  final int voskCommands;
+  /// Millissegundos gastos na última carga/transcrição do Vosk.
+  final int voskLoadMs;
+  /// Millissegundos do último comando de voz concluído.
+  final int lastCommandMs;
+  /// Modelo do Vosk residente em memória no momento do diagnóstico.
+  final bool voskResident;
 
   /// Resumo multilinha para exibir no HUD.
   String toReport() => [
         'Motor: $engine',
+        if (kwsUnavailableReason.isNotEmpty) 'KWS: $kwsUnavailableReason',
         if (!dedicatedKws) 'PENDENTE: sem modelo/motor KWS dedicado — a detecção depende de volume + reconhecedor do sistema.',
         'Captura real: ${capturing ? "CONFIRMADA" : "NÃO confirmada"} · Serviço: ${running ? "vivo" : "parado"}${paused ? " · PAUSADO" : ""}${economyMode ? " · economia" : ""}',
         'Android API $sdk · Notificações: ${notificationsPermission ? "permitidas" : "NEGADAS"}',
@@ -227,6 +254,7 @@ class WakeWordDiagnostics {
         'Gatilhos de voz: $voiceTriggers · Ativações: $detections · Sem match: $recognizerMisses',
         'Erros do reconhecedor: $recognizerErrors · Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
         'Ruído/limiar: $noiseFloor/$threshold · Último gatilho: $lastTrigger',
+        'Vosk: $voskCommands comandos · último: ${lastCommandMs}ms',
         if (lastPhrase.isNotEmpty) 'Última frase: "$lastPhrase"',
         'Último erro: $lastError',
       ].join('\n');
