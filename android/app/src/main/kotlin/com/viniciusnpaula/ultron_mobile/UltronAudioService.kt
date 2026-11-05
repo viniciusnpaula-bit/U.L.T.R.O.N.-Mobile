@@ -19,29 +19,28 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.speech.SpeechRecognizer
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 
 /**
- * UltronAudioService (Wake Word Reliability v1.2.1):
- * 1. Escuta CONTÍNUA e leve: AudioRecord (8 kHz) lido em frames de 100 ms, sem janelas cegas.
- *    Limiar de voz ADAPTATIVO (piso de ruído x margem) no lugar do RMS fixo.
- * 2. Ao detectar voz, libera o AudioRecord (o microfone é exclusivo) e abre o
- *    SpeechRecognizer; ao terminar, reabre a captura. Backoff exponencial para falsos
- *    gatilhos repetidos, mantendo o consumo de bateria sob controle.
+ * UltronAudioService (motor KWS dedicado v1.3.0):
+ * 1. Escuta CONTÍNUA e leve: um único AudioRecord (16 kHz, mono, PCM16) lido em frames
+ *    de 512 amostras (32 ms), sem janelas cegas. Cada frame alimenta o Porcupine e o
+ *    anel de pre-roll de 1,5 s. O microfone nunca é solto entre a palavra e o comando.
+ * 2. Ao detectar "Ultron", o Vosk transcreve o anel de pre-roll mais o áudio ao vivo,
+ *    sem handoff do microfone nem SpeechRecognizer. Transcrição vazia = miss silencioso
+ *    com cooldown e backoff progressivo (5s/10s/20s, teto 30s).
  * 3. Half-Duplex Anti-Eco preservado: nunca escuta enquanto o Ultron fala.
- * 4. Watchdog: qualquer falha do AudioRecord/SpeechRecognizer religa a captura com
- *    backoff exponencial (1s até 30s), detecta microfone silenciado pelo sistema e
- *    registra tudo em [diagnostics].
- * 5. Ativação com app em segundo plano/tela bloqueada via notificação full-screen; o
+ * 4. Watchdog: falha de AudioRecord ou microfone silenciado religa a captura com
+ *    backoff exponencial (1s até 30s), limite de 8 falhas consecutivas.
+ * 5. Sem motor KWS configurado (sem AccessKey ou sem .ppn): o loop encerra, o diagnóstico
+ *    expõe o motivo e a voz manual continua funcionando.
+ * 6. Ativação com app em segundo plano/tela bloqueada via notificação full-screen; o
  *    evento fica pendente em [MainActivity] até o Flutter consumi-lo.
  */
 class UltronAudioService : Service() {
@@ -55,38 +54,20 @@ class UltronAudioService : Service() {
         const val ACTION_SAY_TIME = "com.viniciusnpaula.ultron_mobile.SAY_TIME_OFFLINE"
         const val ACTION_TOGGLE_PAUSE = "com.viniciusnpaula.ultron_mobile.TOGGLE_PAUSE_AUDIO_SERVICE"
 
-        /**
-         * Motor de detecção realmente em uso. NÃO existe motor de keyword spotting dedicado
-         * (Porcupine/openWakeWord/Vosk): a detecção é porta de volume + SpeechRecognizer.
-         * Mantido explícito para a UI nunca sugerir um motor que não existe.
-         */
-        const val ENGINE_DESCRIPTION = "PORTA DE VOLUME + SpeechRecognizer (sem motor KWS dedicado)"
-        const val ENGINE_IS_DEDICATED_KWS = false
         const val EXTRA_WAKE_WORD = "ultron_wake_word_trigger"
 
         const val PREFS_NAME = "ultron_sentinel_prefs"
         const val PREF_ENABLED = "sentinel_enabled"
         const val PREF_BOOT_AUTOSTART = "boot_autostart"
 
-        private const val SAMPLE_RATE_HZ = 8000
-        private const val WINDOW_MS = 100
+        private const val SAMPLE_RATE_HZ = 16_000
+        private const val PREROLL_SAMPLES = 24_000 // 1,5 s de pre-roll a 16 kHz
 
         private const val SLEEP_SPEAKER_GUARD_MS = 400L
         private const val SLEEP_PAUSED_STATE_MS = 1500L
         private const val SLEEP_LOW_BATTERY_MS = 10000L
         private const val POST_SPEECH_ECHO_GUARD_MS = 1100L
         private const val BATTERY_CHECK_INTERVAL_MS = 30_000L
-
-        private const val MIN_VOICE_RMS = 700.0
-        private const val MAX_VOICE_RMS = 3500.0
-        private const val NOISE_MARGIN = 3.2
-        private const val INITIAL_NOISE_FLOOR = 300.0
-        private const val VOICE_FRAMES_TO_TRIGGER = 2
-
-        private const val BASE_MISS_COOLDOWN_MS = 1200L
-        private const val MAX_MISS_COOLDOWN_MS = 12_000L
-        private const val DETECTED_COOLDOWN_MS = 2500L
-        private const val RECOGNIZER_WAIT_MS = 10_000L
 
         private const val SILENT_FRAMES_BEFORE_RESTART = 300 // 30 s de zeros = mic silenciado
         private const val MAX_RESTART_BACKOFF_MS = 30_000L
@@ -123,9 +104,18 @@ class UltronAudioService : Service() {
             @Volatile var micSilencedEvents = 0
             @Volatile var lastError = "nenhum"
             @Volatile var lastPhrase = ""
-            @Volatile var noiseFloor = INITIAL_NOISE_FLOOR
-            @Volatile var threshold = MIN_VOICE_RMS
+            @Volatile var noiseFloor = 300.0
+            @Volatile var threshold = 0.0 // sem gate; mantido so para o contrato do Dart
             @Volatile var economyMode = false
+
+            // Motor KWS dedicado (Task 7+)
+            @Volatile var wakeDetections = 0
+            @Volatile var voskCommands = 0
+            @Volatile var voskLoadMs = 0L
+            @Volatile var lastCommandMs = 0L
+            @Volatile var voskResident = false
+            @Volatile var kwsConfigured = false
+            @Volatile var kwsUnavailableReason: String = "nao inicializado"
         }
 
         fun diagnostics(context: Context): Map<String, Any> {
@@ -139,8 +129,15 @@ class UltronAudioService : Service() {
                 "running" to isRunning,
                 "capturing" to isListeningForReal(),
                 "paused" to userPaused,
-                "engine" to ENGINE_DESCRIPTION,
-                "dedicatedKws" to ENGINE_IS_DEDICATED_KWS,
+                "engine" to if (Stats.kwsConfigured) "Porcupine pt-BR + Vosk (KWS dedicado)"
+                            else "KWS nao configurado",
+                "dedicatedKws" to Stats.kwsConfigured,
+                "kwsUnavailableReason" to Stats.kwsUnavailableReason,
+                "wakeDetections" to Stats.wakeDetections,
+                "voskCommands" to Stats.voskCommands,
+                "voskLoadMs" to Stats.voskLoadMs,
+                "lastCommandMs" to Stats.lastCommandMs,
+                "voskResident" to Stats.voskResident,
                 "sdk" to Build.VERSION.SDK_INT,
                 "notificationsPermission" to (
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -171,8 +168,6 @@ class UltronAudioService : Service() {
     private val workerActive = AtomicBoolean(false)
     private var vadThread: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    @Volatile
-    private var wakeWordRecognizer: UltronWakeWordRecognizer? = null
 
     private var lastBatteryCheckMs = 0L
     private var batteryCritical = false
@@ -367,15 +362,28 @@ class UltronAudioService : Service() {
 
     /** Uma sessão de captura; lança exceção em falha para o watchdog religar. */
     private fun runCaptureSession() {
-        val windowSamples = (SAMPLE_RATE_HZ * WINDOW_MS) / 1000
-        val pcmBuffer = ShortArray(windowSamples)
+        val spotter = PorcupineKeywordSpotter(applicationContext, BuildConfig.PORCUPINE_ACCESS_KEY)
+        spotter.init()
+        Stats.kwsConfigured = spotter.isConfigured
+        Stats.kwsUnavailableReason = spotter.unavailableReason ?: ""
+        // Falha rápida: sem motor configurado o serviço não lê nem descarta áudio, nem deixa
+        // a UI dizer "capturando" (mesmo problema da v1.2.1). A voz manual segue funcionando.
+        if (!spotter.isConfigured) {
+            captureHealthy = false
+            Stats.lastError = "KWS indisponível: ${Stats.kwsUnavailableReason}"
+            updateNotification("KWS não configurado — ativação por voz indisponível")
+            spotter.close()
+            return
+        }
+
+        val transcriber = VoskCommandTranscriber(applicationContext)
+        val ring = AudioRingBuffer(PREROLL_SAMPLES)
+        val backoff = FalseTriggerBackoff()
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         var recorder: AudioRecord? = null
-
-        var noiseFloor = INITIAL_NOISE_FLOOR
-        var consecutiveVoiceFrames = 0
         var silentFrames = 0
-        var consecutiveMisses = 0
+        // Alocado uma vez fora do lixo: 512 amostras por frame (32 ms a 16 kHz).
+        var frame = ShortArray(spotter.frameLength)
 
         try {
             while (workerActive.get()) {
@@ -398,39 +406,34 @@ class UltronAudioService : Service() {
                 // 2. Pausa pelo usuário, em ligação/VoIP ou Flip-to-Shush: microfone liberado.
                 val inCall = audioManager != null && audioManager.mode != AudioManager.MODE_NORMAL
                 if (userPaused || inCall || MainActivity.isFaceDownGlobal) {
-                    consecutiveVoiceFrames = 0
                     releaseRecorder(recorder); recorder = null
                     captureHealthy = false
                     Thread.sleep(SLEEP_PAUSED_STATE_MS)
                     continue
                 }
 
-                // 3. Half-Duplex Anti-Eco: NUNCA escuta enquanto o Ultron fala ou o mic principal está aberto.
+                // 3. Half-Duplex Anti-Eco: NUNCA escuta enquanto o Ultron fala.
                 if (isSpeakerOrRecognizerBusy(audioManager)) {
-                    consecutiveVoiceFrames = 0
                     releaseRecorder(recorder); recorder = null
                     Thread.sleep(SLEEP_SPEAKER_GUARD_MS)
                     continue
                 }
 
-                // 4. Garante o AudioRecord aberto (reabre após fala, chamada ou gatilho).
+                // 4. Garante o AudioRecord aberto.
                 if (recorder == null) {
                     recorder = createRecorder()
                     silentFrames = 0
                 }
 
-                // 5. Leitura bloqueante de 100 ms: sem sono entre frames = sem janela cega.
-                val readCount = recorder.read(pcmBuffer, 0, windowSamples)
+                // 5. Leitura bloqueante de um frame 16 kHz (32 ms): sem sono entre frames.
+                val readCount = recorder.read(frame, 0, frame.size)
                 if (readCount < 0) {
                     throw IllegalStateException("AudioRecord.read=$readCount")
                 }
                 if (isSpeakerOrRecognizerBusy(audioManager)) {
-                    consecutiveVoiceFrames = 0
                     continue
                 }
                 if (readCount == 0) {
-                    // Leitura vazia não é captura comprovada: conta para o watchdog para que
-                    // a UI nunca continue dizendo "escutando" com o microfone travado.
                     captureHealthy = false
                     if (++silentFrames >= SILENT_FRAMES_BEFORE_RESTART) {
                         Stats.micSilencedEvents++
@@ -439,58 +442,48 @@ class UltronAudioService : Service() {
                     continue
                 }
 
-                val rms = computeRms(pcmBuffer, readCount)
-
-                // 6. Microfone silenciado pelo sistema (frames 100% zero por 30 s): é FALHA,
-                //    não escuta. Vai ao watchdog (backoff + limite), nunca é tratada como sucesso.
+                val rms = computeRms(frame, readCount)
+                // 6. Microfone silenciado pelo sistema (áudio zerado por 30 s): é FALHA,
+                //    nunca captura. Vai ao watchdog com backoff e limite de 8 falhas.
                 if (rms == 0.0) {
                     if (++silentFrames >= SILENT_FRAMES_BEFORE_RESTART) {
                         Stats.micSilencedEvents++
-                        throw IllegalStateException("Microfone silenciado pelo sistema (áudio zerado por 30 s)")
+                        throw IllegalStateException("Microfone silenciado pelo sistema (áudio zerado)")
                     }
                 } else {
                     silentFrames = 0
-                    // Sucesso REAL: áudio não nulo lido do AudioRecord.
                     captureHealthy = true
                     consecutiveFailures = 0
                 }
+                Stats.noiseFloor = rms // telemetria apenas; nunca é gatilho de ativação
 
-                // 7. Limiar adaptativo: piso de ruído (média móvel) x margem.
-                val threshold = (noiseFloor * NOISE_MARGIN).coerceIn(MIN_VOICE_RMS, MAX_VOICE_RMS)
-                Stats.noiseFloor = noiseFloor
-                Stats.threshold = threshold
+                // 7. Frame vai para o anel de pre-roll e para o Porcupine.
+                ring.write(frame, readCount)
+                val triggered = spotter.process(frame)
+                if (!triggered) {
+                    backoff.onQuiet(System.currentTimeMillis())
+                    transcriber.unloadAfterIdle(System.currentTimeMillis())
+                    continue
+                }
 
-                if (rms >= threshold) {
-                    consecutiveVoiceFrames++
-                    if (consecutiveVoiceFrames >= VOICE_FRAMES_TO_TRIGGER) {
-                        consecutiveVoiceFrames = 0
-                        // O microfone é exclusivo: libera antes de abrir o SpeechRecognizer.
-                        releaseRecorder(recorder); recorder = null
-                        // Enquanto o ASR detém o microfone não há captura contínua real.
-                        captureHealthy = false
-                        val detected = onVoiceWakeTriggered()
-                        if (detected) {
-                            consecutiveMisses = 0
-                            Thread.sleep(DETECTED_COOLDOWN_MS)
-                        } else {
-                            consecutiveMisses++
-                            val cooldown = (BASE_MISS_COOLDOWN_MS shl
-                                (consecutiveMisses - 1).coerceAtMost(4))
-                                .coerceAtMost(MAX_MISS_COOLDOWN_MS)
-                            Thread.sleep(cooldown)
-                        }
-                    }
+                // 8. Gatilho: transcreve pre-roll + ao vivo SEM soltar o microfone.
+                captureHealthy = true
+                val activeRecorder = recorder ?: continue
+                val phrase = onVoiceWakeTriggered(ring.snapshot(), transcriber) { buffer ->
+                    activeRecorder.read(buffer, 0, buffer.size)
+                }
+                ring.clear()
+                if (phrase != null) {
+                    backoff.onSuccess(System.currentTimeMillis())
+                    onWakeConfirmed(phrase)
                 } else {
-                    consecutiveVoiceFrames = 0
-                    noiseFloor = (noiseFloor * 0.98 + rms * 0.02).coerceIn(50.0, 1500.0)
-                    if (consecutiveMisses > 0 && rms < threshold * 0.5) {
-                        // Ambiente calmo: perdoa falsos gatilhos antigos aos poucos.
-                        consecutiveMisses = 0
-                    }
+                    Thread.sleep(backoff.onMiss(System.currentTimeMillis()))
                 }
             }
         } finally {
             releaseRecorder(recorder)
+            spotter.close()
+            transcriber.close()
         }
     }
 
@@ -503,60 +496,54 @@ class UltronAudioService : Service() {
         return sqrt(sumSq.toDouble() / count.coerceAtLeast(1))
     }
 
-    /** Abre o reconhecedor e BLOQUEIA o thread de captura até ele terminar. Retorna true se ativou. */
-    private fun onVoiceWakeTriggered(): Boolean {
+    /**
+     * Gatilho confirmado: transcreve pre-roll + ao vivo com o Vosk e devolve a frase pronta
+     * para o Flutter, ou null quando não houve comando útil. O microfone NÃO é solto entre
+     * a palavra e o comando (sem handoff: o início do comando está no anel de pre-roll).
+     *
+     * Retorna "ultron" sozinho quando o Vosk está indisponível: o Dart reconhece o hotword
+     * sem comando e oferece a voz manual.
+     */
+    private fun onVoiceWakeTriggered(
+        preroll: ShortArray,
+        transcriber: VoskCommandTranscriber,
+        readMore: (ShortArray) -> Int,
+    ): String? {
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        if (isSpeakerOrRecognizerBusy(audioManager)) return false
+        if (isSpeakerOrRecognizerBusy(audioManager)) return null
 
-        wakeLock?.acquire(15_000L)
         val nowStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         lastTriggerTimestamp = nowStr
         Stats.voiceTriggers++
-        updateNotification("Verificando palavra 'Ultron'... ($nowStr)")
+        Stats.wakeDetections++
+        updateNotification("Palavra detectada — ouvindo comando ($nowStr)")
 
-        val latch = CountDownLatch(1)
-        var detected = false
-
-        wakeWordRecognizer?.destroy()
-        val recognizer = UltronWakeWordRecognizer(
-            context = applicationContext,
-            onHotwordDetected = { matched ->
-                detected = true
-                Stats.detections++
-                Stats.lastPhrase = matched
-                updateNotification("Ativado por voz: \"$matched\"")
-                onWakeConfirmed(matched)
-            },
-            onFinished = { _, error ->
-                if (!detected) {
-                    Stats.recognizerMisses++
-                    when (error) {
-                        UltronWakeWordRecognizer.NO_ERROR,
-                        SpeechRecognizer.ERROR_NO_MATCH,
-                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> Unit
-                        else -> {
-                            Stats.recognizerErrors++
-                            Stats.lastError = "SpeechRecognizer erro $error"
-                        }
-                    }
-                }
-                updateNotification("Escuta contínua ativa — diga \"Ultron\"")
-                latch.countDown()
-            }
-        )
-        wakeWordRecognizer = recognizer
-        recognizer.startListening()
-
-        if (!latch.await(RECOGNIZER_WAIT_MS, TimeUnit.MILLISECONDS)) {
-            recognizer.destroy()
-            Stats.recognizerErrors++
-            Stats.lastError = "SpeechRecognizer não respondeu em ${RECOGNIZER_WAIT_MS / 1000}s"
-            // onFinished não virá: a notificação permanente não pode ficar presa em "Verificando".
-            updateNotification("Escuta contínua ativa — diga \"Ultron\"")
+        wakeLock?.acquire(15_000L)
+        val startedMs = System.currentTimeMillis()
+        val phrase: String? = if (!transcriber.ensureLoaded()) {
+            Stats.lastError = transcriber.lastError ?: "Vosk indisponível"
+            null
+        } else {
+            val text = transcriber.transcribe(preroll, readMore).trim()
+            if (text.length < 2) null else WakePhraseComposer.ensurePhrase(text)
         }
-        // WakeLock só pelo tempo estritamente necessário: solta assim que o reconhecedor termina.
+        Stats.lastCommandMs = System.currentTimeMillis() - startedMs
         releaseWakeLockSafely()
-        return detected
+        updateNotification("Escuta contínua ativa — diga \"Ultron\"")
+
+        if (phrase == null) {
+            if (transcriber.isLoaded) {
+                // Miss silencioso: gatilho sem fala útil, sem notificação nem alteração de HUD.
+                Stats.recognizerMisses++
+                return null
+            }
+            // Vosk quebrado: entrega só o hotword e o Dart cai na voz manual.
+            return "ultron"
+        }
+        Stats.detections++
+        Stats.voskCommands++
+        Stats.lastPhrase = phrase
+        return phrase
     }
 
     /**
@@ -732,8 +719,6 @@ class UltronAudioService : Service() {
         captureHealthy = false
         Stats.economyMode = false
         vadThread?.interrupt()
-        wakeWordRecognizer?.destroy()
-        wakeWordRecognizer = null
         releaseWakeLockSafely()
         super.onDestroy()
     }
