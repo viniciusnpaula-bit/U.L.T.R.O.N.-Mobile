@@ -15,6 +15,7 @@ enum UltronCommand {
   clear,
   lock,
   status,
+  vault,
 }
 
 class CommandResult {
@@ -75,6 +76,10 @@ class SlashCommandParser {
     '/status': UltronCommand.status,
     '/diag': UltronCommand.status,
     '/saude': UltronCommand.status,
+    '/vault': UltronCommand.vault,
+    '/obsidian': UltronCommand.vault,
+    '/cerebro': UltronCommand.vault,
+    '/segundocerebro': UltronCommand.vault,
   };
 
   static CommandResult? parse(String input) {
@@ -148,6 +153,11 @@ class SlashCommandParser {
           'command': '/clear',
           'aliases': '/limpar',
           'description': 'Expurga histórico da sessão de bate-papo atual.',
+        },
+        {
+          'command': '/vault',
+          'aliases': '/obsidian, /cerebro',
+          'description': 'Abre o cofre Obsidian ou gerencia o Segundo Cérebro.',
         },
       ];
 }

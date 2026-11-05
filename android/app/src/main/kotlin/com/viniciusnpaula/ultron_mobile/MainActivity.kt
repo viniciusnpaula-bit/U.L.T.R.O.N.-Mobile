@@ -56,15 +56,119 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         @Volatile
         var isForegroundRecognizerActive: Boolean = false
 
+        @Volatile
+        var isActivityResumed: Boolean = false
+
+        private const val PENDING_WAKE_TTL_MS = 30_000L
+
         private var instance: MainActivity? = null
 
+        @Volatile
+        private var pendingWakeWord: String? = null
+
+        @Volatile
+        private var pendingWakeTimestampMs: Long = 0L
+
+        /**
+         * Registra a wake word como PENDENTE (nunca é descartada por Activity ausente) e tenta
+         * entregá-la ao Flutter. Só é removida quando o Flutter a consome com sucesso.
+         */
         fun notifyWakeWord(phrase: String) {
-            instance?.runOnUiThread {
-                if (!isUltronSpeakingGlobal && !isForegroundRecognizerActive) {
-                    instance?.deviceChannel?.invokeMethod("onWakeWordDetected", phrase)
-                }
+            pendingWakeWord = phrase
+            pendingWakeTimestampMs = System.currentTimeMillis()
+            instance?.runOnUiThread { instance?.deliverPendingWakeWord() }
+        }
+
+        /** Retorna e limpa a wake word pendente se ainda estiver fresca (30 s). */
+        fun consumePendingWakeWord(): String? {
+            val phrase = pendingWakeWord ?: return null
+            val fresh = System.currentTimeMillis() - pendingWakeTimestampMs <= PENDING_WAKE_TTL_MS
+            pendingWakeWord = null
+            return if (fresh) phrase else null
+        }
+    }
+
+    /** Entrega a wake word pendente ao Flutter; se o canal falhar, ela permanece pendente. */
+    private fun deliverPendingWakeWord() {
+        val channel = deviceChannel ?: return
+        if (isUltronSpeakingGlobal || isForegroundRecognizerActive) return
+        val phrase = consumePendingWakeWord() ?: return
+        channel.invokeMethod("onWakeWordDetected", phrase, object : MethodChannel.Result {
+            override fun success(result: Any?) {}
+            override fun error(code: String, message: String?, details: Any?) {
+                restorePendingWakeWord(phrase)
+            }
+            override fun notImplemented() {
+                // Dart ainda sem handler (engine subindo): mantém pendente para o consumo no init.
+                restorePendingWakeWord(phrase)
+            }
+        })
+    }
+
+    private fun restorePendingWakeWord(phrase: String) {
+        if (pendingWakeWord == null) {
+            pendingWakeWord = phrase
+            pendingWakeTimestampMs = System.currentTimeMillis()
+        }
+    }
+
+    private fun startSentinelService() {
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, UltronAudioService::class.java))
+        } catch (e: Exception) {
+            wakeLogW("não foi possível iniciar o sentinela: ${e.javaClass.simpleName}")
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 9044) {
+            val micGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            if (micGranted && !UltronAudioService.isRunning) startSentinelService()
+        }
+    }
+
+    /** Permite abrir sobre a tela de bloqueio quando a ativação por voz acorda o app. */
+    private fun applyLockScreenMode(enable: Boolean) {
+        safely("applyLockScreenMode") {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(enable)
+                setTurnScreenOn(enable)
             }
         }
+    }
+
+    private fun handleWakeIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(UltronAudioService.EXTRA_WAKE_WORD, false) == true) {
+            applyLockScreenMode(true)
+            intent.removeExtra(UltronAudioService.EXTRA_WAKE_WORD)
+        }
+        if (intent?.getBooleanExtra(BootReceiver.EXTRA_REARM_SENTINEL, false) == true) {
+            intent.removeExtra(BootReceiver.EXTRA_REARM_SENTINEL)
+            val hasMic = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            if (hasMic) {
+                startSentinelService()
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        handleWakeIntent(intent)
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWakeIntent(intent)
     }
 
     private var torchEnabled: Boolean = false
@@ -106,6 +210,9 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
+        isActivityResumed = true
+        // Entrega com pequeno atraso para o Dart já ter registrado o handler (cold start).
+        window?.decorView?.postDelayed({ deliverPendingWakeWord() }, 600L)
         try {
             accelerometer?.let {
                 sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
@@ -115,6 +222,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     }
 
     override fun onPause() {
+        isActivityResumed = false
         try {
             sensorManager?.unregisterListener(this)
         } catch (_: Exception) {
@@ -160,7 +268,14 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         }
     }
 
+    override fun onStop() {
+        // Ao sair de cena, volta ao comportamento normal da tela de bloqueio.
+        applyLockScreenMode(false)
+        super.onStop()
+    }
+
     override fun onDestroy() {
+        isActivityResumed = false
         if (instance == this) instance = null
         destroyInlineRecognizer()
         try {
@@ -348,11 +463,44 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 result.success(granted)
             }
             "isAudioSentinelRunning" -> {
-                result.success(UltronAudioService.isRunning)
+                // Só afirma "ativo" com captura real confirmada (não apenas serviço vivo).
+                result.success(UltronAudioService.isListeningForReal())
+            }
+            "consumePendingWakeWord" -> {
+                result.success(consumePendingWakeWord())
+            }
+            "getWakeWordDiagnostics" -> {
+                result.success(UltronAudioService.diagnostics(this))
+            }
+            "setBootAutostart" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                getSharedPreferences(UltronAudioService.PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().putBoolean(UltronAudioService.PREF_BOOT_AUTOSTART, enabled).apply()
+                result.success(enabled)
+            }
+            "requestIgnoreBatteryOptimizations" -> {
+                val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                if (pm?.isIgnoringBatteryOptimizations(packageName) == true) {
+                    result.success(true)
+                } else {
+                    try {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:$packageName")
+                            )
+                        )
+                    } catch (_: Exception) {
+                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    }
+                    result.success(false)
+                }
             }
             "setAudioSentinel" -> {
                 val enable = call.argument<Boolean>("enabled") ?: false
                 if (!enable) {
+                    getSharedPreferences(UltronAudioService.PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().putBoolean(UltronAudioService.PREF_ENABLED, false).apply()
                     stopService(Intent(this, UltronAudioService::class.java))
                     result.success(false)
                 } else {
@@ -360,20 +508,25 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                         this,
                         Manifest.permission.RECORD_AUDIO
                     ) == PackageManager.PERMISSION_GRANTED
+                    val needsNotifPerm = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    val missing = buildList {
+                        if (!hasMic) add(Manifest.permission.RECORD_AUDIO)
+                        if (needsNotifPerm) add(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    if (missing.isNotEmpty()) {
+                        ActivityCompat.requestPermissions(this, missing.toTypedArray(), 9044)
+                    }
                     if (!hasMic) {
-                        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            arrayOf(
-                                Manifest.permission.RECORD_AUDIO,
-                                Manifest.permission.POST_NOTIFICATIONS
-                            )
-                        } else {
-                            arrayOf(Manifest.permission.RECORD_AUDIO)
-                        }
-                        ActivityCompat.requestPermissions(this, perms, 9044)
+                        // O serviço sobe em onRequestPermissionsResult, se o usuário conceder.
                         result.success(false)
                     } else {
-                        val svcIntent = Intent(this, UltronAudioService::class.java)
-                        ContextCompat.startForegroundService(this, svcIntent)
+                        // Pedido de início (contexto permitido: Activity em primeiro plano).
+                        // "true" = pedido aceito; o estado REAL vem de isAudioSentinelRunning.
+                        startSentinelService()
                         result.success(true)
                     }
                 }
@@ -553,7 +706,8 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             "arquivos" to listOf("com.sec.android.app.myfiles", "com.google.android.apps.nbu.files"),
             "play store" to listOf("com.android.vending"),
             "tiktok" to listOf("com.zhiliaoapp.musically"),
-            "netflix" to listOf("com.netflix.mediaclient")
+            "netflix" to listOf("com.netflix.mediaclient"),
+            "obsidian" to listOf("md.obsidian")
         )
 
         val pm = packageManager

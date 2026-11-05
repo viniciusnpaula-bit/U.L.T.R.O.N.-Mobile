@@ -11,9 +11,9 @@ class UpdateScreen extends StatefulWidget {
 }
 
 class _UpdateScreenState extends State<UpdateScreen> {
-  static const _crimson = Color(0xFFFF1A24);
-  static const _rose = Color(0xFFFF8088);
-  static const _border = Color(0xFF2E0306);
+  static const _crimson = Color(0xFF75020F);
+  static const _rose = Color(0xFFFF707C);
+  static const _border = Color(0xFF51080D);
 
   final service = AppUpdateService();
   UpdateInfo? update;
@@ -98,7 +98,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
             ? Icons.new_releases_outlined
             : Icons.verified_user_outlined;
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0002),
+      backgroundColor: const Color(0xFF19171B),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -173,7 +173,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                       'Repositório: viniciusnpaula-bit/U.L.T.R.O.N.-Mobile',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Color(0xFF94A3B8),
+                        color: Color(0xFFA89698),
                         fontSize: 10,
                       ),
                     ),
@@ -185,7 +185,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                       Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF180004),
+                          color: const Color(0xFF2B0307),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
                             color: _crimson.withValues(alpha: 0.4),
@@ -197,7 +197,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                             Text(
                               '✓ Nova Versão Encontrada: ${update!.version}',
                               style: const TextStyle(
-                                color: Color(0xFF34D399),
+                                color: Color(0xFFFF707C),
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -206,7 +206,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                             Text(
                               update!.name,
                               style: const TextStyle(
-                                color: Color(0xFFE2E8F0),
+                                color: Color(0xFFF0E6E7),
                                 fontSize: 11,
                               ),
                             ),
@@ -257,7 +257,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0E0002),
+                        color: const Color(0xFF19171B),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: _border),
                       ),
@@ -265,7 +265,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                         status,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
-                          color: Color(0xFFCBD5E1),
+                          color: Color(0xFFF0E6E7),
                           fontSize: 11,
                           height: 1.4,
                         ),
@@ -276,7 +276,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                       onPressed: checking || downloading ? null : _check,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: _crimson,
-                        backgroundColor: const Color(0xFF1E0004),
+                        backgroundColor: const Color(0xFF75020F),
                         side: BorderSide(
                           color: _crimson.withValues(alpha: 0.35),
                         ),
@@ -300,7 +300,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                       'As atualizações são obtidas de GitHub Releases públicas via HTTPS. O Android sempre valida a assinatura do pacote antes de atualizar.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: Color(0xFF64748B),
+                        color: Color(0xFF635355),
                         fontSize: 10,
                       ),
                     ),
@@ -313,8 +313,8 @@ class _UpdateScreenState extends State<UpdateScreen> {
                 child: OutlinedButton(
                   onPressed: () => Navigator.of(context).pop(),
                   style: OutlinedButton.styleFrom(
-                    backgroundColor: const Color(0xFF120003),
-                    foregroundColor: const Color(0xFFCBD5E1),
+                    backgroundColor: const Color(0xFF2B0307),
+                    foregroundColor: const Color(0xFFF0E6E7),
                     side: const BorderSide(color: _border),
                     padding: const EdgeInsets.symmetric(vertical: 11),
                     shape: RoundedRectangleBorder(

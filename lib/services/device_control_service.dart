@@ -130,6 +130,108 @@ class CapturedNotification {
       );
 }
 
+/// Diagnóstico do sentinela de wake word (v1.2.1), vindo do serviço nativo.
+class WakeWordDiagnostics {
+  const WakeWordDiagnostics({
+    this.running = false,
+    this.capturing = false,
+    this.paused = false,
+    this.engine = 'desconhecido',
+    this.dedicatedKws = false,
+    this.sdk = 0,
+    this.notificationsPermission = false,
+    this.micPermission = false,
+    this.ignoringBatteryOptimizations = false,
+    this.bootAutostart = false,
+    this.recognitionAvailable = false,
+    this.lastTrigger = 'Nenhum',
+    this.voiceTriggers = 0,
+    this.detections = 0,
+    this.recognizerMisses = 0,
+    this.recognizerErrors = 0,
+    this.captureRestarts = 0,
+    this.micSilencedEvents = 0,
+    this.lastError = 'nenhum',
+    this.lastPhrase = '',
+    this.noiseFloor = 0,
+    this.threshold = 0,
+    this.economyMode = false,
+  });
+
+  factory WakeWordDiagnostics.fromMap(Map<Object?, Object?> m) {
+    bool b(String k) => m[k] == true;
+    int i(String k) => (m[k] as num?)?.toInt() ?? 0;
+    String s(String k, String fallback) => (m[k] as String?) ?? fallback;
+    return WakeWordDiagnostics(
+      running: b('running'),
+      capturing: b('capturing'),
+      paused: b('paused'),
+      engine: s('engine', 'desconhecido'),
+      dedicatedKws: b('dedicatedKws'),
+      sdk: i('sdk'),
+      notificationsPermission: b('notificationsPermission'),
+      micPermission: b('micPermission'),
+      ignoringBatteryOptimizations: b('ignoringBatteryOptimizations'),
+      bootAutostart: b('bootAutostart'),
+      recognitionAvailable: b('recognitionAvailable'),
+      lastTrigger: s('lastTrigger', 'Nenhum'),
+      voiceTriggers: i('voiceTriggers'),
+      detections: i('detections'),
+      recognizerMisses: i('recognizerMisses'),
+      recognizerErrors: i('recognizerErrors'),
+      captureRestarts: i('captureRestarts'),
+      micSilencedEvents: i('micSilencedEvents'),
+      lastError: s('lastError', 'nenhum'),
+      lastPhrase: s('lastPhrase', ''),
+      noiseFloor: i('noiseFloor'),
+      threshold: i('threshold'),
+      economyMode: b('economyMode'),
+    );
+  }
+
+  final bool running;
+\n  /// true somente com leitura real de áudio confirmada (não basta o serviço estar vivo).
+  final bool capturing;
+  final bool paused;
+\n  /// Motor de detecção realmente em uso.
+  final String engine;
+\n  /// false enquanto não houver motor de keyword spotting dedicado (Porcupine, Vosk etc.).
+  final bool dedicatedKws;
+  final int sdk;
+  final bool notificationsPermission;
+  final bool micPermission;
+  final bool ignoringBatteryOptimizations;
+  final bool bootAutostart;
+  final bool recognitionAvailable;
+  final String lastTrigger;
+  final int voiceTriggers;
+  final int detections;
+  final int recognizerMisses;
+  final int recognizerErrors;
+  final int captureRestarts;
+  final int micSilencedEvents;
+  final String lastError;
+  final String lastPhrase;
+  final int noiseFloor;
+  final int threshold;
+  final bool economyMode;
+
+  /// Resumo multilinha para exibir no HUD.
+  String toReport() => [
+        'Motor: $engine',
+        if (!dedicatedKws) 'PENDENTE: sem modelo/motor KWS dedicado — a detecção depende de volume + reconhecedor do sistema.',
+        'Captura real: ${capturing ? "CONFIRMADA" : "NÃO confirmada"} · Serviço: ${running ? "vivo" : "parado"}${paused ? " · PAUSADO" : ""}${economyMode ? " · economia" : ""}',
+        'Android API $sdk · Notificações: ${notificationsPermission ? "permitidas" : "NEGADAS"}',
+        'Microfone: ${micPermission ? "permitido" : "NEGADO"} · Reconhecedor: ${recognitionAvailable ? "ok" : "INDISPONÍVEL"}',
+        'Bateria: ${ignoringBatteryOptimizations ? "isento" : "sujeito a economia"} · Boot: ${bootAutostart ? "opt-in" : "off"}',
+        'Gatilhos de voz: $voiceTriggers · Ativações: $detections · Sem match: $recognizerMisses',
+        'Erros do reconhecedor: $recognizerErrors · Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
+        'Ruído/limiar: $noiseFloor/$threshold · Último gatilho: $lastTrigger',
+        if (lastPhrase.isNotEmpty) 'Última frase: "$lastPhrase"',
+        'Último erro: $lastError',
+      ].join('\n');
+}
+
 class DeviceControlService {
   DeviceControlService({
     MethodChannel? channel,
@@ -178,6 +280,41 @@ class DeviceControlService {
       obsidianProvider != null
           ? obsidianProvider!()
           : ObsidianService.openDefaultVault();
+
+  /// Retorna a instância do serviço do cofre Obsidian (Segundo Cérebro).
+  Future<ObsidianService> getObsidianVault() => _getObsidian();
+
+  /// Abre o cofre do Obsidian diretamente no aplicativo oficial.
+  Future<bool> openObsidianVault() async {
+    try {
+      final vault = await _getObsidian();
+      final openedUri = await openUrl(vault.obsidianOpenUri);
+      if (openedUri) return true;
+    } catch (_) {}
+    try {
+      final app = await openApp('obsidian');
+      return app.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Constrói o System Prompt contextual injetando a memória de longo prazo
+  /// e o perfil do operador salvos no cofre do Obsidian (Segundo Cérebro).
+  Future<String> buildContextualSystemPrompt() async {
+    try {
+      final vault = await _getObsidian();
+      final memory = await vault.readLongTermMemory();
+      if (memory.trim().isNotEmpty) {
+        return '$aiSystemPrompt\n\n'
+            '=== SEGUNDO CÉREBRO — MEMÓRIA ATIVA DO COFRE OBSIDIAN ===\n'
+            'As informações abaixo são notas e memórias reais do operador gravadas no Obsidian:\n'
+            '$memory\n'
+            '=== FIM DA MEMÓRIA DO COFRE ===';
+      }
+    } catch (_) {}
+    return aiSystemPrompt;
+  }
 
   Future<String> loadPcKillSwitchUrl() async =>
       (await _storage.read(key: _pcEndpointKey))?.trim() ?? '';
@@ -480,6 +617,42 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     final res = await _channel.invokeMethod<bool>('setAudioSentinel', {
       'enabled': enabled,
     });
+    return res ?? false;
+  }
+
+  /// Wake word detectada enquanto o app estava fechado/bloqueado (válida por 30 s), ou null.
+  Future<String?> consumePendingWakeWord() async {
+    try {
+      final res = await _channel.invokeMethod<String>('consumePendingWakeWord');
+      return (res == null || res.trim().isEmpty) ? null : res;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Estado do sentinela de voz para o painel de diagnóstico (v1.2.1).
+  Future<WakeWordDiagnostics> getWakeWordDiagnostics() async {
+    try {
+      final raw = await _channel
+          .invokeMethod<Map<Object?, Object?>>('getWakeWordDiagnostics');
+      return WakeWordDiagnostics.fromMap(raw ?? const {});
+    } catch (_) {
+      return const WakeWordDiagnostics();
+    }
+  }
+
+  Future<bool> setBootAutostart(bool enabled) async {
+    final res = await _channel.invokeMethod<bool>('setBootAutostart', {
+      'enabled': enabled,
+    });
+    return res ?? false;
+  }
+
+  /// Abre o diálogo do sistema para isentar o app da economia de bateria.
+  /// Retorna true se o app já estiver isento.
+  Future<bool> requestIgnoreBatteryOptimizations() async {
+    final res =
+        await _channel.invokeMethod<bool>('requestIgnoreBatteryOptimizations');
     return res ?? false;
   }
 
@@ -924,7 +1097,58 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         );
       }
 
-      // 20. Open any installed app ("abrir whatsapp", "abrir youtube", etc.)
+      // 20. Obsidian Second Brain ("abrir obsidian", "abrir cofre", "meu segundo cérebro")
+      if (RegExp(
+        r'\b(abrir|acessar)\s+(?:o\s+)?(?:obsidian|cofre|segundo\s+c[eé]rebro)\b|^(?:obsidian|cofre|segundo\s+c[eé]rebro)$',
+        caseSensitive: false,
+      ).hasMatch(lower)) {
+        final opened = await openObsidianVault();
+        return DeviceActionResult(
+          handled: true,
+          message: opened
+              ? '📓 Aplicativo Obsidian aberto com o cofre do Segundo Cérebro.'
+              : '⚠️ Não foi possível abrir o app Obsidian (verifique se está instalado).',
+          speakText: opened ? 'Obsidian aberto.' : 'Obsidian não disponível.',
+        );
+      }
+
+      // 21. Quick Inbox Capture ("ideia: ...", "capturar ideia: ...", "inbox: ...")
+      final inboxMatch = RegExp(
+        r'^(?:capturar\s+ideia|anotar\s+ideia|ideia|inbox)\s*[:]\s*(.+)$',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (inboxMatch != null) {
+        final body = inboxMatch.group(1)?.trim() ?? '';
+        if (body.isNotEmpty) {
+          final vault = await _getObsidian();
+          await vault.captureToInbox(body);
+          return DeviceActionResult(
+            handled: true,
+            message: '💡 Ideia capturada no Inbox do Obsidian:\n"$body"',
+            speakText: 'Ideia salva no Inbox do seu segundo cérebro.',
+          );
+        }
+      }
+
+      // 22. Long-term memory save ("lembrar que ...", "guardar na memória: ...")
+      final memMatch = RegExp(
+        r'^(?:lembrar\s+que|memorizar|guardar\s+na\s+mem[oó]ria|guardar\s+fato)\s*[:]?\s*(.+)$',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (memMatch != null) {
+        final body = memMatch.group(1)?.trim() ?? '';
+        if (body.isNotEmpty) {
+          final vault = await _getObsidian();
+          await vault.saveMemory('Operador', body);
+          return DeviceActionResult(
+            handled: true,
+            message: '🧠 Memória persistida no perfil do Operador (Obsidian):\n"$body"',
+            speakText: 'Memória guardada no seu segundo cérebro.',
+          );
+        }
+      }
+
+      // 23. Open any installed app ("abrir whatsapp", "abrir youtube", etc.)
       final openMatch = RegExp(
         r'^(?:abrir|iniciar|executar)\s+(?:o\s+|a\s+|app\s+|aplicativo\s+)?(.+)$',
       ).firstMatch(lower);
@@ -1058,6 +1282,30 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
               await vault.dailyNote(DateTime.now(), noteBody);
               logs.add('📝 Nota salva no Obsidian');
             }
+            break;
+          case 'INBOX':
+            final inboxBody = parts.skip(1).join(':').trim();
+            if (inboxBody.isNotEmpty) {
+              final vault = await _getObsidian();
+              await vault.captureToInbox(inboxBody);
+              logs.add('💡 Ideia salva no Inbox do Obsidian');
+            }
+            break;
+          case 'REMEMBER':
+          case 'MEMORY':
+            final topic = arg1.isNotEmpty ? arg1 : 'Operador';
+            final memoryBody = parts.length > 2
+                ? parts.skip(2).join(':').trim()
+                : parts.skip(1).join(':').trim();
+            if (memoryBody.isNotEmpty) {
+              final vault = await _getObsidian();
+              await vault.saveMemory(topic, memoryBody);
+              logs.add('🧠 Memória gravada no Segundo Cérebro ($topic)');
+            }
+            break;
+          case 'OPEN_OBSIDIAN':
+            final opened = await openObsidianVault();
+            logs.add(opened ? '📓 Obsidian aberto' : '⚠️ Obsidian não encontrado');
             break;
           case 'SKILL':
             if (arg1.isNotEmpty) {

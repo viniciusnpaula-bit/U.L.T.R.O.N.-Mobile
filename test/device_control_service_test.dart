@@ -94,6 +94,59 @@ void main() {
     expect(triggeredWake, isTrue);
   });
 
+  test('wake word reliability: pending queue, diagnostics and boot opt-in', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      switch (call.method) {
+        case 'consumePendingWakeWord':
+          return 'Ei Ultron que horas são';
+        case 'getWakeWordDiagnostics':
+          return {
+            'running': true,
+            'micPermission': true,
+            'detections': 3,
+            'voiceTriggers': 7,
+            'lastError': 'nenhum',
+            'noiseFloor': 310,
+            'threshold': 992,
+          };
+        case 'setBootAutostart':
+          return (call.arguments as Map)['enabled'] as bool;
+      }
+      return true;
+    });
+    final service = DeviceControlService(channel: channel);
+
+    expect(await service.consumePendingWakeWord(), 'Ei Ultron que horas são');
+
+    final diag = await service.getWakeWordDiagnostics();
+    expect(diag.running, isTrue);
+    expect(diag.detections, 3);
+    expect(diag.threshold, 992);
+    expect(diag.toReport(), contains('Ativações: 3'));
+    // Sem motor KWS dedicado e sem captura confirmada: o relatório não pode fingir o contrário.
+    expect(diag.dedicatedKws, isFalse);
+    expect(diag.capturing, isFalse);
+    expect(diag.toReport(), contains('PENDENTE'));
+    expect(diag.toReport(), contains('NÃO confirmada'));
+
+    expect(await service.setBootAutostart(true), isTrue);
+    expect(calls.last.arguments, {'enabled': true});
+  });
+
+  test('wake word diagnostics degrade safely when native call fails', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      throw PlatformException(code: 'DEVICE_ERROR');
+    });
+    final service = DeviceControlService(channel: channel);
+    expect(await service.consumePendingWakeWord(), isNull);
+    final diag = await service.getWakeWordDiagnostics();
+    expect(diag.running, isFalse);
+    expect(diag.lastError, 'nenhum');
+  });
+
   test('reads, replies in background, and sends WhatsApp/SMS via natural language', () async {
     final service = DeviceControlService(channel: channel);
 
@@ -161,6 +214,45 @@ void main() {
       expect(hash.length, 64);
       expect(await service.verifyFileIntegrity(file, hash), isTrue);
       expect(await service.verifyFileIntegrity(file, 'wrong_hash_value'), isFalse);
+    } finally {
+      await tempDir.delete(recursive: true);
+    }
+  });
+
+  test('executes Obsidian Second Brain actions and builds contextual prompt', () async {
+    final tempDir = await Directory.systemTemp.createTemp('ultron_obsidian_test_dc_');
+    try {
+      final obs = ObsidianService(tempDir);
+      await obs.initialize();
+      final service = DeviceControlService(
+        channel: channel,
+        obsidianProvider: () async => obs,
+      );
+
+      // Natural command: capture thought to inbox
+      final inboxRes = await service.tryExecuteNaturalCommand('ideia: Criar dashboard tático');
+      expect(inboxRes?.handled, isTrue);
+      expect(inboxRes?.message, contains('Inbox'));
+
+      // Natural command: save long-term memory
+      final memRes = await service.tryExecuteNaturalCommand('lembrar que meu codinome é Hawk');
+      expect(memRes?.handled, isTrue);
+      expect(memRes?.message, contains('Operador'));
+
+      // Contextual prompt injection
+      final prompt = await service.buildContextualSystemPrompt();
+      expect(prompt, contains('SEGUNDO CÉREBRO — MEMÓRIA ATIVA DO COFRE OBSIDIAN'));
+      expect(prompt, contains('Perfil do Operador'));
+
+      // AI tags: INBOX, REMEMBER, OPEN_OBSIDIAN
+      final aiExec = await service.executeAiActions(
+        'Anotado no segundo cérebro. [ACTION:INBOX:Nova feature] [ACTION:REMEMBER:Tático:Plano delta] [ACTION:OPEN_OBSIDIAN]',
+      );
+      expect(aiExec.cleanText, 'Anotado no segundo cérebro.');
+      expect(aiExec.executedLogs.length, 3);
+      expect(aiExec.executedLogs[0], contains('Inbox'));
+      expect(aiExec.executedLogs[1], contains('Segundo Cérebro'));
+      expect(aiExec.executedLogs[2], contains('Obsidian'));
     } finally {
       await tempDir.delete(recursive: true);
     }
