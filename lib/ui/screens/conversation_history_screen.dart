@@ -13,8 +13,8 @@ class ConversationHistoryScreen extends StatefulWidget {
 }
 
 class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
-  static const _crimson = Color(0xFF75020F);
-  static const _rose = Color(0xFFFF707C);
+  static const _crimson = Color(0xFFE50914);
+  static const _rose = Color(0xFFFFA0A0);
   static const _border = Color(0xFF51080D);
 
   late Future<List<ChatMessage>> _messages;
@@ -34,7 +34,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2B0307),
+        backgroundColor: const Color(0xFF2E0305),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: const BorderSide(color: _border),
@@ -74,7 +74,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        backgroundColor: const Color(0xFF19171B),
+        backgroundColor: const Color(0xFF0A0002),
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -164,7 +164,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                           child: Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF19171B),
+                              color: const Color(0xFF0A0002),
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(color: _border),
                             ),
@@ -209,8 +209,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
                                 color: isUser
-                                    ? const Color(0xFF2B0307)
-                                    : const Color(0xFF19171B),
+                                    ? const Color(0xFF2E0305)
+                                    : const Color(0xFF0A0002),
                                 borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
                                   color: isUser
@@ -258,7 +258,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                                       Text(
                                         'Isolado Localmente',
                                         style: TextStyle(
-                                          color: Color(0xFFFF707C),
+                                          color: Color(0xFFFFA0A0),
                                           fontSize: 9,
                                         ),
                                       ),
@@ -280,8 +280,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                   child: OutlinedButton.icon(
                     onPressed: _clear,
                     style: OutlinedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2B0307),
-                      foregroundColor: const Color(0xFFFF707C),
+                      backgroundColor: const Color(0xFF2E0305),
+                      foregroundColor: const Color(0xFFFFA0A0),
                       side: const BorderSide(color: Color(0x6651080D)),
                       padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: RoundedRectangleBorder(
@@ -304,7 +304,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                   child: OutlinedButton(
                     onPressed: () => Navigator.of(context).pop(),
                     style: OutlinedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2B0307),
+                      backgroundColor: const Color(0xFF2E0305),
                       foregroundColor: const Color(0xFFF0E6E7),
                       side: const BorderSide(color: _border),
                       padding: const EdgeInsets.symmetric(vertical: 11),
