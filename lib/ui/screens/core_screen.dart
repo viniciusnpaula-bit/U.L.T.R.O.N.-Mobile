@@ -1355,9 +1355,9 @@ class _CoreScreenState extends State<CoreScreen>
                     border: Border.all(color: _border),
                   ),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Container(
                             width: 8,
@@ -1382,50 +1382,59 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                         ],
                       ),
-                      Row(
-                        children: [
-                          _TopNavPill(
-                            label: 'NÚCLEO',
-                            selected: panel == _ActivePanel.main,
-                            onTap: () => _setPanel(_ActivePanel.main),
-                          ),
-                          const SizedBox(width: 4),
-                          _TopNavPill(
-                            label: 'CELULAR',
-                            selected: panel == _ActivePanel.device,
-                            onTap: () {
-                              _refreshDeviceStatus();
-                              _setPanel(_ActivePanel.device);
-                            },
-                          ),
-                          const SizedBox(width: 4),
-                          _TopNavPill(
-                            label: 'PROVEDORES',
-                            selected: panel == _ActivePanel.providers,
-                            onTap: () => _setPanel(_ActivePanel.providers),
-                          ),
-                          const SizedBox(width: 4),
-                          _TopNavPill(
-                            label: 'HISTÓRICO',
-                            selected: false,
-                            onTap: _openHistory,
-                          ),
-                          const SizedBox(width: 4),
-                          InkWell(
-                            onTap: _toggleAudio,
-                            borderRadius: BorderRadius.circular(6),
-                            child: Padding(
-                              padding: const EdgeInsets.all(4),
-                              child: Icon(
-                                isAudioOn ? Icons.volume_up : Icons.volume_off,
-                                size: 15,
-                                color: isAudioOn
-                                    ? _crimson
-                                    : const Color(0xFFA89698),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _TopNavPill(
+                                label: 'NÚCLEO',
+                                selected: panel == _ActivePanel.main,
+                                onTap: () => _setPanel(_ActivePanel.main),
                               ),
-                            ),
+                              const SizedBox(width: 4),
+                              _TopNavPill(
+                                label: 'CELULAR',
+                                selected: panel == _ActivePanel.device,
+                                onTap: () {
+                                  _refreshDeviceStatus();
+                                  _setPanel(_ActivePanel.device);
+                                },
+                              ),
+                              const SizedBox(width: 4),
+                              _TopNavPill(
+                                label: 'PROVEDORES',
+                                selected: panel == _ActivePanel.providers,
+                                onTap: () => _setPanel(_ActivePanel.providers),
+                              ),
+                              const SizedBox(width: 4),
+                              _TopNavPill(
+                                label: 'HISTÓRICO',
+                                selected: false,
+                                onTap: _openHistory,
+                              ),
+                              const SizedBox(width: 4),
+                              InkWell(
+                                onTap: _toggleAudio,
+                                borderRadius: BorderRadius.circular(6),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4),
+                                  child: Icon(
+                                    isAudioOn
+                                        ? Icons.volume_up
+                                        : Icons.volume_off,
+                                    size: 15,
+                                    color: isAudioOn
+                                        ? _crimson
+                                        : const Color(0xFFA89698),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ],
                   ),
