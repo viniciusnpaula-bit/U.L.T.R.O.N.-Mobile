@@ -37,7 +37,8 @@ jobs:
       # The Kotlin matcher tests are not compiled by `flutter build`; run them explicitly.
       - name: Native unit tests (wake word matcher)
         working-directory: android
-        run: ./gradlew testDebugUnitTest --no-daemon
+        # Only our module: plugin subprojects ship Robolectric tests that fail on the CI JDK image.
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
       # Two Gradle builds in one job filled the runner disk (app-debug plus
       # app-release both keep their merged native libs). Drop toolchains this
       # project never uses; the Android SDK and the NDK stay.
