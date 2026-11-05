@@ -28,8 +28,11 @@ pré-roll (Vosk), mantendo o `SpeechRecognizer` apenas no botão de voz manual.
 | D2 | **Vosk offline** como transcritor do comando, alimentado pelo anel de pré-roll | manter `SpeechRecognizer` (impossível injetar PCM, pré-roll não existe) |
 | D3 | **Modelo Vosk embarcado no APK** (asset baixado no CI, não versionado) | download sob demanda (exige hospedagem e trata offline) |
 | D4 | **AccessKey via GitHub Secret**; `.ppn` versionado | key no repositório (segredo em histórico público) |
-| D5 | **Vosk descarrega após 2 min** de inatividade | manter residente (≈100 MB de RAM 24/7) |
+| D5 | **Vosk descarrega após 2 min** de inatividade (nunca durante uma transcrição) | manter residente (≈100 MB de RAM 24/7) |
 | D6 | **Frase sempre começa com "ultron"** (prefixo nativo quando necessário) | confiar no ASR (transcrição de "Ultron" varia e quebra `WakeWord.extractCommand`) |
+| D7 | **Sem fallback**: a porta de volume RMS é removida do caminho de ativação | manter dois motores (duas verdades, rota frágil nunca morre) |
+| D8 | **Gatilho só vira ativação com texto útil do Vosk**; vazio = miss silencioso com cooldown/backoff | notificar o usuário a cada gatilho (falso "Ultron ativado") |
+| D9 | **Versão 1.3.0+15** com nota de release explícita | patch 1.2.2 (subestima a troca de motor) |
 
 ## 3. Arquitetura de áudio
 
@@ -47,12 +50,25 @@ Ao detectar:
 ```
 VoskCommandTranscriber.transcribe(anel.snapshot() + áudio ao vivo)
   até fim de fala (endpoint do Vosk) ou 5 s
-    → WakePhraseComposer.ensurePhrase(texto)
-      → MainActivity.notifyWakeWord(frase)   (caminho existente, inalterado)
+    → texto útil (≥2 caracteres)?
+        não → miss silencioso + FalseTriggerBackoff (seção 3.3)
+        sim → WakePhraseComposer.ensurePhrase(texto)
+              → MainActivity.notifyWakeWord(frase)   (caminho existente, inalterado)
 ```
 
 O microfone **não é liberado** entre a palavra e o comando: não há handoff, então o início
 do comando está no anel. `captureHealthy` permanece verdadeiro enquanto os frames chegam.
+
+### 3.3 Falso positivo e backoff
+
+- Gatilho do Porcupine **nunca** vira UI por si só: só há ativação com transcrição útil.
+- Miss silencioso: cooldown de 1,5 s, `Stats.misses++`, sem notificação e sem alterar o HUD
+  para "Verificando palavra".
+- 3 misses consecutivos → backoff progressivo 5 s → 10 s → 20 s (teto 30 s). Zera após
+  comando bem-sucedido ou 60 s de silêncio.
+- Sensibilidade do Porcupine: 0,5 (constante `PORCUPINE_SENSITIVITY`, ajustável).
+- **Invariante de eco:** enquanto o TTS fala, o microfone está liberado (half-duplex
+  existente), então o Ultron não pode ativar a si mesmo dizendo "Ultron".
 
 ### 3.1 Modos que continuam pausando o microfone (inalterados)
 
@@ -115,7 +131,8 @@ class VoskCommandTranscriber(context: Context) {
   sinalizar fim de fala ou estourar 5 s.
 - Texto vazio (silêncio/ruído) é resultado válido: o serviço conta como miss, não como
   detecção.
-- `unloadAfterIdle` libera modelo após 120 s; `ensureLoaded` recarrega no próximo comando.
+- `unloadAfterIdle` libera modelo após 120 s sem comando **e nunca durante uma
+  transcrição em andamento**; `ensureLoaded` recarrega no próximo comando.
 
 ### 4.4 `WakePhraseComposer.kt`
 
@@ -129,6 +146,18 @@ Regra: se o hotword aparece (Levenshtein ≤1, mesma normalização do `WakeWord
 entre as 4 primeiras palavras, devolve o texto; caso contrário prefixa `"ultron "`.
 Garante que `WakeWord.extractCommand` (Dart) sempre encontre o comando.
 
+### 4.5 `FalseTriggerBackoff.kt`
+
+```kotlin
+class FalseTriggerBackoff {
+    fun onMiss(nowMs: Long): Long   // ms de espera antes de aceitar novo gatilho
+    fun onSuccess(nowMs: Long)      // zera contadores
+    fun onQuiet(nowMs: Long)        // zera após 60 s sem gatilho
+}
+```
+
+Política pura (seção 3.3), sem Android, testável em JVM.
+
 ## 5. Mudanças no serviço e na ponte
 
 `UltronAudioService.kt`
@@ -137,8 +166,13 @@ Garante que `WakeWord.extractCommand` (Dart) sempre encontre o comando.
   contrato do `DeviceStatus` do Dart, sem bloquear nada) — custo de 512 multiplicações por
   frame é desprezível e evita quebrar a UI.
 - Loop: pausas → abre record → lê frame → half-duplex → Porcupine + anel → gatilho.
-- `onVoiceWakeTriggered()` passa a: adquirir WakeLock, transcrever com Vosk, compor frase,
-  soltar WakeLock. Sem `SpeechRecognizer`, sem `CountDownLatch` de 10 s.
+- `onVoiceWakeTriggered()` passa a: adquirir WakeLock, transcrever com Vosk, aplicar
+  `FalseTriggerBackoff`, compor frase, soltar WakeLock. Sem `SpeechRecognizer`, sem
+  `CountDownLatch` de 10 s.
+- Caminhos de falha (ramo 4): Vosk indisponível → entrega `"ultron"` puro (o Dart cai na voz
+  manual); exceção no `process()` → uma recriação do spotter, depois KWS off com motivo.
+- `getMinBufferSize` falhando em 16 kHz é erro explícito — nunca downgrade silencioso para
+  8 kHz.
 - `Stats`: novos contadores (seção 7). `diagnostics()` passa a calcular `engine` e
   `dedicatedKws` em tempo de execução: `"Porcupine pt-BR + Vosk"` / `true` só com o motor
   realmente carregado; sem key ou sem `.ppn`, `dedicatedKws = false` e
@@ -196,6 +230,8 @@ JVM (CI, sem aparelho):
 - `AudioRingBufferTest`: ordem cronológica, wrap-around, buffer parcial, `clear`.
 - `WakePhraseComposerTest`: hotword na 1ª–4ª posição, hotword na 5ª (prefixa), texto vazio,
   transcrição ruidosa com Levenshtein 1.
+- `FalseTriggerBackoffTest`: 1º/2º/3º miss, teto de 30 s, reset por sucesso, reset por
+  silêncio.
 - `WakeWordMatcherTest` (existente) continua.
 
 Físico (execução do usuário, `docs/PHYSICAL_TEST_PROTOCOL.md`), 12 cenários com critério de
@@ -204,10 +240,13 @@ flip-to-shush; TTS falando; bateria <15%; reboot; headset Bluetooth; ruído de T
 comando na mesma respiração. Apoio: `scripts/physical-test.ps1`.
 
 CI (`flutter-ci.yml`):
-- build sem secrets continua verde;
-- com `PORCUPINE_ACCESS_KEY`, injeta a key e valida que `BuildConfig` recebeu valor;
+- build sem secrets continua verde, com aviso explícito no log de que o APK saiu sem KWS;
+- com `PORCUPINE_ACCESS_KEY`, injeta a key e faz assert de que o `BuildConfig` recebeu valor;
 - baixa e verifica o modelo Vosk por SHA-256;
 - roda `:app:testDebugUnitTest` (novos testes incluídos).
+
+Versão: **1.3.0+15**, com nota de release dizendo que a palavra de ativação exige `.ppn` +
+AccessKey e que, sem eles, a feature fica desligada.
 
 ## 9. Riscos e limites declarados
 
@@ -223,6 +262,12 @@ CI (`flutter-ci.yml`):
 5. **APK** cresce de ~54 MB para ~100 MB.
 6. **Consumo real** depende de medição no aparelho; o design reduz trabalho por frame, mas
    não há número antes do protocolo rodar.
+7. **Sem `.ppn` não existe palavra de ativação** (D7). Quem migrar de 1.2.1 perde a função
+   até configurar a key — a nota de release precisa dizer isso.
+8. **AccessKey é extraível do APK** (característica do Picovoice, não bug): nunca logar, nunca
+   incluir em diagnóstico; APK compartilhado consome a quota da conta.
+9. **Áudio nunca é persistido**: o anel de 1,5 s é só RAM e é limpo em `stop`/`destroy`; não
+   há gravação WAV de diagnóstico.
 
 ## 10. Fora de escopo
 
@@ -230,3 +275,35 @@ CI (`flutter-ci.yml`):
 - Treinar modelo KWS próprio.
 - Substituir o `SpeechRecognizer` do botão manual.
 - UI nova além de expor o estado real do motor.
+
+## Stress Test Results: motor KWS Porcupine + pré-roll Vosk
+
+### Resolved Decisions
+- **Sem fallback**: a porta de volume sai do caminho de ativação. Sem `.ppn`/key a feature
+  fica off com motivo visível; voz manual continua.
+- **Gatilho ≠ ativação**: só vira ativação com texto útil (≥2 caracteres) do Vosk; vazio é
+  miss silencioso com cooldown de 1,5 s e backoff 5/10/20 s (teto 30 s).
+- **Segurança**: áudio só em RAM, AccessKey não é segredo forte, Action Gate preservado,
+  modelo Vosk verificado por SHA-256.
+- **Falhas**: Vosk quebrado entrega frase sem comando (Dart cai na voz manual); Porcupine
+  quebrado desliga o KWS com motivo; 16 kHz ausente é erro explícito; exceção no `process()`
+  recria uma vez.
+- **Testes**: sem interface de motor; três componentes puros testados em JVM.
+- **Entrega**: 1.3.0+15, CI verde com aviso quando não há secret, assert quando há.
+
+### Changes Made
+- D7/D8/D9 adicionados à tabela de decisões.
+- Seção 3.3 (falso positivo e backoff) e invariante de eco do TTS.
+- Novo componente `FalseTriggerBackoff.kt` e seu teste.
+- Caminhos de falha e proibição de downgrade silencioso para 8 kHz na seção 5.
+- Riscos 7–9 (perda de função na migração, extração da key, áudio não persistido).
+
+### Deferred / Parking Lot
+- Treinar modelo KWS próprio.
+- Substituir o `SpeechRecognizer` do botão manual.
+- Pré-roll configurável por perfil de uso.
+
+### Confidence Assessment
+- Overall: **Medium-High**.
+- Áreas de preocupação: disponibilidade de keyword pt-BR no Picovoice Console; precisão do
+  Vosk small pt em comandos com nomes próprios; ausência de teste de loop em CI (só físico).
