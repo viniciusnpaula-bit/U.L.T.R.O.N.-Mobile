@@ -314,12 +314,12 @@ class FalseTriggerBackoffTest {
     @Test
     fun `backoff progressivo a partir do terceiro miss`() {
         val b = FalseTriggerBackoff()
-        b.onMiss(0); b.onMiss(1); b.onMiss(2)
-        assertEquals(5_000L, b.onMiss(3))
-        assertEquals(10_000L, b.onMiss(4))
-        assertEquals(20_000L, b.onMiss(5))
+        b.onMiss(0); b.onMiss(1)
+        assertEquals(5_000L, b.onMiss(2))
+        assertEquals(10_000L, b.onMiss(3))
+        assertEquals(20_000L, b.onMiss(4))
+        assertEquals(30_000L, b.onMiss(5))
         assertEquals(30_000L, b.onMiss(6))
-        assertEquals(30_000L, b.onMiss(7))
     }
 
     @Test
