@@ -259,7 +259,7 @@ AccessKey e que, sem eles, a feature fica desligada.
    explícito.
 4. **Sem o `.ppn`/key** não é possível provar detecção real; só compilar e testar as partes
    puras.
-5. **APK** cresce de ~54 MB para ~100 MB.
+5. **APK** cresce ~32 MB (zip do modelo): ~54 MB → ~86 MB.
 6. **Consumo real** depende de medição no aparelho; o design reduz trabalho por frame, mas
    não há número antes do protocolo rodar.
 7. **Sem `.ppn` não existe palavra de ativação** (D7). Quem migrar de 1.2.1 perde a função
