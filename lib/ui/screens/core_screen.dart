@@ -50,8 +50,8 @@ class CoreScreen extends StatefulWidget {
 
 class _CoreScreenState extends State<CoreScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  static const _crimson = Color(0xFF75020F);
-  static const _rose = Color(0xFFFF707C);
+  static const _crimson = Color(0xFFE50914);
+  static const _rose = Color(0xFFFFA0A0);
   static const _border = Color(0xFF51080D);
 
   late final Ticker ticker;
@@ -393,7 +393,7 @@ class _CoreScreenState extends State<CoreScreen>
     final sent = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2B0307),
+        backgroundColor: const Color(0xFF2E0305),
         title: Text(
           'Responder ${msg.sender} (${msg.appLabel})',
           style: const TextStyle(
@@ -1008,7 +1008,7 @@ class _CoreScreenState extends State<CoreScreen>
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2B0307),
+        backgroundColor: const Color(0xFF2E0305),
         title: Text(
           title,
           style: const TextStyle(
@@ -1339,7 +1339,7 @@ class _CoreScreenState extends State<CoreScreen>
       return _buildCamouflageScreen();
     }
     return Scaffold(
-        backgroundColor: const Color(0xFF19171B),
+        backgroundColor: const Color(0xFF0A0002),
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -1350,7 +1350,7 @@ class _CoreScreenState extends State<CoreScreen>
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: const Color(0xCC19171B),
+                    color: const Color(0xCC0A0002),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: _border),
                   ),
@@ -1472,7 +1472,7 @@ class _CoreScreenState extends State<CoreScreen>
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF2B0307),
+                          color: const Color(0xFF2E0305),
                           borderRadius: BorderRadius.circular(4),
                           border: Border.all(
                             color: _crimson.withValues(alpha: 0.35),
@@ -1606,7 +1606,7 @@ class _CoreScreenState extends State<CoreScreen>
                       icon: const Icon(
                         Icons.lock_outline,
                         size: 16,
-                        color: Color(0xFFFF707C),
+                        color: Color(0xFFFFA0A0),
                       ),
                     ),
                   ],
@@ -1631,7 +1631,7 @@ class _CoreScreenState extends State<CoreScreen>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: const Color(0xFF2B0307),
+              color: const Color(0xFF2E0305),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: _border),
             ),
@@ -1682,7 +1682,7 @@ class _CoreScreenState extends State<CoreScreen>
                     decoration: BoxDecoration(
                       color: listeningVoice
                           ? _crimson.withValues(alpha: 0.25)
-                          : const Color(0xFF2B0307),
+                          : const Color(0xFF2E0305),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
                         color: listeningVoice
@@ -1703,7 +1703,7 @@ class _CoreScreenState extends State<CoreScreen>
                   child: Container(
                     padding: const EdgeInsets.all(7),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF2B0307),
+                      color: const Color(0xFF2E0305),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: const Icon(
@@ -1865,8 +1865,8 @@ class _CoreScreenState extends State<CoreScreen>
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
                         color: msg.isUser
-                            ? const Color(0xFF2B0307)
-                            : const Color(0xFF19171B),
+                            ? const Color(0xFF2E0305)
+                            : const Color(0xFF0A0002),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: msg.isUser
@@ -1925,7 +1925,7 @@ class _CoreScreenState extends State<CoreScreen>
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFF19171B),
+                color: const Color(0xFF0A0002),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: _border),
               ),
@@ -2041,7 +2041,7 @@ class _CoreScreenState extends State<CoreScreen>
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF2B0307),
+                        color: const Color(0xFF2E0305),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: _border),
                       ),
@@ -2105,7 +2105,7 @@ class _CoreScreenState extends State<CoreScreen>
   Widget _buildFullscreenStage() => Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFF2B0307),
+          color: const Color(0xFF2E0305),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: _crimson.withValues(alpha: 0.3)),
         ),
@@ -2162,7 +2162,7 @@ class _CoreScreenState extends State<CoreScreen>
                 const SizedBox(height: 10),
                 _TelemetryBox(
                   title: 'FAILOVER DE PROVEDORES:',
-                  titleColor: const Color(0xFFFF707C),
+                  titleColor: const Color(0xFFFFA0A0),
                   body:
                       'Ativo: $activeProviderUsed • Chave protegida no Keystore Android',
                 ),
@@ -2264,7 +2264,7 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF19171B),
+                  color: const Color(0xFF0A0002),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: _crimson.withValues(alpha: 0.35),
@@ -2287,7 +2287,7 @@ class _CoreScreenState extends State<CoreScreen>
                       value: widget.gate.isAuthenticated
                           ? 'DESBLOQUEADO'
                           : 'BLOQUEADO',
-                      valueColor: const Color(0xFFFF707C),
+                      valueColor: const Color(0xFFFFA0A0),
                     ),
                     const SizedBox(height: 6),
                     const _SecurityRow(
@@ -2306,7 +2306,7 @@ class _CoreScreenState extends State<CoreScreen>
                       label: 'PIN de Coação (Duress):',
                       value: duressLabel,
                       valueColor: hasDuressPinConfigured
-                          ? const Color(0xFFFF707C)
+                          ? const Color(0xFFFFA0A0)
                           : const Color(0xFFA89698),
                     ),
                     const SizedBox(height: 6),
@@ -2324,7 +2324,7 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: const Color(0xFF2E0305),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -2427,7 +2427,7 @@ class _CoreScreenState extends State<CoreScreen>
                             icon: const Icon(
                               Icons.delete_outline,
                               size: 16,
-                              color: Color(0xFFFF707C),
+                              color: Color(0xFFFFA0A0),
                             ),
                           ),
                         ],
@@ -2442,7 +2442,7 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: const Color(0xFF2E0305),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -2537,7 +2537,7 @@ class _CoreScreenState extends State<CoreScreen>
                           _lockSession();
                         },
                         style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF75020F),
+                          backgroundColor: const Color(0xFFE50914),
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 10),
                         ),
@@ -2559,7 +2559,7 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: const Color(0xFF2E0305),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -2587,7 +2587,7 @@ class _CoreScreenState extends State<CoreScreen>
                     Text(
                       '✓ Cifragem PBKDF2-HMAC-SHA256 (120k iter): Ativa',
                       style: TextStyle(
-                        color: Color(0xFFFF707C),
+                        color: Color(0xFFFFA0A0),
                         fontSize: 10,
                       ),
                     ),
@@ -2595,7 +2595,7 @@ class _CoreScreenState extends State<CoreScreen>
                     Text(
                       '✓ Isolação de Chaves de API no Keystore: Ativa',
                       style: TextStyle(
-                        color: Color(0xFFFF707C),
+                        color: Color(0xFFFFA0A0),
                         fontSize: 10,
                       ),
                     ),
@@ -2603,7 +2603,7 @@ class _CoreScreenState extends State<CoreScreen>
                     Text(
                       '✓ Exclusão de Backup em Nuvem (allowBackup=false): Ativa',
                       style: TextStyle(
-                        color: Color(0xFFFF707C),
+                        color: Color(0xFFFFA0A0),
                         fontSize: 10,
                       ),
                     ),
@@ -2735,7 +2735,7 @@ class _CoreScreenState extends State<CoreScreen>
                 margin: const EdgeInsets.only(bottom: 10),
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: const Color(0xFF2E0305),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(color: _crimson.withValues(alpha: 0.4)),
                 ),
@@ -2774,8 +2774,8 @@ class _CoreScreenState extends State<CoreScreen>
                             subLabel: '${batTemp.toStringAsFixed(1)}°C',
                             percentage: batPct,
                             color: batLevel < 20
-                                ? const Color(0xFFFF707C)
-                                : const Color(0xFF75020F),
+                                ? const Color(0xFFFFA0A0)
+                                : const Color(0xFFE50914),
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -2785,7 +2785,7 @@ class _CoreScreenState extends State<CoreScreen>
                             label: 'RAM',
                             subLabel: ramSub,
                             percentage: ramPct,
-                            color: const Color(0xFF75020F),
+                            color: const Color(0xFFE50914),
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -2795,7 +2795,7 @@ class _CoreScreenState extends State<CoreScreen>
                             label: 'TEMP',
                             subLabel: 'ESTÁVEL',
                             percentage: 0.35,
-                            color: const Color(0xFFFF707C),
+                            color: const Color(0xFFFFA0A0),
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -2805,7 +2805,7 @@ class _CoreScreenState extends State<CoreScreen>
                             label: netType,
                             subLabel: s?.ringerMode ?? 'ONLINE',
                             percentage: 0.92,
-                            color: const Color(0xFF75020F),
+                            color: const Color(0xFFE50914),
                           ),
                         ),
                       ],
@@ -2817,7 +2817,7 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF19171B),
+                  color: const Color(0xFF0A0002),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _crimson.withValues(alpha: 0.35)),
                 ),
@@ -2836,7 +2836,7 @@ class _CoreScreenState extends State<CoreScreen>
                     _SecurityRow(
                       label: 'Bateria:',
                       value: batText,
-                      valueColor: const Color(0xFFFF707C),
+                      valueColor: const Color(0xFFFFA0A0),
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
@@ -2855,21 +2855,21 @@ class _CoreScreenState extends State<CoreScreen>
                       label: 'Lanterna Traseira:',
                       value: torchOn ? 'LIGADA (ON)' : 'DESLIGADA (OFF)',
                       valueColor: torchOn
-                          ? const Color(0xFFFF707C)
+                          ? const Color(0xFFFFA0A0)
                           : const Color(0xFFA89698),
                     ),
                     const SizedBox(height: 4),
                     const _SecurityRow(
                       label: 'Flip-to-Shush (Acelerômetro):',
                       value: 'ATIVO (Virar tela p/ baixo silencia)',
-                      valueColor: Color(0xFFFF707C),
+                      valueColor: Color(0xFFFFA0A0),
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
                       label: 'Modo Foco Noturno:',
                       value: nightFocusMode ? 'ATIVO (Sussurro TTS)' : 'INATIVO',
                       valueColor: nightFocusMode
-                          ? const Color(0xFFFF707C)
+                          ? const Color(0xFFFFA0A0)
                           : const Color(0xFFA89698),
                     ),
                     const SizedBox(height: 4),
@@ -2879,7 +2879,7 @@ class _CoreScreenState extends State<CoreScreen>
                           ? 'ATIVO (VAD adaptativo)'
                           : 'EM REPOUSO',
                       valueColor: ecoVadSentinelRunning
-                          ? const Color(0xFFFF707C)
+                          ? const Color(0xFFFFA0A0)
                           : const Color(0xFFA89698),
                     ),
                     const SizedBox(height: 8),
@@ -2917,10 +2917,10 @@ class _CoreScreenState extends State<CoreScreen>
                             },
                             style: FilledButton.styleFrom(
                               backgroundColor: ecoVadSentinelRunning
-                                  ? const Color(0xFF75020F)
-                                  : const Color(0xFF2B0307),
+                                  ? const Color(0xFFE50914)
+                                  : const Color(0xFF2E0305),
                               foregroundColor: ecoVadSentinelRunning
-                                  ? const Color(0xFFFF707C)
+                                  ? const Color(0xFFFFA0A0)
                                   : _rose,
                               visualDensity: VisualDensity.compact,
                             ),
@@ -3021,7 +3021,7 @@ class _CoreScreenState extends State<CoreScreen>
                                 style: OutlinedButton.styleFrom(
                                   backgroundColor: selectedVoiceProfile == prof
                                       ? _crimson
-                                      : const Color(0xFF2B0307),
+                                      : const Color(0xFF2E0305),
                                   foregroundColor: selectedVoiceProfile == prof
                                       ? Colors.black
                                       : _rose,
@@ -3052,8 +3052,8 @@ class _CoreScreenState extends State<CoreScreen>
                             voiceService.stop();
                           },
                           style: OutlinedButton.styleFrom(
-                            backgroundColor: const Color(0xFF2B0307),
-                            foregroundColor: const Color(0xFFFF707C),
+                            backgroundColor: const Color(0xFF2E0305),
+                            foregroundColor: const Color(0xFFFFA0A0),
                             side: const BorderSide(color: _border),
                             visualDensity: VisualDensity.compact,
                             padding: const EdgeInsets.symmetric(
@@ -3080,7 +3080,7 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: const Color(0xFF2E0305),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: _crimson.withValues(alpha: 0.45),
@@ -3107,8 +3107,8 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                           decoration: BoxDecoration(
                             color: notificationSentinelEnabled
-                                ? const Color(0xFF75020F)
-                                : const Color(0xFF2B0307),
+                                ? const Color(0xFFE50914)
+                                : const Color(0xFF2E0305),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
@@ -3117,7 +3117,7 @@ class _CoreScreenState extends State<CoreScreen>
                                 : 'PERMISSÃO PENDENTE',
                             style: TextStyle(
                               color: notificationSentinelEnabled
-                                  ? const Color(0xFFFF707C)
+                                  ? const Color(0xFFFFA0A0)
                                   : _rose,
                               fontSize: 8,
                               fontWeight: FontWeight.bold,
@@ -3208,7 +3208,7 @@ class _CoreScreenState extends State<CoreScreen>
                             margin: const EdgeInsets.only(bottom: 6),
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF19171B),
+                              color: const Color(0xFF0A0002),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(color: _border),
                             ),
@@ -3250,7 +3250,7 @@ class _CoreScreenState extends State<CoreScreen>
                                         vertical: 4,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF2B0307),
+                                        color: const Color(0xFF2E0305),
                                         borderRadius: BorderRadius.circular(6),
                                         border: Border.all(
                                           color:
@@ -3348,7 +3348,7 @@ class _CoreScreenState extends State<CoreScreen>
                           child: FilledButton.icon(
                             onPressed: () => _sendQuickMessage(viaSms: true),
                             style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF2B0307),
+                              backgroundColor: const Color(0xFF2E0305),
                               foregroundColor: _rose,
                               visualDensity: VisualDensity.compact,
                             ),
@@ -3373,7 +3373,7 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: const Color(0xFF2E0305),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -3524,7 +3524,7 @@ class _CoreScreenState extends State<CoreScreen>
                   onPressed: _toggleTorchQuick,
                   style: FilledButton.styleFrom(
                     backgroundColor:
-                        torchOn ? const Color(0xFFFF707C) : _crimson,
+                        torchOn ? const Color(0xFFFFA0A0) : _crimson,
                     foregroundColor: const Color(0xFFF0E6E7),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: RoundedRectangleBorder(
@@ -3552,7 +3552,7 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: const Color(0xFF2E0305),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -3722,7 +3722,7 @@ class _CoreScreenState extends State<CoreScreen>
           child: OutlinedButton(
             onPressed: () => _setPanel(_ActivePanel.main),
             style: OutlinedButton.styleFrom(
-              backgroundColor: const Color(0xFF2B0307),
+              backgroundColor: const Color(0xFF2E0305),
               foregroundColor: _crimson,
               side: BorderSide(color: _crimson.withValues(alpha: 0.35)),
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -3783,7 +3783,7 @@ class _CoreScreenState extends State<CoreScreen>
           '⚡ Provedor ativado: ${preset.name}',
           style: const TextStyle(fontSize: 11),
         ),
-        backgroundColor: const Color(0xFF2B0307),
+        backgroundColor: const Color(0xFF2E0305),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -3856,7 +3856,7 @@ class _CoreScreenState extends State<CoreScreen>
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                    colors: [Color(0xFF2B0307), Color(0xFF19171B)],
+                    colors: [Color(0xFF2E0305), Color(0xFF0A0002)],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
@@ -3881,14 +3881,14 @@ class _CoreScreenState extends State<CoreScreen>
                             vertical: 2,
                           ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF75020F),
+                            color: const Color(0xFFE50914),
                             borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFFFF707C)),
+                            border: Border.all(color: const Color(0xFFFFA0A0)),
                           ),
                           child: const Text(
                             'ZERO-KEY NATIVO',
                             style: TextStyle(
-                              color: Color(0xFFFF707C),
+                              color: Color(0xFFFFA0A0),
                               fontSize: 8.5,
                               fontWeight: FontWeight.bold,
                             ),
@@ -3932,7 +3932,7 @@ class _CoreScreenState extends State<CoreScreen>
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF19171B),
+                    color: const Color(0xFF0A0002),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
                       color: activeProviderUsed
@@ -3969,8 +3969,8 @@ class _CoreScreenState extends State<CoreScreen>
                                   ),
                                   decoration: BoxDecoration(
                                     color: preset.requiresKey
-                                        ? const Color(0xFF2B0307)
-                                        : const Color(0xFF75020F),
+                                        ? const Color(0xFF2E0305)
+                                        : const Color(0xFFE50914),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: Text(
@@ -3978,7 +3978,7 @@ class _CoreScreenState extends State<CoreScreen>
                                     style: TextStyle(
                                       color: preset.requiresKey
                                           ? _rose
-                                          : const Color(0xFFFF707C),
+                                          : const Color(0xFFFFA0A0),
                                       fontSize: 7.5,
                                       fontWeight: FontWeight.bold,
                                     ),
@@ -4174,7 +4174,7 @@ class _CoreScreenState extends State<CoreScreen>
             child: OutlinedButton(
               onPressed: () => _setPanel(_ActivePanel.main),
               style: OutlinedButton.styleFrom(
-                backgroundColor: const Color(0xFF2B0307),
+                backgroundColor: const Color(0xFF2E0305),
                 foregroundColor: _crimson,
                 side: BorderSide(color: _crimson.withValues(alpha: 0.35)),
                 padding: const EdgeInsets.symmetric(vertical: 12),
@@ -4213,7 +4213,7 @@ class _TopNavPill extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
           decoration: BoxDecoration(
-            color: selected ? const Color(0xFF75020F) : Colors.transparent,
+            color: selected ? const Color(0xFFE50914) : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
@@ -4246,14 +4246,14 @@ class _StageChip extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            color: const Color(0xFF2B0307),
+            color: const Color(0xFF2E0305),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: const Color(0xFF51080D)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 12, color: const Color(0xFFFF707C)),
+              Icon(icon, size: 12, color: const Color(0xFFFFA0A0)),
               const SizedBox(width: 4),
               Text(
                 label,
@@ -4287,7 +4287,7 @@ class _QuickCommandCard extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFF2B0307),
+            color: const Color(0xFF2E0305),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: const Color(0xFF51080D)),
           ),
@@ -4298,7 +4298,7 @@ class _QuickCommandCard extends StatelessWidget {
               Text(
                 command,
                 style: const TextStyle(
-                  color: Color(0xFFFF707C),
+                  color: Color(0xFFFFA0A0),
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                 ),
@@ -4334,7 +4334,7 @@ class _TelemetryBox extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: const Color(0xFF2B0307),
+          color: const Color(0xFF2E0305),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFF51080D)),
         ),
@@ -4412,7 +4412,7 @@ class _HelpSyntaxItem extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: const Color(0xFF2B0307),
+          color: const Color(0xFF2E0305),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: const Color(0xFF51080D)),
         ),
@@ -4423,7 +4423,7 @@ class _HelpSyntaxItem extends StatelessWidget {
               cmd,
               style: TextStyle(
                 color: highlight
-                    ? const Color(0xFFFF707C)
+                    ? const Color(0xFFFFA0A0)
                     : const Color(0xFFF0E6E7),
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
@@ -4462,8 +4462,8 @@ class CorePainter extends CustomPainter {
   static const _hotspotGradient = RadialGradient(
     colors: [
       Color(0xFFF0E6E7),
-      Color(0xFFFF707C),
-      Color(0xFF75020F),
+      Color(0xFFFFA0A0),
+      Color(0xFFE50914),
       Color(0x0075020F),
     ],
     stops: [0.0, 0.28, 0.70, 1.0],
@@ -4474,14 +4474,14 @@ class CorePainter extends CustomPainter {
     ..style = PaintingStyle.stroke
     ..strokeWidth = 1.8;
 
-  static final _nodePaint = Paint()..color = const Color(0xFFFF707C);
+  static final _nodePaint = Paint()..color = const Color(0xFFFFA0A0);
 
   static final _ring2Paint = Paint()
     ..color = const Color(0x8051080D)
     ..style = PaintingStyle.stroke
     ..strokeWidth = 1.3;
 
-  static final _majorTickPaint = Paint()..color = const Color(0xFF75020F);
+  static final _majorTickPaint = Paint()..color = const Color(0xFFE50914);
   static final _minorTickPaint = Paint()..color = const Color(0x5951080D);
 
   static final _hexPaint = Paint()
@@ -4610,7 +4610,7 @@ class _CircularTelemetryGauge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFF2B0307),
+        color: const Color(0xFF2E0305),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFF51080D)),
       ),
