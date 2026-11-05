@@ -16,6 +16,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.BatteryManager
+import android.speech.SpeechRecognizer
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
