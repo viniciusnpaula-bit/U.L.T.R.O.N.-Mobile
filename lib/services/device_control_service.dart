@@ -190,12 +190,12 @@ class WakeWordDiagnostics {
   }
 
   final bool running;
-\n  /// true somente com leitura real de áudio confirmada (não basta o serviço estar vivo).
+  /// true somente com leitura real de áudio confirmada (não basta o serviço estar vivo).
   final bool capturing;
   final bool paused;
-\n  /// Motor de detecção realmente em uso.
+  /// Motor de detecção realmente em uso.
   final String engine;
-\n  /// false enquanto não houver motor de keyword spotting dedicado (Porcupine, Vosk etc.).
+  /// false enquanto não houver motor de keyword spotting dedicado (Porcupine, Vosk etc.).
   final bool dedicatedKws;
   final int sdk;
   final bool notificationsPermission;
@@ -509,8 +509,9 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     });
   }
 
-  Future<void> openUrl(String url) async {
-    await _channel.invokeMethod<bool>('openUrl', {'url': url});
+  Future<bool> openUrl(String url) async {
+    final res = await _channel.invokeMethod<bool>('openUrl', {'url': url});
+    return res ?? false;
   }
 
   Future<void> webSearch(String query) async {

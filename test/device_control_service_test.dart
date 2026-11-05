@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ultron_mobile/services/device_control_service.dart';
+import 'package:ultron_mobile/services/obsidian_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

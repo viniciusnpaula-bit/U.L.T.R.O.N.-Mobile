@@ -2981,7 +2981,7 @@ class _CoreScreenState extends State<CoreScreen>
                         onPressed: _showWakeWordDiagnostics,
                         style: OutlinedButton.styleFrom(
                           foregroundColor: _rose,
-                          side: BorderSide(color: _border),
+                          side: const BorderSide(color: _border),
                           visualDensity: VisualDensity.compact,
                         ),
                         icon: const Icon(Icons.troubleshoot, size: 13),
@@ -3393,9 +3393,10 @@ class _CoreScreenState extends State<CoreScreen>
                         ),
                         InkWell(
                           onTap: () async {
+                            final messenger = ScaffoldMessenger.of(context);
                             final opened = await deviceService.openObsidianVault();
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            if (!mounted) return;
+                            messenger.showSnackBar(
                               SnackBar(
                                 content: Text(
                                   opened
@@ -3407,10 +3408,10 @@ class _CoreScreenState extends State<CoreScreen>
                             );
                           },
                           borderRadius: BorderRadius.circular(4),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                             child: Row(
-                              children: const [
+                              children: [
                                 Icon(Icons.open_in_new, size: 11, color: _rose),
                                 SizedBox(width: 4),
                                 Text(
@@ -4297,7 +4298,7 @@ class _QuickCommandCard extends StatelessWidget {
               Text(
                 command,
                 style: const TextStyle(
-                  color: const Color(0xFFFF707C),
+                  color: Color(0xFFFF707C),
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                 ),
