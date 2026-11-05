@@ -22,6 +22,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
   bool checking = false;
   bool downloading = false;
   bool checked = false;
+  bool hasNewVersion = false;
   double progress = 0;
 
   @override
@@ -45,14 +46,18 @@ class _UpdateScreenState extends State<UpdateScreen> {
       setState(() {
         checked = true;
         if (latest == null) {
+          update = null;
+          hasNewVersion = false;
           status =
-              'Nenhuma release pública com APK foi encontrada. Publique uma release no GitHub com o arquivo APK anexado.';
-        } else if (AppUpdateService.isNewer(latest.version, installed)) {
-          update = latest;
-          status =
-              'Versão ${latest.version} disponível (instalada: $installed).';
+              'Nenhuma release pública com APK foi encontrada no repositório GitHub.';
         } else {
-          status = 'Você já está na versão mais recente ($installed).';
+          update = latest;
+          hasNewVersion = AppUpdateService.isNewer(latest.version, installed);
+          if (hasNewVersion) {
+            status = 'Nova versão ${latest.version} disponível (instalada: $installed).';
+          } else {
+            status = 'Você já está na versão $installed (versão no GitHub: ${latest.version}).';
+          }
         }
       });
     } catch (e) {
@@ -195,7 +200,9 @@ class _UpdateScreenState extends State<UpdateScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '✓ Nova Versão Encontrada: ${update!.version}',
+                              hasNewVersion
+                                  ? '✓ Nova Versão Encontrada: ${update!.version}'
+                                  : 'Pacote disponível no GitHub: ${update!.version}',
                               style: const TextStyle(
                                 color: Color(0xFFFF707C),
                                 fontSize: 11,
@@ -217,17 +224,20 @@ class _UpdateScreenState extends State<UpdateScreen> {
                                 onPressed: downloading ? null : _download,
                                 style: FilledButton.styleFrom(
                                   backgroundColor: _crimson,
-                                  foregroundColor: Colors.black,
+                                  foregroundColor: Colors.white,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(10),
                                   ),
                                 ),
-                                icon: const Icon(Icons.install_mobile, size: 16),
-                                label: const Text(
-                                  'BAIXAR APK E ABRIR INSTALADOR',
-                                  style: TextStyle(
+                                icon: const Icon(Icons.install_mobile, size: 16, color: Colors.white),
+                                label: Text(
+                                  hasNewVersion
+                                      ? 'BAIXAR APK E ABRIR INSTALADOR'
+                                      : 'REINSTALAR / BAIXAR APK (v${update!.version})',
+                                  style: const TextStyle(
                                     fontSize: 11,
                                     fontWeight: FontWeight.bold,
+                                    color: Colors.white,
                                   ),
                                 ),
                               ),
@@ -275,16 +285,16 @@ class _UpdateScreenState extends State<UpdateScreen> {
                     OutlinedButton.icon(
                       onPressed: checking || downloading ? null : _check,
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: _crimson,
-                        backgroundColor: const Color(0xFF75020F),
+                        foregroundColor: _rose,
+                        backgroundColor: const Color(0xFF2B0307),
                         side: BorderSide(
-                          color: _crimson.withValues(alpha: 0.35),
+                          color: _crimson.withValues(alpha: 0.5),
                         ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
                       ),
-                      icon: const Icon(Icons.refresh, size: 15),
+                      icon: const Icon(Icons.refresh, size: 15, color: _rose),
                       label: Text(
                         checked
                             ? 'VERIFICAR NOVAMENTE'
@@ -292,6 +302,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                         style: const TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
+                          color: _rose,
                         ),
                       ),
                     ),

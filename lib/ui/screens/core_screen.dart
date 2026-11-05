@@ -2193,11 +2193,21 @@ class _CoreScreenState extends State<CoreScreen>
                       'Ativo: $activeProviderUsed • Chave protegida no Keystore Android',
                 ),
                 const SizedBox(height: 10),
-                _TelemetryBox(
-                  title: 'ATUALIZAÇÃO GITHUB:',
-                  titleColor: const Color(0xFFA89698),
-                  body:
-                      'Versão instalada $installedVersion (${hasUpdate ? 'Nova release disponível' : 'Release verificado'})',
+                InkWell(
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const UpdateScreen(),
+                    ),
+                  ),
+                  borderRadius: BorderRadius.circular(8),
+                  child: _TelemetryBox(
+                    title: 'ATUALIZAÇÃO GITHUB (TOQUE PARA ABRIR):',
+                    titleColor: hasUpdate
+                        ? const Color(0xFFFF707C)
+                        : const Color(0xFFA89698),
+                    body:
+                        'Versão instalada $installedVersion (${hasUpdate ? 'Nova release disponível' : 'Toque para verificar/atualizar'})',
+                  ),
                 ),
               ],
             ),

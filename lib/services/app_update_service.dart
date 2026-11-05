@@ -107,14 +107,17 @@ class AppUpdateService {
       final expected = update.checksumSha256;
       if (expected != null) {
         if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(expected)) throw const FormatException('SHA-256 publicado inválido.');
-        final actual = sha256.convert(await file.readAsBytes()).toString();
+        final actual = (await sha256.bind(file.openRead()).first).toString();
         if (actual != expected) {
           await file.delete();
           throw const FormatException('Integridade do APK não confere (SHA-256). Download cancelado.');
         }
       }
       final result = await OpenFilex.open(file.path, type: 'application/vnd.android.package-archive');
-      if (result.type != ResultType.done) throw Exception(result.message);
+      if (result.type != ResultType.done) {
+        final detail = result.message.isNotEmpty ? result.message : result.type.name;
+        throw Exception('Não foi possível iniciar o instalador: $detail. Verifique se o U.L.T.R.O.N. tem permissão de "Instalar apps desconhecidos".');
+      }
     } finally {
       await sink?.close();
       client.close(force: true);
