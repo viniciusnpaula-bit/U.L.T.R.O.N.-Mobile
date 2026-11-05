@@ -62,11 +62,38 @@ jobs:
       - name: Test
         run: flutter test
 
+      - name: Native unit tests (wake word matcher)
+        env:
+          ORG_GRADLE_PROJECT_porcupineAccessKey: ${{ secrets.PORCUPINE_ACCESS_KEY }}
+          PORCUPINE_ACCESS_KEY: ${{ secrets.PORCUPINE_ACCESS_KEY }}
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+        working-directory: android
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/share/boost /opt/ghc /usr/share/swift
+          sudo rm -rf "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/emulator
+          sudo rm -rf "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/system-images
+          sudo docker image prune -af
+          df -h /
+
+      - name: Fetch Vosk model
+        run: |
+          mkdir -p android/app/src/main/assets/vosk
+          curl -sSL -o /tmp/vosk-model.zip \
+            https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip
+          echo "6e1ce909032e1afa7a88e68a3d628ecafff302bdf195befab308826c395e93b7  /tmp/vosk-model.zip" \
+            | sha256sum -c -
+          mv /tmp/vosk-model.zip android/app/src/main/assets/vosk/model-pt.zip
+
       - name: Derive version from tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: echo "BUILD_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Build signed release APK
+        env:
+          PORCUPINE_ACCESS_KEY: ${{ secrets.PORCUPINE_ACCESS_KEY }}
+          ORG_GRADLE_PROJECT_porcupineAccessKey: ${{ secrets.PORCUPINE_ACCESS_KEY }}
         run: |
           if [ -n "${BUILD_VERSION:-}" ]; then
             flutter build apk --release --build-name="$BUILD_VERSION" --build-number="$GITHUB_RUN_NUMBER"
