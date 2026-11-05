@@ -20,10 +20,10 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
-  static const _crimson = Color(0xFF75020F);
-  static const _rose = Color(0xFFFF707C);
+  static const _crimson = Color(0xFFE50914);
+  static const _rose = Color(0xFFFFA0A0);
   static const _border = Color(0xFF51080D);
-  static const _surface = Color(0xFF2B0307);
+  static const _surface = Color(0xFF2E0305);
 
   String pin = '';
   String? firstEntry;
@@ -325,7 +325,7 @@ class _AuthScreenState extends State<AuthScreen> {
   Widget build(BuildContext context) {
     if (hasPin == null) {
       return const Scaffold(
-        backgroundColor: Color(0xFF19171B),
+        backgroundColor: Color(0xFF0A0002),
         body: Center(
           child: CircularProgressIndicator(color: _crimson),
         ),
@@ -335,7 +335,7 @@ class _AuthScreenState extends State<AuthScreen> {
     final slotCount = max(4, pin.length);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF19171B),
+      backgroundColor: const Color(0xFF0A0002),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -385,7 +385,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             Icon(
                               Icons.battery_full,
                               size: 11,
-                              color: Color(0xFFFF707C),
+                              color: Color(0xFFFFA0A0),
                             ),
                             SizedBox(width: 2),
                             Text(
@@ -605,7 +605,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
                               color: filled
-                                  ? const Color(0xFF2B0307)
+                                  ? const Color(0xFF2E0305)
                                   : Colors.transparent,
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
@@ -671,7 +671,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         label: isSetup && pin.isEmpty && firstEntry != null
                             ? 'VOLTAR'
                             : 'LIMPAR',
-                        textColor: const Color(0xFFFF707C),
+                        textColor: const Color(0xFFFFA0A0),
                         fontSize: 11,
                         onTap: blocked ? null : _handleClear,
                       ),
@@ -708,7 +708,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         const Text(
                           'FAIL-CLOSED ATIVO',
                           style: TextStyle(
-                            color: Color(0xFFFF707C),
+                            color: Color(0xFFFFA0A0),
                             fontSize: 10,
                             fontWeight: FontWeight.bold,
                           ),
@@ -730,7 +730,7 @@ class _KeypadButton extends StatelessWidget {
   const _KeypadButton({
     required this.label,
     required this.onTap,
-    this.backgroundColor = const Color(0xFF2B0307),
+    this.backgroundColor = const Color(0xFF2E0305),
     this.borderColor = const Color(0xFF51080D),
     this.textColor = const Color(0xFFF0E6E7),
     this.fontSize = 15,
