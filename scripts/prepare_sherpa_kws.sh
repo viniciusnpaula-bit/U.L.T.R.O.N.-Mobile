@@ -17,9 +17,9 @@ if ! grep -q "jitpack.io" "$ANDROID_DIR/app/build.gradle.kts"; then
 fi
 
 required_files=(
-  "encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
+  "encoder-epoch-12-avg-2-chunk-16-left-64.onnx"
   "decoder-epoch-12-avg-2-chunk-16-left-64.onnx"
-  "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx"
+  "joiner-epoch-12-avg-2-chunk-16-left-64.onnx"
   "tokens.txt"
   "bpe.model"
   "keywords.txt"
