@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../services/ai_provider_service.dart';
 import '../../services/device_control_service.dart';
+import 'fish_audio_settings_screen.dart';
 
 class AiSettingsScreen extends StatefulWidget {
   const AiSettingsScreen({super.key, AiProviderStore? store}) : _store = store;
@@ -314,6 +315,17 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Configurar voz Fish Audio',
+            icon: const Icon(Icons.record_voice_over, color: _rose),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const FishAudioSettingsScreen(),
+              ),
+            ),
+          ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: _crimson))
