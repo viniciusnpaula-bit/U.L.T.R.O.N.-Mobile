@@ -225,18 +225,16 @@ class WakeWordDiagnostics {
   /// Resumo multilinha para exibir no HUD.
   String toReport() => [
         'Motor: $engine',
-        if (!modelLoaded) 'FALHA/PENDENTE: modelo KWS não carregado; a escuta não está disponível.',
-        'Motor dedicado: ${dedicatedKws ? "SIM" : "NÃO"} · Modelo: ${modelLoaded ? "CARREGADO" : "INDISPONÍVEL"}',
+        if (!modelLoaded) 'FALHA: modelo sherpa-onnx não carregado; escuta indisponível.',
+        'Motor KWS dedicado: ${dedicatedKws ? "SIM" : "NÃO"} · Modelo: ${modelLoaded ? "CARREGADO" : "INDISPONÍVEL"}',
         'Captura real: ${capturing ? "CONFIRMADA" : "NÃO confirmada"} · Serviço: ${running ? "vivo" : "parado"}${paused ? " · PAUSADO" : ""}${economyMode ? " · economia" : ""}',
         'Android API $sdk · Notificações: ${notificationsPermission ? "permitidas" : "NEGADAS"}',
-        'Microfone: ${micPermission ? "permitido" : "NEGADO"} · Reconhecedor: ${recognitionAvailable ? "ok" : "INDISPONÍVEL"}',
+        'Microfone: ${micPermission ? "permitido" : "NEGADO"} · Reconhecedor de comando: ${recognitionAvailable ? "disponível" : "INDISPONÍVEL"}',
         'Bateria: ${ignoringBatteryOptimizations ? "isento" : "sujeito a economia"} · Boot: ${bootAutostart ? "opt-in" : "off"}',
-        'Gatilhos de voz: $voiceTriggers · Ativações: $detections · Sem match: $recognizerMisses',
-        'Erros KWS: $kwsErrors · Erros do reconhecedor de comando: $recognizerErrors',
-        'Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
-        'Falsos acionamentos: não mensuráveis automaticamente nesta versão.',
-        'Ruído/limiar: $noiseFloor/$threshold · Último gatilho: $lastTrigger',
-        if (lastPhrase.isNotEmpty) 'Última frase: "$lastPhrase"',
+        'Ativações KWS: $detections · Última palavra: ${lastPhrase.isEmpty ? "nenhuma" : lastPhrase}',
+        'Falhas KWS: $kwsErrors · Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
+        'Falsos acionamentos: não mensuráveis automaticamente.',
+        'Último gatilho: $lastTrigger',
         'Último erro: $lastError',
       ].join('\n');
 }
