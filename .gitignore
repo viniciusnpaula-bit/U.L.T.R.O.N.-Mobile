@@ -9,4 +9,4 @@ build/
 !.env.example
 
 # Downloaded during build; sherpa-onnx KWS model is packaged into the APK.
-/android/app/src/main/assets/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01-mobile/
+/android/app/src/main/assets/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/
