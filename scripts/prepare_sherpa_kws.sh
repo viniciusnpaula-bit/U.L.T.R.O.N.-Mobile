@@ -12,6 +12,9 @@ AAR_NAME="sherpa-onnx-1.13.8.aar"
 AAR_PATH="$ANDROID_DIR/app/libs/$AAR_NAME"
 AAR_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$AAR_NAME"
 
+command -v curl >/dev/null
+command -v tar >/dev/null
+
 # Download the official Android AAR (Kotlin API + Android JNI binaries).
 mkdir -p "$(dirname "$AAR_PATH")"
 if [[ ! -s "$AAR_PATH" ]]; then
@@ -38,8 +41,6 @@ if [[ -s "$AAR_PATH" && -d "$MODEL_DIR" ]] && [[ "${#required_files[@]}" -gt 0 ]
   fi
 fi
 
-command -v curl >/dev/null
-command -v tar >/dev/null
 python3 -m pip install --quiet --disable-pip-version-check sentencepiece==0.2.0
 
 TMP_DIR="$(mktemp -d)"
