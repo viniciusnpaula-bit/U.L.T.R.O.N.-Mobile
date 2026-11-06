@@ -106,6 +106,10 @@ void main() {
           return {
             'running': true,
             'micPermission': true,
+            'engine': 'sherpa-onnx Zipformer KWS (offline / CPU)',
+            'dedicatedKws': false,
+            'modelLoaded': false,
+            'kwsErrors': 2,
             'detections': 3,
             'voiceTriggers': 7,
             'lastError': 'nenhum',
@@ -125,11 +129,13 @@ void main() {
     expect(diag.running, isTrue);
     expect(diag.detections, 3);
     expect(diag.threshold, 992);
-    expect(diag.toReport(), contains('Ativações: 3'));
-    // Sem motor KWS dedicado e sem captura confirmada: o relatório não pode fingir o contrário.
+    expect(diag.toReport(), contains('Ativações KWS: 3'));
+    expect(diag.kwsErrors, 2);
+    expect(diag.toReport(), contains('FALHA: modelo sherpa-onnx não carregado'));
+    // Sem modelo KWS carregado e sem captura confirmada: o relatório não pode fingir o contrário.
     expect(diag.dedicatedKws, isFalse);
     expect(diag.capturing, isFalse);
-    expect(diag.toReport(), contains('PENDENTE'));
+    expect(diag.toReport(), contains('INDISPONÍVEL'));
     expect(diag.toReport(), contains('NÃO confirmada'));
 
     expect(await service.setBootAutostart(true), isTrue);
