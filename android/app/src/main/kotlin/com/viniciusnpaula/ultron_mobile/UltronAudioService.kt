@@ -362,16 +362,14 @@ class UltronAudioService : Service() {
     private fun createKeywordSpotter(): KeywordSpotter {
         val modelConfig = OnlineModelConfig(
             transducer = OnlineTransducerModelConfig(
-                encoder = "$MODEL_DIR/encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+                encoder = "$MODEL_DIR/encoder-epoch-12-avg-2-chunk-16-left-64.onnx",
                 decoder = "$MODEL_DIR/decoder-epoch-12-avg-2-chunk-16-left-64.onnx",
-                joiner = "$MODEL_DIR/joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx",
+                joiner = "$MODEL_DIR/joiner-epoch-12-avg-2-chunk-16-left-64.onnx",
             ),
             tokens = "$MODEL_DIR/tokens.txt",
             numThreads = 2,
             provider = "cpu",
             modelType = "zipformer2",
-            modelingUnit = "bpe",
-            bpeVocab = "$MODEL_DIR/bpe.model",
         )
         val config = KeywordSpotterConfig(
             featConfig = FeatureConfig(sampleRate = SAMPLE_RATE_HZ, featureDim = 80),
