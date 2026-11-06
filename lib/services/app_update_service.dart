@@ -30,7 +30,9 @@ class AppUpdateService {
         return null;
       }
       final body = await response.transform(utf8.decoder).join();
-      if (response.statusCode != 200) throw HttpException('GitHub respondeu HTTP ${response.statusCode}.');
+      if (response.statusCode != 200) {
+        throw HttpException('GitHub respondeu HTTP ${response.statusCode}.');
+      }
       final release = jsonDecode(body) as Map<String, dynamic>;
       if (release['draft'] == true || release['prerelease'] == true) {
         return null;
