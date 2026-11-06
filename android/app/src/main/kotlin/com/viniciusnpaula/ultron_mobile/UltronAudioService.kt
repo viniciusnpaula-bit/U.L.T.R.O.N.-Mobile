@@ -267,6 +267,7 @@ class UltronAudioService : Service() {
                     modelLoaded = keywordSpotter != null
                     if (!modelLoaded) throw IllegalStateException("KeywordSpotter nulo")
                     Stats.lastError = "nenhum"
+                    acquireWakeLockSafely()
                     updateNotification("sherpa-onnx KWS carregado — diga \"Ultron\"")
                 } catch (e: Exception) {
                     modelLoaded = false
@@ -432,6 +433,7 @@ class UltronAudioService : Service() {
         try {
             while (workerActive.get()) {
                 if (isBatteryCriticalUnplugged()) {
+                    releaseWakeLockSafely()
                     if (!Stats.economyMode) {
                         Stats.economyMode = true
                         updateNotification("Bateria crítica — escuta em pausa")
@@ -449,6 +451,7 @@ class UltronAudioService : Service() {
 
                 val inCall = audioManager != null && audioManager.mode != AudioManager.MODE_NORMAL
                 if (userPaused || inCall || MainActivity.isFaceDownGlobal) {
+                    releaseWakeLockSafely()
                     releaseRecorder(recorder)
                     recorder = null
                     captureHealthy = false
@@ -458,6 +461,7 @@ class UltronAudioService : Service() {
 
                 // Half-duplex: libera o microfone durante comandos, TTS e transferência do evento.
                 if (isSpeakerOrRecognizerBusy(audioManager)) {
+                    releaseWakeLockSafely()
                     releaseRecorder(recorder)
                     recorder = null
                     captureHealthy = false
@@ -465,6 +469,7 @@ class UltronAudioService : Service() {
                     continue
                 }
 
+                acquireWakeLockSafely()
                 if (recorder == null) recorder = createRecorder()
                 val readCount = recorder.read(pcmBuffer, 0, windowSamples)
                 if (readCount < 0) throw IllegalStateException("AudioRecord.read=$readCount")
@@ -677,6 +682,12 @@ class UltronAudioService : Service() {
                     setShowBadge(false)
                 }
             )
+        }
+    }
+
+    private fun acquireWakeLockSafely() {
+        safely("WakeLock.acquire") {
+            if (wakeLock?.isHeld != true) wakeLock?.acquire()
         }
     }
 
