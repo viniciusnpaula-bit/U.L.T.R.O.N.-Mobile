@@ -35,6 +35,14 @@ jobs:
           git checkout -- android
           rm -f test/widget_test.dart
 
+      - name: Setup Python for KWS model tokenizer
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Prepare sherpa-onnx offline KWS model
+        run: bash scripts/prepare_sherpa_kws.sh
+
       - name: Configure Android signing
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
