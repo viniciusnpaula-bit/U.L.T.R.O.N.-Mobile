@@ -2,7 +2,7 @@ name: Flutter CI
 
 on:
   push:
-    branches: [main, 'feature/**']
+    branches: [main, 'feature/**', 'feat/**']
   pull_request:
     branches: [main]
 
@@ -28,8 +28,16 @@ jobs:
           git checkout -- pubspec.yaml
           git checkout -- android
           rm -f test/widget_test.dart
+      - name: Setup Python for KWS model tokenizer
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare sherpa-onnx offline KWS model
+        run: bash scripts/prepare_sherpa_kws.sh
       - name: Install dependencies
         run: flutter pub get
+      - name: Format Dart sources
+        run: dart format lib test
       - name: Analyze
         run: flutter analyze
       - name: Test
