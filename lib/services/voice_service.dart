@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import 'fish_audio_service.dart';
 import 'speech_text.dart';
 
 /// Perfis de timbre da voz do U.L.T.R.O.N.
@@ -42,10 +43,12 @@ class VoiceService {
     FlutterTts? tts,
     MethodChannel? deviceChannel,
     FlutterSecureStorage? storage,
+    FishAudioService? fishAudio,
   })  : _tts = tts ?? FlutterTts(),
         _deviceChannel = deviceChannel ??
             const MethodChannel('com.viniciusnpaula.ultron_mobile/device'),
-        _storage = storage ?? const FlutterSecureStorage();
+        _storage = storage ?? const FlutterSecureStorage(),
+        _fishAudio = fishAudio ?? FishAudioService();
 
   static const _voiceKey = 'ultron.tts.voice.v1';
   static const _profileKey = 'ultron.tts.profile.v1';
@@ -53,6 +56,7 @@ class VoiceService {
   final FlutterTts _tts;
   final MethodChannel _deviceChannel;
   final FlutterSecureStorage _storage;
+  final FishAudioService _fishAudio;
   Future<void>? _initializing;
   bool _ready = false;
   int _generation = 0;
@@ -62,6 +66,7 @@ class VoiceService {
   bool isSpeaking = false;
   VoiceProfile profile = VoiceProfile.grave;
   String? activeVoiceName;
+  String? lastFishAudioError;
 
   Future<void> _notifyNativeSpeaking(bool speaking) async {
     isSpeaking = speaking;
@@ -199,11 +204,23 @@ class VoiceService {
     await initialize();
     final generation = ++_generation;
     await _tts.stop();
+    await _fishAudio.stop();
     await _notifyNativeSpeaking(true);
     try {
-      for (final chunk in chunks) {
-        if (generation != _generation) break;
-        await _tts.speak(chunk);
+      var useLocalTts = true;
+      try {
+        final usedFishAudio =
+            await _fishAudio.speakIfEnabled(chunks.join(' '));
+        useLocalTts = !usedFishAudio;
+        lastFishAudioError = null;
+      } catch (error) {
+        lastFishAudioError = error.toString();
+      }
+      if (useLocalTts) {
+        for (final chunk in chunks) {
+          if (generation != _generation) break;
+          await _tts.speak(chunk);
+        }
       }
     } finally {
       if (generation == _generation) {
@@ -219,8 +236,14 @@ class VoiceService {
     _generation++;
     try {
       await _tts.stop();
+      await _fishAudio.stop();
     } finally {
       await _notifyNativeSpeaking(false);
     }
+  }
+
+  Future<void> dispose() async {
+    await stop();
+    await _fishAudio.dispose();
   }
 }

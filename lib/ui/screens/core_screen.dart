@@ -571,7 +571,7 @@ class _CoreScreenState extends State<CoreScreen>
     deviceService.setNativeEventHandlers(onFlip: null, onWakeWord: null);
     ticker.dispose();
     coreTime.dispose();
-    voiceService.stop();
+    voiceService.dispose();
     commandController.dispose();
     quickNoteController.dispose();
     duressPinController.dispose();
@@ -985,6 +985,18 @@ class _CoreScreenState extends State<CoreScreen>
         ),
       );
       await voiceService.speak(actionExec.cleanText);
+      final voiceError = voiceService.lastFishAudioError;
+      if (voiceError != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Fish Audio indisponível; voz local assumiu: $voiceError',
+              style: const TextStyle(fontSize: 10),
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
     } catch (error) {
       if (!mounted) return;
       _appendFeed(
