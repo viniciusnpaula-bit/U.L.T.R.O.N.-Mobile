@@ -138,6 +138,7 @@ class WakeWordDiagnostics {
     this.paused = false,
     this.engine = 'desconhecido',
     this.dedicatedKws = false,
+    this.modelLoaded = false,
     this.sdk = 0,
     this.notificationsPermission = false,
     this.micPermission = false,
@@ -149,6 +150,7 @@ class WakeWordDiagnostics {
     this.detections = 0,
     this.recognizerMisses = 0,
     this.recognizerErrors = 0,
+    this.kwsErrors = 0,
     this.captureRestarts = 0,
     this.micSilencedEvents = 0,
     this.lastError = 'nenhum',
@@ -168,6 +170,7 @@ class WakeWordDiagnostics {
       paused: b('paused'),
       engine: s('engine', 'desconhecido'),
       dedicatedKws: b('dedicatedKws'),
+      modelLoaded: b('modelLoaded'),
       sdk: i('sdk'),
       notificationsPermission: b('notificationsPermission'),
       micPermission: b('micPermission'),
@@ -179,6 +182,7 @@ class WakeWordDiagnostics {
       detections: i('detections'),
       recognizerMisses: i('recognizerMisses'),
       recognizerErrors: i('recognizerErrors'),
+      kwsErrors: i('kwsErrors'),
       captureRestarts: i('captureRestarts'),
       micSilencedEvents: i('micSilencedEvents'),
       lastError: s('lastError', 'nenhum'),
@@ -197,6 +201,7 @@ class WakeWordDiagnostics {
   final String engine;
   /// false enquanto não houver motor de keyword spotting dedicado (Porcupine, Vosk etc.).
   final bool dedicatedKws;
+  final bool modelLoaded;
   final int sdk;
   final bool notificationsPermission;
   final bool micPermission;
@@ -208,6 +213,7 @@ class WakeWordDiagnostics {
   final int detections;
   final int recognizerMisses;
   final int recognizerErrors;
+  final int kwsErrors;
   final int captureRestarts;
   final int micSilencedEvents;
   final String lastError;
@@ -219,13 +225,16 @@ class WakeWordDiagnostics {
   /// Resumo multilinha para exibir no HUD.
   String toReport() => [
         'Motor: $engine',
-        if (!dedicatedKws) 'PENDENTE: sem modelo/motor KWS dedicado — a detecção depende de volume + reconhecedor do sistema.',
+        if (!modelLoaded) 'FALHA/PENDENTE: modelo KWS não carregado; a escuta não está disponível.',
+        'Motor dedicado: ${dedicatedKws ? "SIM" : "NÃO"} · Modelo: ${modelLoaded ? "CARREGADO" : "INDISPONÍVEL"}',
         'Captura real: ${capturing ? "CONFIRMADA" : "NÃO confirmada"} · Serviço: ${running ? "vivo" : "parado"}${paused ? " · PAUSADO" : ""}${economyMode ? " · economia" : ""}',
         'Android API $sdk · Notificações: ${notificationsPermission ? "permitidas" : "NEGADAS"}',
         'Microfone: ${micPermission ? "permitido" : "NEGADO"} · Reconhecedor: ${recognitionAvailable ? "ok" : "INDISPONÍVEL"}',
         'Bateria: ${ignoringBatteryOptimizations ? "isento" : "sujeito a economia"} · Boot: ${bootAutostart ? "opt-in" : "off"}',
         'Gatilhos de voz: $voiceTriggers · Ativações: $detections · Sem match: $recognizerMisses',
-        'Erros do reconhecedor: $recognizerErrors · Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
+        'Erros KWS: $kwsErrors · Erros do reconhecedor de comando: $recognizerErrors',
+        'Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
+        'Falsos acionamentos: não mensuráveis automaticamente nesta versão.',
         'Ruído/limiar: $noiseFloor/$threshold · Último gatilho: $lastTrigger',
         if (lastPhrase.isNotEmpty) 'Última frase: "$lastPhrase"',
         'Último erro: $lastError',
