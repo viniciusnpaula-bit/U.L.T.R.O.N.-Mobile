@@ -152,7 +152,9 @@ class FishAudioService {
       if (settings.referenceId.trim().isNotEmpty) {
         payload['reference_id'] = settings.referenceId.trim();
       }
-      request.add(utf8.encode(jsonEncode(payload)));
+      final requestBytes = utf8.encode(jsonEncode(payload));
+      request.contentLength = requestBytes.length;
+      request.add(requestBytes);
 
       final response = await request.close().timeout(
             const Duration(seconds: 45),
