@@ -69,15 +69,16 @@ class _FishAudioSettingsScreenState extends State<FishAudioSettingsScreen> {
         enabled: _enabled,
       );
 
-  Future<void> _save({bool quiet = false}) async {
+  Future<bool> _save({bool quiet = false}) async {
     setState(() => _saving = true);
     try {
       await _service.saveSettings(_settings);
       if (!mounted) return;
       if (!quiet) _message('Configurações do Fish Audio salvas com segurança.');
+      return true;
     } catch (error) {
       if (mounted) _message('Falha ao salvar: $error');
-      rethrow;
+      return false;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -90,7 +91,8 @@ class _FishAudioSettingsScreenState extends State<FishAudioSettingsScreen> {
     }
     setState(() => _testing = true);
     try {
-      await _save(quiet: true);
+      final saved = await _save(quiet: true);
+      if (!saved) return;
       await _service.testAndPlay();
       if (mounted) _message('Fish Audio respondeu e o áudio foi reproduzido.');
     } catch (error) {
