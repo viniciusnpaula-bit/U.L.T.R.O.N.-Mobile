@@ -8,6 +8,7 @@ import 'package:local_auth/local_auth.dart';
 import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
 import '../../services/conversation_history.dart';
+import '../theme.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key, required this.gate, required this.vault});
@@ -20,10 +21,6 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
-  static const _crimson = Color(0xFF75020F);
-  static const _rose = Color(0xFFFF707C);
-  static const _border = Color(0xFF51080D);
-  static const _surface = Color(0xFF2B0307);
 
   String pin = '';
   String? firstEntry;
@@ -325,9 +322,9 @@ class _AuthScreenState extends State<AuthScreen> {
   Widget build(BuildContext context) {
     if (hasPin == null) {
       return const Scaffold(
-        backgroundColor: Color(0xFF19171B),
+        backgroundColor: AppColors.background,
         body: Center(
-          child: CircularProgressIndicator(color: _crimson),
+          child: CircularProgressIndicator(color: AppColors.accent),
         ),
       );
     }
@@ -335,7 +332,7 @@ class _AuthScreenState extends State<AuthScreen> {
     final slotCount = max(4, pin.length);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF19171B),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -355,8 +352,8 @@ class _AuthScreenState extends State<AuthScreen> {
                             Text(
                               'GALAXY A34 5G',
                               style: TextStyle(
-                                color: _crimson,
-                                fontSize: 10,
+                                color: AppColors.accent,
+                                fontSize: 12,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -364,35 +361,35 @@ class _AuthScreenState extends State<AuthScreen> {
                             Text(
                               '• BLOQUEADO',
                               style: TextStyle(
-                                color: _rose,
-                                fontSize: 9,
+                                color: AppColors.accent,
+                                fontSize: 11,
                               ),
                             ),
                           ],
                         ),
                         Row(
                           children: [
-                            Icon(Icons.wifi, size: 11, color: _crimson),
+                            Icon(Icons.wifi, size: 11, color: AppColors.accent),
                             SizedBox(width: 3),
                             Text(
                               '5G',
                               style: TextStyle(
-                                color: Color(0xFFA89698),
-                                fontSize: 10,
+                                color: AppColors.muted,
+                                fontSize: 12,
                               ),
                             ),
                             SizedBox(width: 8),
                             Icon(
                               Icons.battery_full,
                               size: 11,
-                              color: Color(0xFFFF707C),
+                              color: AppColors.accent,
                             ),
                             SizedBox(width: 2),
                             Text(
                               'SECURE',
                               style: TextStyle(
-                                color: Color(0xFFA89698),
-                                fontSize: 10,
+                                color: AppColors.muted,
+                                fontSize: 12,
                               ),
                             ),
                           ],
@@ -403,20 +400,20 @@ class _AuthScreenState extends State<AuthScreen> {
                   Container(
                     padding: const EdgeInsets.only(bottom: 8),
                     decoration: const BoxDecoration(
-                      border: Border(bottom: BorderSide(color: _border)),
+                      border: Border(bottom: BorderSide(color: AppColors.border)),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Row(
                           children: [
-                            Icon(Icons.lock_outline, size: 13, color: _crimson),
+                            Icon(Icons.lock_outline, size: 13, color: AppColors.accent),
                             SizedBox(width: 6),
                             Text(
                               'AUTHGATE v1.19',
                               style: TextStyle(
-                                color: _crimson,
-                                fontSize: 11,
+                                color: AppColors.accent,
+                                fontSize: 13,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 1.8,
                               ),
@@ -426,8 +423,8 @@ class _AuthScreenState extends State<AuthScreen> {
                         Text(
                           isSetup ? 'MODO: SETUP' : 'ISOLAMENTO: 127.0.0.1',
                           style: const TextStyle(
-                            color: Color(0xFFA89698),
-                            fontSize: 10,
+                            color: AppColors.muted,
+                            fontSize: 12,
                           ),
                         ),
                       ],
@@ -450,8 +447,8 @@ class _AuthScreenState extends State<AuthScreen> {
                           shape: BoxShape.circle,
                           border: Border.all(
                             color: busy
-                                ? _crimson
-                                : _crimson.withValues(alpha: 0.35),
+                                ? AppColors.crimson
+                                : AppColors.crimson.withValues(alpha: 0.35),
                             width: 1.5,
                           ),
                           boxShadow: const [
@@ -471,7 +468,7 @@ class _AuthScreenState extends State<AuthScreen> {
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 border: Border.all(
-                                  color: _crimson.withValues(alpha: 0.22),
+                                  color: AppColors.crimson.withValues(alpha: 0.22),
                                 ),
                               ),
                             ),
@@ -482,17 +479,17 @@ class _AuthScreenState extends State<AuthScreen> {
                                       ? Icons.face_retouching_natural
                                       : _biometricIcon),
                               size: 38,
-                              color: _crimson,
+                              color: AppColors.accent,
                             ),
                             if (busy)
                               Container(
                                 width: 92,
                                 height: 2,
                                 decoration: const BoxDecoration(
-                                  color: _crimson,
+                                  color: AppColors.accent,
                                   boxShadow: [
                                     BoxShadow(
-                                      color: _crimson,
+                                      color: AppColors.accent,
                                       blurRadius: 12,
                                       spreadRadius: 1,
                                     ),
@@ -511,8 +508,8 @@ class _AuthScreenState extends State<AuthScreen> {
                               : 'CONFIRME SEU PIN DE OPERADOR')
                           : '${_biometricLabel.toUpperCase()} + COFRE PIN',
                       style: const TextStyle(
-                        color: _rose,
-                        fontSize: 11,
+                        color: AppColors.accent,
+                        fontSize: 13,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 1.5,
                       ),
@@ -524,8 +521,8 @@ class _AuthScreenState extends State<AuthScreen> {
                           ? 'USE DE 4 A 8 DÍGITOS E TOQUE EM ENTRAR'
                           : 'TOQUE NO RETÍCULO OU DIGITE O PIN',
                       style: const TextStyle(
-                        color: Color(0xFFA89698),
-                        fontSize: 10,
+                        color: AppColors.muted,
+                        fontSize: 12,
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -540,8 +537,8 @@ class _AuthScreenState extends State<AuthScreen> {
                           const Text(
                             'STATUS:',
                             style: TextStyle(
-                              color: Color(0xFFA89698),
-                              fontSize: 10,
+                              color: AppColors.muted,
+                              fontSize: 12,
                             ),
                           ),
                           Row(
@@ -552,8 +549,8 @@ class _AuthScreenState extends State<AuthScreen> {
                                     ? 'AGUARDE ${_formatWait(lockLeft)}'
                                     : pinStatus,
                                 style: const TextStyle(
-                                  color: _crimson,
-                                  fontSize: 10,
+                                  color: AppColors.accent,
+                                  fontSize: 12,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
@@ -570,7 +567,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                     child: Icon(
                                       Icons.backspace_outlined,
                                       size: 13,
-                                      color: _rose,
+                                      color: AppColors.accent,
                                     ),
                                   ),
                                 ),
@@ -588,9 +585,9 @@ class _AuthScreenState extends State<AuthScreen> {
                         horizontal: 8,
                       ),
                       decoration: BoxDecoration(
-                        color: _surface,
+                        color: AppColors.surface,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: _border),
+                        border: Border.all(color: AppColors.border),
                       ),
                       child: Wrap(
                         alignment: WrapAlignment.center,
@@ -605,16 +602,20 @@ class _AuthScreenState extends State<AuthScreen> {
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
                               color: filled
-                                  ? const Color(0xFF2B0307)
+                                  ? AppColors.surface
                                   : Colors.transparent,
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: filled ? _crimson : _border,
+                                color: filled
+                                    ? AppColors.accent
+                                    : AppColors.border,
                               ),
                               boxShadow: filled
-                                  ? const [
+                                  ? [
                                       BoxShadow(
-                                        color: Color(0x6675020F),
+                                        color: AppColors.accent.withValues(
+                                          alpha: 0.4,
+                                        ),
                                         blurRadius: 8,
                                       ),
                                     ]
@@ -624,9 +625,9 @@ class _AuthScreenState extends State<AuthScreen> {
                               filled ? '●' : '_',
                               style: TextStyle(
                                 color: filled
-                                    ? _crimson
-                                    : const Color(0xFF635355),
-                                fontSize: 16,
+                                    ? AppColors.accent
+                                    : AppColors.subtle,
+                                fontSize: 18,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -641,8 +642,8 @@ class _AuthScreenState extends State<AuthScreen> {
                             ? 'Muitas tentativas. Aguarde ${_formatWait(lockLeft)}'
                             : error!,
                         style: const TextStyle(
-                          color: _rose,
-                          fontSize: 10,
+                          color: AppColors.accent,
+                          fontSize: 12,
                         ),
                         textAlign: TextAlign.center,
                       ),
@@ -671,8 +672,8 @@ class _AuthScreenState extends State<AuthScreen> {
                         label: isSetup && pin.isEmpty && firstEntry != null
                             ? 'VOLTAR'
                             : 'LIMPAR',
-                        textColor: const Color(0xFFFF707C),
-                        fontSize: 11,
+                        textColor: AppColors.accent,
+                        fontSize: 13,
                         onTap: blocked ? null : _handleClear,
                       ),
                       _KeypadButton(
@@ -681,10 +682,11 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                       _KeypadButton(
                         label: 'ENTRAR ✓',
-                        backgroundColor: const Color(0x1A75020F),
-                        borderColor: const Color(0x6675020F),
-                        textColor: _crimson,
-                        fontSize: 11,
+                        backgroundColor:
+                            AppColors.accent.withValues(alpha: 0.12),
+                        borderColor: AppColors.accent.withValues(alpha: 0.45),
+                        textColor: AppColors.accent,
+                        fontSize: 13,
                         onTap: blocked ? null : _submit,
                       ),
                     ],
@@ -693,7 +695,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   Container(
                     padding: const EdgeInsets.only(top: 8),
                     decoration: const BoxDecoration(
-                      border: Border(top: BorderSide(color: _border)),
+                      border: Border(top: BorderSide(color: AppColors.border)),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -701,15 +703,15 @@ class _AuthScreenState extends State<AuthScreen> {
                         Text(
                           'PBKDF2-SHA256 • FALHAS: $failures',
                           style: const TextStyle(
-                            color: Color(0xFFA89698),
-                            fontSize: 10,
+                            color: AppColors.muted,
+                            fontSize: 12,
                           ),
                         ),
                         const Text(
                           'FAIL-CLOSED ATIVO',
                           style: TextStyle(
-                            color: Color(0xFFFF707C),
-                            fontSize: 10,
+                            color: AppColors.accent,
+                            fontSize: 12,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -730,9 +732,9 @@ class _KeypadButton extends StatelessWidget {
   const _KeypadButton({
     required this.label,
     required this.onTap,
-    this.backgroundColor = const Color(0xFF2B0307),
-    this.borderColor = const Color(0xFF51080D),
-    this.textColor = const Color(0xFFF0E6E7),
+    this.backgroundColor = AppColors.surface,
+    this.borderColor = AppColors.border,
+    this.textColor = AppColors.text,
     this.fontSize = 15,
   });
 
@@ -759,7 +761,7 @@ class _KeypadButton extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: onTap == null ? const Color(0xFF635355) : textColor,
+                color: onTap == null ? AppColors.subtle : textColor,
                 fontSize: fontSize,
                 fontWeight: FontWeight.bold,
               ),

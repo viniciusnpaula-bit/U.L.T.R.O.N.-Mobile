@@ -5,6 +5,7 @@ import 'core/security/pin_vault.dart';
 import 'ui/screens/ai_settings_screen.dart';
 import 'ui/screens/auth_screen.dart';
 import 'ui/screens/core_screen.dart';
+import 'ui/theme.dart';
 
 void main() => runApp(UltronApp(gate: AuthGate(), vault: PinVault()));
 
@@ -20,23 +21,32 @@ class UltronApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           brightness: Brightness.dark,
-          fontFamily: 'monospace',
-          scaffoldBackgroundColor: const Color(0xFF19171B),
+          scaffoldBackgroundColor: AppColors.background,
           colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF75020F),
-            primary: const Color(0xFF75020F),
-            secondary: const Color(0xFFFF707C),
-            surface: const Color(0xFF2B0307),
+            seedColor: AppColors.crimson,
+            primary: AppColors.crimson,
+            secondary: AppColors.accent,
+            surface: AppColors.surface,
             brightness: Brightness.dark,
           ),
           appBarTheme: const AppBarTheme(
-            backgroundColor: Color(0xFF19171B),
-            foregroundColor: Color(0xFFF0E6E7),
+            backgroundColor: AppColors.background,
+            foregroundColor: AppColors.text,
             elevation: 0,
             centerTitle: false,
           ),
-          dividerColor: const Color(0xFF51080D),
+          dividerColor: AppColors.border,
           useMaterial3: true,
+          textTheme: const TextTheme(
+            bodyLarge: TextStyle(fontSize: 16, color: AppColors.text),
+            bodyMedium: TextStyle(fontSize: 14, color: AppColors.text),
+            bodySmall: TextStyle(fontSize: 12, color: AppColors.muted),
+            labelLarge: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppColors.text,
+            ),
+          ),
         ),
         home: AnimatedBuilder(
           animation: gate,

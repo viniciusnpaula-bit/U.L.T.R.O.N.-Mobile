@@ -3,6 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 import 'speech_text.dart';
+import 'fish_audio_tts.dart';
 
 /// Perfis de timbre da voz do U.L.T.R.O.N.
 enum VoiceProfile {
@@ -42,17 +43,24 @@ class VoiceService {
     FlutterTts? tts,
     MethodChannel? deviceChannel,
     FlutterSecureStorage? storage,
+    FishAudioTts? fish,
   })  : _tts = tts ?? FlutterTts(),
         _deviceChannel = deviceChannel ??
             const MethodChannel('com.viniciusnpaula.ultron_mobile/device'),
-        _storage = storage ?? const FlutterSecureStorage();
+        _storage = storage ?? const FlutterSecureStorage(),
+        _fish = fish ?? FishAudioTts();
 
   static const _voiceKey = 'ultron.tts.voice.v1';
   static const _profileKey = 'ultron.tts.profile.v1';
 
+  /// Motor preferido: as vozes pt-BR do Google são bem melhores que as do
+  /// motor padrão de alguns fabricantes (Samsung, por exemplo).
+  static const _preferredEngine = 'com.google.android.tts';
+
   final FlutterTts _tts;
   final MethodChannel _deviceChannel;
   final FlutterSecureStorage _storage;
+  final FishAudioTts _fish;
   Future<void>? _initializing;
   bool _ready = false;
   int _generation = 0;
@@ -80,6 +88,7 @@ class VoiceService {
   }
 
   Future<void> _configure() async {
+    await _selectEngine();
     await _tts.setLanguage('pt-BR');
     await _tts.awaitSpeakCompletion(true);
     try {
@@ -89,10 +98,22 @@ class VoiceService {
         orElse: () => VoiceProfile.grave,
       );
     } catch (_) {}
-    await _applyProfile();
     await _selectVoice();
+    // Por último: trocar de voz pode reconfigurar o motor e perder o timbre.
+    await _applyProfile();
     _tts.setErrorHandler((_) => _notifyNativeSpeaking(false));
     _ready = true;
+  }
+
+  /// Troca para o Google TTS quando ele está instalado, em vez de aceitar o
+  /// motor padrão do fabricante (que costuma ter voz robótica em pt-BR).
+  Future<void> _selectEngine() async {
+    try {
+      final engines = await _tts.getEngines;
+      if (engines is! List || !engines.contains(_preferredEngine)) return;
+      if (await _tts.getDefaultEngine == _preferredEngine) return;
+      await _tts.setEngine(_preferredEngine);
+    } catch (_) {}
   }
 
   Future<void> _applyProfile() async {
@@ -139,6 +160,9 @@ class VoiceService {
       score += 3;
     } else if (v.quality.contains('high')) {
       score += 2;
+    } else if (v.quality.contains('low')) {
+      // Voz "low" é justamente a que soa robótica/estourada.
+      score -= 3;
     }
     if (v.name.toLowerCase().contains('local')) score += 1;
     return score;
@@ -164,6 +188,7 @@ class VoiceService {
   Future<void> setPreferredVoice(TtsVoiceOption voice) async {
     await initialize();
     await _tts.setVoice(voice.toEngineMap());
+    await _applyProfile();
     activeVoiceName = voice.name;
     try {
       await _storage.write(key: _voiceKey, value: voice.name);
@@ -199,11 +224,20 @@ class VoiceService {
     await initialize();
     final generation = ++_generation;
     await _tts.stop();
+    await _fish.stop();
     await _notifyNativeSpeaking(true);
     try {
-      for (final chunk in chunks) {
+      // Voz clonada do Fish Audio primeiro; qualquer falha cai para o TTS local.
+      var start = 0;
+      final config = await _fish.loadConfig();
+      if (config.isConfigured) {
+        final failedAt = await _speakWithFish(generation, config, chunks);
+        if (failedAt < 0) return;
+        start = failedAt;
+      }
+      for (var i = start; i < chunks.length; i++) {
         if (generation != _generation) break;
-        await _tts.speak(chunk);
+        await _tts.speak(chunks[i]);
       }
     } finally {
       if (generation == _generation) {
@@ -212,15 +246,39 @@ class VoiceService {
     }
   }
 
+  /// Retorna -1 quando tocou tudo (ou foi interrompido) e o índice do bloco
+  /// que falhou para o TTS local continuar exatamente de onde parou.
+  Future<int> _speakWithFish(
+    int generation,
+    FishAudioConfig config,
+    List<String> chunks,
+  ) async {
+    for (var i = 0; i < chunks.length; i++) {
+      if (generation != _generation) return -1;
+      final audio = await _fish.synthesize(config, chunks[i]);
+      if (audio == null) return i;
+      if (generation != _generation) return -1;
+      try {
+        await _fish.play(audio);
+      } catch (_) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
   Future<void> preview() =>
       speak('Sistemas online. Eu sou o Ultron, pronto para suas ordens.');
 
   Future<void> stop() async {
     _generation++;
     try {
+      await _fish.stop();
       await _tts.stop();
     } finally {
       await _notifyNativeSpeaking(false);
     }
   }
+
+  Future<void> dispose() => _fish.dispose();
 }

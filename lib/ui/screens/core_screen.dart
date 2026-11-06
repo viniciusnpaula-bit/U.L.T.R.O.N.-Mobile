@@ -19,6 +19,7 @@ import '../../services/voice_service.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
 import 'update_screen.dart';
+import '../theme.dart';
 
 enum CoreStage { center, corner, hidden }
 
@@ -50,9 +51,6 @@ class CoreScreen extends StatefulWidget {
 
 class _CoreScreenState extends State<CoreScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  static const _crimson = Color(0xFF75020F);
-  static const _rose = Color(0xFFFF707C);
-  static const _border = Color(0xFF51080D);
 
   late final Ticker ticker;
   final commandController = TextEditingController();
@@ -123,7 +121,7 @@ class _CoreScreenState extends State<CoreScreen>
           const SnackBar(
             content: Text(
               '🤫 Flip-to-Shush ativado: voz do núcleo silenciada.',
-              style: TextStyle(fontSize: 11),
+              style: TextStyle(fontSize: 13),
             ),
             duration: Duration(seconds: 2),
           ),
@@ -169,7 +167,7 @@ class _CoreScreenState extends State<CoreScreen>
         const SnackBar(
           content: Text(
             '⚙️ Núcleo ocupado. Repita "Ultron" quando a resposta terminar.',
-            style: TextStyle(fontSize: 11),
+            style: TextStyle(fontSize: 13),
           ),
           duration: Duration(seconds: 2),
         ),
@@ -187,7 +185,7 @@ class _CoreScreenState extends State<CoreScreen>
       const SnackBar(
         content: Text(
           '🎙️ "Ultron" detectado! Escutando seu comando…',
-          style: TextStyle(fontSize: 11),
+          style: TextStyle(fontSize: 13),
         ),
         duration: Duration(seconds: 2),
       ),
@@ -209,12 +207,12 @@ class _CoreScreenState extends State<CoreScreen>
         backgroundColor: const Color(0xFF14040A),
         title: const Text(
           'DIAGNÓSTICO DA PALAVRA DE ATIVAÇÃO',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
         ),
         content: SingleChildScrollView(
           child: Text(
             diag.toReport(),
-            style: const TextStyle(fontSize: 11, height: 1.5),
+            style: const TextStyle(fontSize: 13, height: 1.5),
           ),
         ),
         actions: [
@@ -396,7 +394,7 @@ class _CoreScreenState extends State<CoreScreen>
         const SnackBar(
           content: Text(
             'Nenhuma mensagem recente para resumir.',
-            style: TextStyle(fontSize: 11),
+            style: TextStyle(fontSize: 13),
           ),
         ),
       );
@@ -417,12 +415,12 @@ class _CoreScreenState extends State<CoreScreen>
     final sent = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2B0307),
+        backgroundColor: AppColors.surface,
         title: Text(
           'Responder ${msg.sender} (${msg.appLabel})',
           style: const TextStyle(
-            color: _crimson,
-            fontSize: 13,
+            color: AppColors.accent,
+            fontSize: 15,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -432,7 +430,7 @@ class _CoreScreenState extends State<CoreScreen>
           children: [
             Text(
               '"${msg.text}"',
-              style: const TextStyle(color: Color(0xFFA89698), fontSize: 11),
+              style: const TextStyle(color: AppColors.muted, fontSize: 13),
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
             ),
@@ -440,10 +438,10 @@ class _CoreScreenState extends State<CoreScreen>
             TextField(
               controller: replyCtrl,
               autofocus: true,
-              style: const TextStyle(color: Colors.white, fontSize: 12),
+              style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: const InputDecoration(
                 hintText: 'Digite sua resposta em 2º plano…',
-                hintStyle: TextStyle(color: Color(0xFF635355), fontSize: 11),
+                hintStyle: TextStyle(color: AppColors.subtle, fontSize: 13),
               ),
             ),
           ],
@@ -451,10 +449,10 @@ class _CoreScreenState extends State<CoreScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('CANCELAR', style: TextStyle(color: _rose)),
+            child: const Text('CANCELAR', style: TextStyle(color: AppColors.accent)),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _crimson),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.crimson),
             onPressed: () => Navigator.of(ctx).pop(replyCtrl.text.trim()),
             child: const Text('ENVIAR AGORA'),
           ),
@@ -470,7 +468,7 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('↩️ $status', style: const TextStyle(fontSize: 11)),
+          content: Text('↩️ $status', style: const TextStyle(fontSize: 13)),
         ),
       );
       await voiceService.speak('Resposta enviada.');
@@ -478,7 +476,7 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Erro ao responder: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Erro ao responder: $e', style: const TextStyle(fontSize: 13)),
         ),
       );
     }
@@ -492,7 +490,7 @@ class _CoreScreenState extends State<CoreScreen>
         const SnackBar(
           content: Text(
             'Digite o texto da mensagem primeiro.',
-            style: TextStyle(fontSize: 11),
+            style: TextStyle(fontSize: 13),
           ),
         ),
       );
@@ -507,14 +505,14 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(res, style: const TextStyle(fontSize: 11)),
+          content: Text(res, style: const TextStyle(fontSize: 13)),
         ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Falha no envio: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Falha no envio: $e', style: const TextStyle(fontSize: 13)),
         ),
       );
     }
@@ -531,7 +529,7 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Falha na lanterna: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Falha na lanterna: $e', style: const TextStyle(fontSize: 13)),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -679,7 +677,7 @@ class _CoreScreenState extends State<CoreScreen>
         SnackBar(
           content: Text(
             '📓 Anotado em Diario/$fileName: "$trimmed"',
-            style: const TextStyle(fontSize: 11),
+            style: const TextStyle(fontSize: 13),
           ),
           duration: const Duration(seconds: 2),
         ),
@@ -696,7 +694,7 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Erro ao salvar no Vault: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Erro ao salvar no Vault: $e', style: const TextStyle(fontSize: 13)),
         ),
       );
     }
@@ -718,7 +716,7 @@ class _CoreScreenState extends State<CoreScreen>
         SnackBar(
           content: Text(
             '💡 Ideia salva em Inbox/$fileName: "$trimmed"',
-            style: const TextStyle(fontSize: 11),
+            style: const TextStyle(fontSize: 13),
           ),
           duration: const Duration(seconds: 2),
         ),
@@ -735,7 +733,7 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Erro ao salvar no Inbox: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Erro ao salvar no Inbox: $e', style: const TextStyle(fontSize: 13)),
         ),
       );
     }
@@ -758,7 +756,7 @@ class _CoreScreenState extends State<CoreScreen>
       );
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(res.message, style: const TextStyle(fontSize: 11)),
+          content: Text(res.message, style: const TextStyle(fontSize: 13)),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -808,7 +806,7 @@ class _CoreScreenState extends State<CoreScreen>
         SnackBar(
           content: Text(
             'Reconhecimento de voz indisponível: $e',
-            style: const TextStyle(fontSize: 11),
+            style: const TextStyle(fontSize: 13),
           ),
           duration: const Duration(seconds: 3),
         ),
@@ -1034,26 +1032,26 @@ class _CoreScreenState extends State<CoreScreen>
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2B0307),
+        backgroundColor: AppColors.surface,
         title: Text(
           title,
           style: const TextStyle(
-            color: _crimson,
-            fontSize: 13,
+            color: AppColors.accent,
+            fontSize: 15,
             fontWeight: FontWeight.bold,
           ),
         ),
         content: Text(
           message,
-          style: const TextStyle(color: Color(0xFFF0E6E7), fontSize: 11),
+          style: const TextStyle(color: AppColors.text, fontSize: 13),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('CANCELAR', style: TextStyle(color: _rose)),
+            child: const Text('CANCELAR', style: TextStyle(color: AppColors.accent)),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _crimson),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.crimson),
             onPressed: () => Navigator.of(ctx).pop(true),
             child: Text(confirmText),
           ),
@@ -1307,7 +1305,7 @@ class _CoreScreenState extends State<CoreScreen>
           backgroundColor: const Color(0xFF1E1E1E),
           title: const Text(
             'Bloco de Notas Pessoal',
-            style: TextStyle(fontSize: 15, color: Colors.white70),
+            style: TextStyle(fontSize: 16, color: Colors.white70),
           ),
           actions: [
             IconButton(
@@ -1328,12 +1326,12 @@ class _CoreScreenState extends State<CoreScreen>
                   style: TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
-                    fontSize: 13,
+                    fontSize: 15,
                   ),
                 ),
                 subtitle: Text(
                   '• Café em grãos\n• Pão integral\n• Pilhas AA\n• Detergente neutro',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
                 ),
               ),
             ),
@@ -1346,12 +1344,12 @@ class _CoreScreenState extends State<CoreScreen>
                   style: TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
-                    fontSize: 13,
+                    fontSize: 15,
                   ),
                 ),
                 subtitle: Text(
                   '• Arquitetura Limpa — Cap. 4\n• Revisar anotações da faculdade',
-                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                  style: TextStyle(color: Colors.white70, fontSize: 14),
                 ),
               ),
             ),
@@ -1365,7 +1363,7 @@ class _CoreScreenState extends State<CoreScreen>
       return _buildCamouflageScreen();
     }
     return Scaffold(
-        backgroundColor: const Color(0xFF19171B),
+        backgroundColor: AppColors.background,
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
@@ -1378,7 +1376,7 @@ class _CoreScreenState extends State<CoreScreen>
                   decoration: BoxDecoration(
                     color: const Color(0xCC19171B),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _border),
+                    border: Border.all(color: AppColors.border),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1389,10 +1387,10 @@ class _CoreScreenState extends State<CoreScreen>
                             width: 8,
                             height: 8,
                             decoration: const BoxDecoration(
-                              color: _crimson,
+                              color: AppColors.accent,
                               shape: BoxShape.circle,
                               boxShadow: [
-                                BoxShadow(color: _crimson, blurRadius: 6),
+                                BoxShadow(color: AppColors.accent, blurRadius: 6),
                               ],
                             ),
                           ),
@@ -1400,73 +1398,96 @@ class _CoreScreenState extends State<CoreScreen>
                           const Text(
                             'U.L.T.R.O.N. 2.0',
                             style: TextStyle(
-                              color: _crimson,
-                              fontSize: 11,
+                              color: AppColors.accent,
+                              fontSize: 13,
                               fontWeight: FontWeight.bold,
                               letterSpacing: 1.1,
                             ),
                           ),
                         ],
                       ),
-                      Row(
-                        children: [
-                          _TopNavPill(
-                            label: 'NÚCLEO',
-                            selected: panel == _ActivePanel.main,
-                            onTap: () => _setPanel(_ActivePanel.main),
-                          ),
-                          const SizedBox(width: 4),
-                          _TopNavPill(
-                            label: 'CELULAR',
-                            selected: panel == _ActivePanel.device,
-                            onTap: () {
-                              _refreshDeviceStatus();
-                              _setPanel(_ActivePanel.device);
-                            },
-                          ),
-                          const SizedBox(width: 4),
-                          _TopNavPill(
-                            label: 'PROVEDORES',
-                            selected: panel == _ActivePanel.providers,
-                            onTap: () => _setPanel(_ActivePanel.providers),
-                          ),
-                          const SizedBox(width: 4),
-                          _TopNavPill(
-                            label: 'HISTÓRICO',
-                            selected: false,
-                            onTap: _openHistory,
-                          ),
-                          const SizedBox(width: 4),
-                          InkWell(
-                            onTap: _toggleAudio,
-                            borderRadius: BorderRadius.circular(6),
-                            child: Padding(
-                              padding: const EdgeInsets.all(4),
-                              child: Icon(
-                                isAudioOn ? Icons.volume_up : Icons.volume_off,
-                                size: 15,
-                                color: isAudioOn
-                                    ? _crimson
-                                    : const Color(0xFFA89698),
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            _TopNavPill(
+                              label: 'NÚCLEO',
+                              selected: panel == _ActivePanel.main,
+                              onTap: () => _setPanel(_ActivePanel.main),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'CELULAR',
+                              selected: panel == _ActivePanel.device,
+                              onTap: () {
+                                _refreshDeviceStatus();
+                                _setPanel(_ActivePanel.device);
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'PROVEDORES',
+                              selected: panel == _ActivePanel.providers,
+                              onTap: () => _setPanel(_ActivePanel.providers),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'HISTÓRICO',
+                              selected: false,
+                              onTap: _openHistory,
+                            ),
+                            const SizedBox(width: 4),
+                            InkWell(
+                              onTap: _toggleAudio,
+                              borderRadius: BorderRadius.circular(8),
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: Icon(
+                                  isAudioOn
+                                      ? Icons.volume_up
+                                      : Icons.volume_off,
+                                  size: 18,
+                                  color: isAudioOn
+                                      ? AppColors.accent
+                                      : AppColors.muted,
+                                ),
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
 
                 // Main Screen Content (Main / Device / Security / Help / Providers)
                 Expanded(
-                  child: switch (panel) {
-                    _ActivePanel.main => _buildMainPanel(),
-                    _ActivePanel.device => _buildDevicePanel(),
-                    _ActivePanel.security => _buildSecurityPanel(),
-                    _ActivePanel.help => _buildHelpPanel(),
-                    _ActivePanel.providers => _buildProvidersPanel(),
-                  },
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: const Offset(0, 0.015),
+                          end: Offset.zero,
+                        ).animate(animation),
+                        child: child,
+                      ),
+                    ),
+                    child: KeyedSubtree(
+                      key: ValueKey(panel),
+                      child: switch (panel) {
+                        _ActivePanel.main => _buildMainPanel(),
+                        _ActivePanel.device => _buildDevicePanel(),
+                        _ActivePanel.security => _buildSecurityPanel(),
+                        _ActivePanel.help => _buildHelpPanel(),
+                        _ActivePanel.providers => _buildProvidersPanel(),
+                      },
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -1481,7 +1502,7 @@ class _CoreScreenState extends State<CoreScreen>
           Container(
             padding: const EdgeInsets.only(bottom: 8),
             decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: _border)),
+              border: Border(bottom: BorderSide(color: AppColors.border)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1498,19 +1519,19 @@ class _CoreScreenState extends State<CoreScreen>
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF2B0307),
+                          color: AppColors.surface,
                           borderRadius: BorderRadius.circular(4),
                           border: Border.all(
-                            color: _crimson.withValues(alpha: 0.35),
+                            color: AppColors.crimson.withValues(alpha: 0.35),
                           ),
                         ),
                         child: Text(
                           widget.gate.isAuthenticated
-                              ? 'SESSÃO: NÍVEL 02'
+                              ? 'NÍVEL 02'
                               : 'BLOQUEADO',
                           style: const TextStyle(
-                            color: _crimson,
-                            fontSize: 9,
+                            color: AppColors.accent,
+                            fontSize: 11,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -1518,8 +1539,8 @@ class _CoreScreenState extends State<CoreScreen>
                       Text(
                         'PROVEDOR: $activeProviderUsed',
                         style: const TextStyle(
-                          color: Color(0xFFA89698),
-                          fontSize: 10,
+                          color: AppColors.muted,
+                          fontSize: 12,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1533,8 +1554,8 @@ class _CoreScreenState extends State<CoreScreen>
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
+                        minWidth: 40,
+                        minHeight: 40,
                       ),
                       tooltip: torchOn
                           ? 'Desligar Lanterna (/lanterna)'
@@ -1545,15 +1566,15 @@ class _CoreScreenState extends State<CoreScreen>
                             ? Icons.flashlight_on
                             : Icons.flashlight_off_outlined,
                         size: 16,
-                        color: torchOn ? _crimson : const Color(0xFFA89698),
+                        color: torchOn ? AppColors.crimson : AppColors.muted,
                       ),
                     ),
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
+                        minWidth: 40,
+                        minHeight: 40,
                       ),
                       tooltip: 'Controles do Celular (/device)',
                       onPressed: () {
@@ -1563,45 +1584,45 @@ class _CoreScreenState extends State<CoreScreen>
                       icon: const Icon(
                         Icons.phonelink_setup,
                         size: 16,
-                        color: Color(0xFFA89698),
+                        color: AppColors.muted,
                       ),
                     ),
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
+                        minWidth: 40,
+                        minHeight: 40,
                       ),
                       tooltip: 'Comandos Rápidos (/help)',
                       onPressed: () => _setPanel(_ActivePanel.help),
                       icon: const Icon(
                         Icons.help_outline,
                         size: 16,
-                        color: Color(0xFFA89698),
+                        color: AppColors.muted,
                       ),
                     ),
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
+                        minWidth: 40,
+                        minHeight: 40,
                       ),
                       tooltip: 'Painel de Segurança (/security)',
                       onPressed: () => _runCommand(UltronCommand.security),
                       icon: const Icon(
                         Icons.shield_outlined,
                         size: 16,
-                        color: Color(0xFFA89698),
+                        color: AppColors.muted,
                       ),
                     ),
                     IconButton(
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
+                        minWidth: 40,
+                        minHeight: 40,
                       ),
                       tooltip: hasUpdate
                           ? 'Atualização disponível'
@@ -1616,7 +1637,7 @@ class _CoreScreenState extends State<CoreScreen>
                         child: const Icon(
                           Icons.cloud_download_outlined,
                           size: 16,
-                          color: Color(0xFFA89698),
+                          color: AppColors.muted,
                         ),
                       ),
                     ),
@@ -1624,15 +1645,15 @@ class _CoreScreenState extends State<CoreScreen>
                       visualDensity: VisualDensity.compact,
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
+                        minWidth: 40,
+                        minHeight: 40,
                       ),
                       tooltip: 'Bloquear Sessão',
                       onPressed: _lockSession,
                       icon: const Icon(
                         Icons.lock_outline,
                         size: 16,
-                        color: Color(0xFFFF707C),
+                        color: AppColors.accent,
                       ),
                     ),
                   ],
@@ -1655,19 +1676,19 @@ class _CoreScreenState extends State<CoreScreen>
 
           // Main Command Bar: 'EI, ULTRON ›'
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: const Color(0xFF2B0307),
+              color: AppColors.surface,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _border),
+              border: Border.all(color: AppColors.border),
             ),
             child: Row(
               children: [
                 const Text(
                   'EI, ULTRON ›',
                   style: TextStyle(
-                    color: _crimson,
-                    fontSize: 11,
+                    color: AppColors.accent,
+                    fontSize: 13,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -1679,8 +1700,8 @@ class _CoreScreenState extends State<CoreScreen>
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => saveCommand(),
                     style: const TextStyle(
-                      color: Color(0xFFF0E6E7),
-                      fontSize: 12,
+                      color: AppColors.text,
+                      fontSize: 14,
                     ),
                     decoration: InputDecoration(
                       isDense: true,
@@ -1692,9 +1713,9 @@ class _CoreScreenState extends State<CoreScreen>
                               : 'Digite /help, /settings ou toque no 🎤 para falar...',
                       hintStyle: TextStyle(
                         color: listeningVoice
-                            ? _crimson
-                            : const Color(0xFF635355),
-                        fontSize: 11,
+                            ? AppColors.accent
+                            : AppColors.subtle,
+                        fontSize: 13,
                       ),
                     ),
                   ),
@@ -1703,23 +1724,23 @@ class _CoreScreenState extends State<CoreScreen>
                   onTap: sending ? null : _startVoiceInput,
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
-                    padding: const EdgeInsets.all(7),
+                    padding: const EdgeInsets.all(12),
                     margin: const EdgeInsets.only(right: 6),
                     decoration: BoxDecoration(
                       color: listeningVoice
-                          ? _crimson.withValues(alpha: 0.25)
-                          : const Color(0xFF2B0307),
+                          ? AppColors.crimson.withValues(alpha: 0.25)
+                          : AppColors.surface,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
                         color: listeningVoice
-                            ? _crimson
-                            : _crimson.withValues(alpha: 0.35),
+                            ? AppColors.crimson
+                            : AppColors.crimson.withValues(alpha: 0.35),
                       ),
                     ),
                     child: Icon(
                       listeningVoice ? Icons.graphic_eq : Icons.mic,
-                      size: 14,
-                      color: listeningVoice ? _rose : _crimson,
+                      size: 20,
+                      color: AppColors.accent,
                     ),
                   ),
                 ),
@@ -1727,15 +1748,15 @@ class _CoreScreenState extends State<CoreScreen>
                   onTap: sending ? null : saveCommand,
                   borderRadius: BorderRadius.circular(8),
                   child: Container(
-                    padding: const EdgeInsets.all(7),
+                    padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF2B0307),
+                      color: AppColors.surface,
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: const Icon(
                       Icons.send,
-                      size: 14,
-                      color: _crimson,
+                      size: 18,
+                      color: AppColors.accent,
                     ),
                   ),
                 ),
@@ -1753,8 +1774,8 @@ class _CoreScreenState extends State<CoreScreen>
               GestureDetector(
                 onTap: () => _setStage(CoreStage.corner),
                 child: SizedBox(
-                  width: 210,
-                  height: 210,
+                  width: 180,
+                  height: 180,
                   child: ValueListenableBuilder<double>(
                     valueListenable: coreTime,
                     builder: (context, time, child) => CustomPaint(
@@ -1777,8 +1798,8 @@ class _CoreScreenState extends State<CoreScreen>
                         ? 'U.L.T.R.O.N. CORE [ESCUTANDO AO VIVO]'
                         : 'U.L.T.R.O.N. CORE',
                 style: const TextStyle(
-                  color: _rose,
-                  fontSize: 10,
+                  color: AppColors.accent,
+                  fontSize: 12,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 2.5,
                 ),
@@ -1789,8 +1810,8 @@ class _CoreScreenState extends State<CoreScreen>
                     ? 'Modo Sussurro TTS Ativo • Flip-to-Shush Pronto'
                     : 'Voz Neural (${selectedVoiceProfile.label}) • Anti-Eco Half-Duplex • Flip-to-Shush',
                 style: const TextStyle(
-                  color: Color(0xFF635355),
-                  fontSize: 9,
+                  color: AppColors.subtle,
+                  fontSize: 11,
                 ),
               ),
               const SizedBox(height: 6),
@@ -1850,15 +1871,15 @@ class _CoreScreenState extends State<CoreScreen>
                           height: 10,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: _crimson,
+                            color: AppColors.accent,
                           ),
                         ),
                         SizedBox(width: 8),
                         Text(
                           'Consultando provedor ativo com failover...',
                           style: TextStyle(
-                            color: _crimson,
-                            fontSize: 10,
+                            color: AppColors.accent,
+                            fontSize: 12,
                           ),
                         ),
                       ],
@@ -1877,7 +1898,7 @@ class _CoreScreenState extends State<CoreScreen>
                         const SnackBar(
                           content: Text(
                             'Mensagem copiada para a área de transferência.',
-                            style: TextStyle(fontSize: 11),
+                            style: TextStyle(fontSize: 13),
                           ),
                           duration: Duration(seconds: 2),
                         ),
@@ -1891,13 +1912,13 @@ class _CoreScreenState extends State<CoreScreen>
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
                         color: msg.isUser
-                            ? const Color(0xFF2B0307)
-                            : const Color(0xFF19171B),
+                            ? AppColors.surface
+                            : AppColors.background,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: msg.isUser
-                              ? _crimson.withValues(alpha: 0.4)
-                              : _border,
+                              ? AppColors.crimson.withValues(alpha: 0.4)
+                              : AppColors.border,
                         ),
                       ),
                       child: Column(
@@ -1909,16 +1930,16 @@ class _CoreScreenState extends State<CoreScreen>
                               Text(
                                 msg.senderLabel,
                                 style: TextStyle(
-                                  color: msg.isUser ? _rose : _crimson,
-                                  fontSize: 9,
+                                  color: msg.isUser ? AppColors.accent : AppColors.accent,
+                                  fontSize: 11,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                               Text(
                                 msg.timestamp,
                                 style: const TextStyle(
-                                  color: Color(0xFF635355),
-                                  fontSize: 9,
+                                  color: AppColors.subtle,
+                                  fontSize: 11,
                                 ),
                               ),
                             ],
@@ -1928,9 +1949,9 @@ class _CoreScreenState extends State<CoreScreen>
                             msg.text,
                             style: TextStyle(
                               color: msg.isUser
-                                  ? const Color(0xFFF0E6E7)
-                                  : const Color(0xFFF0E6E7),
-                              fontSize: 11,
+                                  ? AppColors.text
+                                  : AppColors.text,
+                              fontSize: 13,
                               height: 1.4,
                             ),
                           ),
@@ -1951,16 +1972,16 @@ class _CoreScreenState extends State<CoreScreen>
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFF19171B),
+                color: AppColors.background,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: _border),
+                border: Border.all(color: AppColors.border),
               ),
               child: ListView(
                 children: [
                   Container(
                     padding: const EdgeInsets.only(bottom: 8),
                     decoration: const BoxDecoration(
-                      border: Border(bottom: BorderSide(color: _border)),
+                      border: Border(bottom: BorderSide(color: AppColors.border)),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1970,14 +1991,14 @@ class _CoreScreenState extends State<CoreScreen>
                             Icon(
                               Icons.description_outlined,
                               size: 13,
-                              color: _crimson,
+                              color: AppColors.accent,
                             ),
                             SizedBox(width: 6),
                             Text(
                               'PALCO ATIVO',
                               style: TextStyle(
-                                color: _crimson,
-                                fontSize: 10,
+                                color: AppColors.accent,
+                                fontSize: 12,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -1992,7 +2013,7 @@ class _CoreScreenState extends State<CoreScreen>
                                 child: Icon(
                                   Icons.open_in_full,
                                   size: 14,
-                                  color: Color(0xFFA89698),
+                                  color: AppColors.muted,
                                 ),
                               ),
                             ),
@@ -2004,7 +2025,7 @@ class _CoreScreenState extends State<CoreScreen>
                                 child: Icon(
                                   Icons.close,
                                   size: 15,
-                                  color: Color(0xFFA89698),
+                                  color: AppColors.muted,
                                 ),
                               ),
                             ),
@@ -2017,8 +2038,8 @@ class _CoreScreenState extends State<CoreScreen>
                   const Text(
                     'Relatório de Telemetria e Comandos',
                     style: TextStyle(
-                      color: Color(0xFFF0E6E7),
-                      fontSize: 12,
+                      color: AppColors.text,
+                      fontSize: 14,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -2026,8 +2047,8 @@ class _CoreScreenState extends State<CoreScreen>
                   const Text(
                     'O Palco isola documentos e saídas sem abrir novas janelas. Toque nos comandos rápidos abaixo para executar localmente:',
                     style: TextStyle(
-                      color: Color(0xFFA89698),
-                      fontSize: 11,
+                      color: AppColors.muted,
+                      fontSize: 13,
                       height: 1.4,
                     ),
                   ),
@@ -2067,9 +2088,9 @@ class _CoreScreenState extends State<CoreScreen>
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF2B0307),
+                        color: AppColors.surface,
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: _border),
+                        border: Border.all(color: AppColors.border),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2077,8 +2098,8 @@ class _CoreScreenState extends State<CoreScreen>
                           Text(
                             'ÚLTIMA SAÍDA (${feed.last.senderLabel}):',
                             style: const TextStyle(
-                              color: _rose,
-                              fontSize: 9,
+                              color: AppColors.accent,
+                              fontSize: 11,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -2086,8 +2107,8 @@ class _CoreScreenState extends State<CoreScreen>
                           Text(
                             feed.last.text,
                             style: const TextStyle(
-                              color: Color(0xFFF0E6E7),
-                              fontSize: 11,
+                              color: AppColors.text,
+                              fontSize: 13,
                               height: 1.4,
                             ),
                           ),
@@ -2106,8 +2127,8 @@ class _CoreScreenState extends State<CoreScreen>
               const Text(
                 'Núcleo em modo sentinela (toque para restaurar)',
                 style: TextStyle(
-                  color: Color(0xFF635355),
-                  fontSize: 10,
+                  color: AppColors.subtle,
+                  fontSize: 12,
                 ),
               ),
               GestureDetector(
@@ -2131,9 +2152,9 @@ class _CoreScreenState extends State<CoreScreen>
   Widget _buildFullscreenStage() => Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFF2B0307),
+          color: AppColors.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _crimson.withValues(alpha: 0.3)),
+          border: Border.all(color: AppColors.crimson.withValues(alpha: 0.3)),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2141,7 +2162,7 @@ class _CoreScreenState extends State<CoreScreen>
             Container(
               padding: const EdgeInsets.only(bottom: 8),
               decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: _border)),
+                border: Border(bottom: BorderSide(color: AppColors.border)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2149,8 +2170,8 @@ class _CoreScreenState extends State<CoreScreen>
                   const Text(
                     'MODO TELA CHEIA [FULLSCREEN]',
                     style: TextStyle(
-                      color: _crimson,
-                      fontSize: 11,
+                      color: AppColors.accent,
+                      fontSize: 13,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -2161,14 +2182,14 @@ class _CoreScreenState extends State<CoreScreen>
                         Icon(
                           Icons.close_fullscreen,
                           size: 13,
-                          color: Color(0xFFA89698),
+                          color: AppColors.muted,
                         ),
                         SizedBox(width: 4),
                         Text(
                           'REDUZIR',
                           style: TextStyle(
-                            color: Color(0xFFA89698),
-                            fontSize: 10,
+                            color: AppColors.muted,
+                            fontSize: 12,
                           ),
                         ),
                       ],
@@ -2181,14 +2202,14 @@ class _CoreScreenState extends State<CoreScreen>
               children: [
                 const _TelemetryBox(
                   title: 'STATUS DO RENDERIZADOR:',
-                  titleColor: _rose,
+                  titleColor: AppColors.accent,
                   body:
                       'Núcleo descarregado da GPU (Ticker pausado). Consumo em repouso: 0.1%',
                 ),
                 const SizedBox(height: 10),
                 _TelemetryBox(
                   title: 'FAILOVER DE PROVEDORES:',
-                  titleColor: const Color(0xFFFF707C),
+                  titleColor: AppColors.accent,
                   body:
                       'Ativo: $activeProviderUsed • Chave protegida no Keystore Android',
                 ),
@@ -2203,8 +2224,8 @@ class _CoreScreenState extends State<CoreScreen>
                   child: _TelemetryBox(
                     title: 'ATUALIZAÇÃO GITHUB (TOQUE PARA ABRIR):',
                     titleColor: hasUpdate
-                        ? const Color(0xFFFF707C)
-                        : const Color(0xFFA89698),
+                        ? AppColors.accent
+                        : AppColors.muted,
                     body:
                         'Versão instalada $installedVersion (${hasUpdate ? 'Nova release disponível' : 'Toque para verificar/atualizar'})',
                   ),
@@ -2216,8 +2237,8 @@ class _CoreScreenState extends State<CoreScreen>
               child: FilledButton(
                 onPressed: () => _setStage(CoreStage.center),
                 style: FilledButton.styleFrom(
-                  backgroundColor: _crimson,
-                  foregroundColor: const Color(0xFFF0E6E7),
+                  backgroundColor: AppColors.crimson,
+                  foregroundColor: AppColors.text,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -2225,7 +2246,7 @@ class _CoreScreenState extends State<CoreScreen>
                 child: const Text(
                   'RESTAURAR NÚCLEO AO CENTRO',
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: 13,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -2250,7 +2271,7 @@ class _CoreScreenState extends State<CoreScreen>
         Container(
           padding: const EdgeInsets.only(bottom: 10),
           decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: _border)),
+            border: Border(bottom: BorderSide(color: AppColors.border)),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2259,13 +2280,13 @@ class _CoreScreenState extends State<CoreScreen>
                 onTap: () => _setPanel(_ActivePanel.main),
                 child: const Row(
                   children: [
-                    Icon(Icons.arrow_back, size: 15, color: _crimson),
+                    Icon(Icons.arrow_back, size: 15, color: AppColors.accent),
                     SizedBox(width: 4),
                     Text(
                       'VOLTAR',
                       style: TextStyle(
-                        color: _crimson,
-                        fontSize: 12,
+                        color: AppColors.accent,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -2284,7 +2305,7 @@ class _CoreScreenState extends State<CoreScreen>
                     'PAINEL DE SEGURANÇA',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -2300,10 +2321,10 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF19171B),
+                  color: AppColors.background,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: _crimson.withValues(alpha: 0.35),
+                    color: AppColors.crimson.withValues(alpha: 0.35),
                   ),
                 ),
                 child: Column(
@@ -2312,8 +2333,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const Text(
                       'STATUS DO AUTHGATE',
                       style: TextStyle(
-                        color: _crimson,
-                        fontSize: 11,
+                        color: AppColors.accent,
+                        fontSize: 13,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -2323,33 +2344,33 @@ class _CoreScreenState extends State<CoreScreen>
                       value: widget.gate.isAuthenticated
                           ? 'DESBLOQUEADO'
                           : 'BLOQUEADO',
-                      valueColor: const Color(0xFFFF707C),
+                      valueColor: AppColors.accent,
                     ),
                     const SizedBox(height: 6),
                     const _SecurityRow(
                       label: 'Nível de Restrição:',
                       value: 'Nível 02 (-2 Níveis Ativo)',
-                      valueColor: _rose,
+                      valueColor: AppColors.accent,
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
                       label: 'Cofre de PIN Principal:',
                       value: pinLabel,
-                      valueColor: const Color(0xFFF0E6E7),
+                      valueColor: AppColors.text,
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
                       label: 'PIN de Coação (Duress):',
                       value: duressLabel,
                       valueColor: hasDuressPinConfigured
-                          ? const Color(0xFFFF707C)
-                          : const Color(0xFFA89698),
+                          ? AppColors.accent
+                          : AppColors.muted,
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
                       label: 'Tentativas Falhas:',
                       value: '$authFailures',
-                      valueColor: const Color(0xFFF0E6E7),
+                      valueColor: AppColors.text,
                     ),
                   ],
                 ),
@@ -2360,9 +2381,9 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _border),
+                  border: Border.all(color: AppColors.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2370,8 +2391,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const Text(
                       'PIN DE COAÇÃO (DURESS PIN - MODO CAMUFLADO)',
                       style: TextStyle(
-                        color: _rose,
-                        fontSize: 11,
+                        color: AppColors.accent,
+                        fontSize: 13,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -2379,8 +2400,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const Text(
                       'Se digitado na tela de desbloqueio, limpa o histórico de conversas silenciosamente e abre um Bloco de Notas falso.',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
-                        fontSize: 10,
+                        color: AppColors.muted,
+                        fontSize: 12,
                         height: 1.4,
                       ),
                     ),
@@ -2395,15 +2416,15 @@ class _CoreScreenState extends State<CoreScreen>
                             maxLength: 8,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 12,
+                              fontSize: 14,
                             ),
                             decoration: const InputDecoration(
                               counterText: '',
                               isDense: true,
                               hintText: 'Novo PIN de Coação (4 a 8 dígitos)',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
-                                fontSize: 11,
+                                color: AppColors.subtle,
+                                fontSize: 13,
                               ),
                             ),
                           ),
@@ -2421,7 +2442,7 @@ class _CoreScreenState extends State<CoreScreen>
                                 const SnackBar(
                                   content: Text(
                                     'PIN de Coação configurado com sucesso.',
-                                    style: TextStyle(fontSize: 11),
+                                    style: TextStyle(fontSize: 13),
                                   ),
                                 ),
                               );
@@ -2431,21 +2452,21 @@ class _CoreScreenState extends State<CoreScreen>
                                 SnackBar(
                                   content: Text(
                                     'Erro no PIN de Coação: $e',
-                                    style: const TextStyle(fontSize: 11),
+                                    style: const TextStyle(fontSize: 13),
                                   ),
                                 ),
                               );
                             }
                           },
                           style: FilledButton.styleFrom(
-                            backgroundColor: _crimson,
-                            foregroundColor: const Color(0xFFF0E6E7),
+                            backgroundColor: AppColors.crimson,
+                            foregroundColor: AppColors.text,
                             visualDensity: VisualDensity.compact,
                           ),
                           child: const Text(
                             'SALVAR',
                             style: TextStyle(
-                              fontSize: 10,
+                              fontSize: 12,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -2463,7 +2484,7 @@ class _CoreScreenState extends State<CoreScreen>
                             icon: const Icon(
                               Icons.delete_outline,
                               size: 16,
-                              color: Color(0xFFFF707C),
+                              color: AppColors.accent,
                             ),
                           ),
                         ],
@@ -2478,9 +2499,9 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _border),
+                  border: Border.all(color: AppColors.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2488,8 +2509,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const Text(
                       'KILL SWITCH REMOTO DO PC (LAN / WEBHOOK)',
                       style: TextStyle(
-                        color: _crimson,
-                        fontSize: 11,
+                        color: AppColors.accent,
+                        fontSize: 13,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -2497,8 +2518,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const Text(
                       'Envia pacote assinado (HMAC-SHA256) para suspender/travar seu PC na rede local e bloqueia o celular.',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
-                        fontSize: 10,
+                        color: AppColors.muted,
+                        fontSize: 12,
                         height: 1.4,
                       ),
                     ),
@@ -2510,14 +2531,14 @@ class _CoreScreenState extends State<CoreScreen>
                             controller: pcKillSwitchUrlController,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 11,
+                              fontSize: 13,
                             ),
                             decoration: const InputDecoration(
                               isDense: true,
                               hintText: 'http://192.168.1.100:8765/kill',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
-                                fontSize: 11,
+                                color: AppColors.subtle,
+                                fontSize: 13,
                               ),
                             ),
                           ),
@@ -2533,20 +2554,20 @@ class _CoreScreenState extends State<CoreScreen>
                               const SnackBar(
                                 content: Text(
                                   'Endpoint do Kill Switch salvo.',
-                                  style: TextStyle(fontSize: 11),
+                                  style: TextStyle(fontSize: 13),
                                 ),
                               ),
                             );
                           },
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: _crimson,
-                            side: const BorderSide(color: _crimson),
+                            foregroundColor: AppColors.accent,
+                            side: const BorderSide(color: AppColors.crimson),
                             visualDensity: VisualDensity.compact,
                           ),
                           child: const Text(
                             'FIXAR IP',
                             style: TextStyle(
-                              fontSize: 10,
+                              fontSize: 12,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -2566,14 +2587,14 @@ class _CoreScreenState extends State<CoreScreen>
                             SnackBar(
                               content: Text(
                                 msg,
-                                style: const TextStyle(fontSize: 11),
+                                style: const TextStyle(fontSize: 13),
                               ),
                             ),
                           );
                           _lockSession();
                         },
                         style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF75020F),
+                          backgroundColor: AppColors.crimson,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 10),
                         ),
@@ -2581,7 +2602,7 @@ class _CoreScreenState extends State<CoreScreen>
                         label: const Text(
                           'ACIONAR KILL SWITCH (PC + CELULAR)',
                           style: TextStyle(
-                            fontSize: 10,
+                            fontSize: 12,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -2595,9 +2616,9 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _border),
+                  border: Border.all(color: AppColors.border),
                 ),
                 child: const Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2605,8 +2626,8 @@ class _CoreScreenState extends State<CoreScreen>
                     Text(
                       'POLÍTICAS LOCAIS FAIL-CLOSED',
                       style: TextStyle(
-                        color: Color(0xFFF0E6E7),
-                        fontSize: 11,
+                        color: AppColors.text,
+                        fontSize: 13,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -2614,8 +2635,8 @@ class _CoreScreenState extends State<CoreScreen>
                     Text(
                       'Nenhuma ordem da IA sobrepõe a validação do dispositivo. O comando /security audita e bloqueia privilégios a qualquer momento.',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
-                        fontSize: 10,
+                        color: AppColors.muted,
+                        fontSize: 12,
                         height: 1.4,
                       ),
                     ),
@@ -2623,24 +2644,24 @@ class _CoreScreenState extends State<CoreScreen>
                     Text(
                       '✓ Cifragem PBKDF2-HMAC-SHA256 (120k iter): Ativa',
                       style: TextStyle(
-                        color: Color(0xFFFF707C),
-                        fontSize: 10,
+                        color: AppColors.accent,
+                        fontSize: 12,
                       ),
                     ),
                     SizedBox(height: 4),
                     Text(
                       '✓ Isolação de Chaves de API no Keystore: Ativa',
                       style: TextStyle(
-                        color: Color(0xFFFF707C),
-                        fontSize: 10,
+                        color: AppColors.accent,
+                        fontSize: 12,
                       ),
                     ),
                     SizedBox(height: 4),
                     Text(
                       '✓ Exclusão de Backup em Nuvem (allowBackup=false): Ativa',
                       style: TextStyle(
-                        color: Color(0xFFFF707C),
-                        fontSize: 10,
+                        color: AppColors.accent,
+                        fontSize: 12,
                       ),
                     ),
                   ],
@@ -2654,8 +2675,8 @@ class _CoreScreenState extends State<CoreScreen>
           child: FilledButton(
             onPressed: _lockSession,
             style: FilledButton.styleFrom(
-              backgroundColor: _crimson,
-              foregroundColor: const Color(0xFFF0E6E7),
+              backgroundColor: AppColors.crimson,
+              foregroundColor: AppColors.text,
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -2664,7 +2685,7 @@ class _CoreScreenState extends State<CoreScreen>
             child: const Text(
               'TRAVAR DISPOSITIVO AGORA',
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 13,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -2710,7 +2731,7 @@ class _CoreScreenState extends State<CoreScreen>
         Container(
           padding: const EdgeInsets.only(bottom: 10),
           decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: _border)),
+            border: Border(bottom: BorderSide(color: AppColors.border)),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2719,13 +2740,13 @@ class _CoreScreenState extends State<CoreScreen>
                 onTap: () => _setPanel(_ActivePanel.main),
                 child: const Row(
                   children: [
-                    Icon(Icons.arrow_back, size: 15, color: _crimson),
+                    Icon(Icons.arrow_back, size: 15, color: AppColors.accent),
                     SizedBox(width: 4),
                     Text(
                       'VOLTAR',
                       style: TextStyle(
-                        color: _crimson,
-                        fontSize: 12,
+                        color: AppColors.accent,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -2744,7 +2765,7 @@ class _CoreScreenState extends State<CoreScreen>
                     'CONTROLE DO DISPOSITIVO',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -2754,7 +2775,7 @@ class _CoreScreenState extends State<CoreScreen>
                     child: const Icon(
                       Icons.refresh,
                       size: 15,
-                      color: _crimson,
+                      color: AppColors.accent,
                     ),
                   ),
                 ],
@@ -2771,9 +2792,9 @@ class _CoreScreenState extends State<CoreScreen>
                 margin: const EdgeInsets.only(bottom: 10),
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: _crimson.withValues(alpha: 0.4)),
+                  border: Border.all(color: AppColors.crimson.withValues(alpha: 0.4)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2784,8 +2805,8 @@ class _CoreScreenState extends State<CoreScreen>
                         Text(
                           '📡 COCKPIT DE TELEMETRIA EM TEMPO REAL',
                           style: TextStyle(
-                            color: _crimson,
-                            fontSize: 9.5,
+                            color: AppColors.accent,
+                            fontSize: 12,
                             fontWeight: FontWeight.bold,
                             letterSpacing: 0.8,
                           ),
@@ -2793,8 +2814,8 @@ class _CoreScreenState extends State<CoreScreen>
                         Text(
                           'AMOLED HUD',
                           style: TextStyle(
-                            color: _rose,
-                            fontSize: 8.5,
+                            color: AppColors.accent,
+                            fontSize: 11,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -2810,8 +2831,8 @@ class _CoreScreenState extends State<CoreScreen>
                             subLabel: '${batTemp.toStringAsFixed(1)}°C',
                             percentage: batPct,
                             color: batLevel < 20
-                                ? const Color(0xFFFF707C)
-                                : const Color(0xFF75020F),
+                                ? AppColors.accent
+                                : AppColors.accent,
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -2821,7 +2842,7 @@ class _CoreScreenState extends State<CoreScreen>
                             label: 'RAM',
                             subLabel: ramSub,
                             percentage: ramPct,
-                            color: const Color(0xFF75020F),
+                            color: AppColors.accent,
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -2831,7 +2852,7 @@ class _CoreScreenState extends State<CoreScreen>
                             label: 'TEMP',
                             subLabel: 'ESTÁVEL',
                             percentage: 0.35,
-                            color: const Color(0xFFFF707C),
+                            color: AppColors.accent,
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -2841,7 +2862,7 @@ class _CoreScreenState extends State<CoreScreen>
                             label: netType,
                             subLabel: s?.ringerMode ?? 'ONLINE',
                             percentage: 0.92,
-                            color: const Color(0xFF75020F),
+                            color: AppColors.accent,
                           ),
                         ),
                       ],
@@ -2853,9 +2874,9 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF19171B),
+                  color: AppColors.background,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _crimson.withValues(alpha: 0.35)),
+                  border: Border.all(color: AppColors.crimson.withValues(alpha: 0.35)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2863,8 +2884,8 @@ class _CoreScreenState extends State<CoreScreen>
                     Text(
                       modelText,
                       style: const TextStyle(
-                        color: _crimson,
-                        fontSize: 10,
+                        color: AppColors.accent,
+                        fontSize: 12,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -2872,41 +2893,41 @@ class _CoreScreenState extends State<CoreScreen>
                     _SecurityRow(
                       label: 'Bateria:',
                       value: batText,
-                      valueColor: const Color(0xFFFF707C),
+                      valueColor: AppColors.accent,
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
                       label: 'Memória RAM:',
                       value: ramText,
-                      valueColor: const Color(0xFFF0E6E7),
+                      valueColor: AppColors.text,
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
                       label: 'Volume de Mídia:',
                       value: volText,
-                      valueColor: _rose,
+                      valueColor: AppColors.accent,
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
                       label: 'Lanterna Traseira:',
                       value: torchOn ? 'LIGADA (ON)' : 'DESLIGADA (OFF)',
                       valueColor: torchOn
-                          ? const Color(0xFFFF707C)
-                          : const Color(0xFFA89698),
+                          ? AppColors.accent
+                          : AppColors.muted,
                     ),
                     const SizedBox(height: 4),
                     const _SecurityRow(
                       label: 'Flip-to-Shush (Acelerômetro):',
                       value: 'ATIVO (Virar tela p/ baixo silencia)',
-                      valueColor: Color(0xFFFF707C),
+                      valueColor: AppColors.accent,
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
                       label: 'Modo Foco Noturno:',
                       value: nightFocusMode ? 'ATIVO (Sussurro TTS)' : 'INATIVO',
                       valueColor: nightFocusMode
-                          ? const Color(0xFFFF707C)
-                          : const Color(0xFFA89698),
+                          ? AppColors.accent
+                          : AppColors.muted,
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
@@ -2915,8 +2936,8 @@ class _CoreScreenState extends State<CoreScreen>
                           ? 'ATIVO (VAD adaptativo)'
                           : 'EM REPOUSO',
                       valueColor: ecoVadSentinelRunning
-                          ? const Color(0xFFFF707C)
-                          : const Color(0xFFA89698),
+                          ? AppColors.accent
+                          : AppColors.muted,
                     ),
                     const SizedBox(height: 8),
                     Row(
@@ -2947,7 +2968,7 @@ class _CoreScreenState extends State<CoreScreen>
                                   const SnackBar(
                                     content: Text(
                                       '⚠️ Sentinela não confirmou captura do microfone. Veja o diagnóstico.',
-                                      style: TextStyle(fontSize: 11),
+                                      style: TextStyle(fontSize: 13),
                                     ),
                                   ),
                                 );
@@ -2955,11 +2976,11 @@ class _CoreScreenState extends State<CoreScreen>
                             },
                             style: FilledButton.styleFrom(
                               backgroundColor: ecoVadSentinelRunning
-                                  ? const Color(0xFF75020F)
-                                  : const Color(0xFF2B0307),
+                                  ? AppColors.crimson
+                                  : AppColors.surface,
                               foregroundColor: ecoVadSentinelRunning
-                                  ? const Color(0xFFFF707C)
-                                  : _rose,
+                                  ? AppColors.accent
+                                  : AppColors.accent,
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: Icon(
@@ -2973,7 +2994,7 @@ class _CoreScreenState extends State<CoreScreen>
                                   ? 'DESATIVAR ECO-VAD'
                                   : 'ATIVAR SENTINELA ECO-VAD',
                               style: const TextStyle(
-                                fontSize: 9,
+                                fontSize: 11,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -2990,21 +3011,21 @@ class _CoreScreenState extends State<CoreScreen>
                                 SnackBar(
                                   content: Text(
                                     '🔊 Voz Offline: $reply',
-                                    style: const TextStyle(fontSize: 11),
+                                    style: const TextStyle(fontSize: 13),
                                   ),
                                 ),
                               );
                             },
                             style: FilledButton.styleFrom(
-                              backgroundColor: _crimson,
-                              foregroundColor: const Color(0xFFF0E6E7),
+                              backgroundColor: AppColors.crimson,
+                              foregroundColor: AppColors.text,
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.graphic_eq, size: 13),
                             label: const Text(
                               'VOZ OFFLINE (HORAS)',
                               style: TextStyle(
-                                fontSize: 9,
+                                fontSize: 11,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -3018,15 +3039,15 @@ class _CoreScreenState extends State<CoreScreen>
                       child: OutlinedButton.icon(
                         onPressed: _showWakeWordDiagnostics,
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: _rose,
-                          side: const BorderSide(color: _border),
+                          foregroundColor: AppColors.accent,
+                          side: const BorderSide(color: AppColors.border),
                           visualDensity: VisualDensity.compact,
                         ),
                         icon: const Icon(Icons.troubleshoot, size: 13),
                         label: const Text(
                           'DIAGNÓSTICO DA PALAVRA DE ATIVAÇÃO',
                           style: TextStyle(
-                            fontSize: 9,
+                            fontSize: 11,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -3036,8 +3057,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const Text(
                       'PERFIL DE TIMBRE NEURAL (PT-BR LIMPO SEM ROBÔ):',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
-                        fontSize: 9,
+                        color: AppColors.muted,
+                        fontSize: 11,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -3058,15 +3079,15 @@ class _CoreScreenState extends State<CoreScreen>
                                 },
                                 style: OutlinedButton.styleFrom(
                                   backgroundColor: selectedVoiceProfile == prof
-                                      ? _crimson
-                                      : const Color(0xFF2B0307),
+                                      ? AppColors.crimson
+                                      : AppColors.surface,
                                   foregroundColor: selectedVoiceProfile == prof
                                       ? Colors.black
-                                      : _rose,
+                                      : AppColors.accent,
                                   side: BorderSide(
                                     color: selectedVoiceProfile == prof
-                                        ? _crimson
-                                        : _border,
+                                        ? AppColors.crimson
+                                        : AppColors.border,
                                   ),
                                   visualDensity: VisualDensity.compact,
                                   padding: const EdgeInsets.symmetric(
@@ -3076,7 +3097,7 @@ class _CoreScreenState extends State<CoreScreen>
                                 child: Text(
                                   prof.label,
                                   style: const TextStyle(
-                                    fontSize: 9,
+                                    fontSize: 11,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -3090,9 +3111,9 @@ class _CoreScreenState extends State<CoreScreen>
                             voiceService.stop();
                           },
                           style: OutlinedButton.styleFrom(
-                            backgroundColor: const Color(0xFF2B0307),
-                            foregroundColor: const Color(0xFFFF707C),
-                            side: const BorderSide(color: _border),
+                            backgroundColor: AppColors.surface,
+                            foregroundColor: AppColors.accent,
+                            side: const BorderSide(color: AppColors.border),
                             visualDensity: VisualDensity.compact,
                             padding: const EdgeInsets.symmetric(
                               horizontal: 8,
@@ -3102,7 +3123,7 @@ class _CoreScreenState extends State<CoreScreen>
                           child: const Text(
                             'CALAR',
                             style: TextStyle(
-                              fontSize: 9,
+                              fontSize: 11,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -3118,10 +3139,10 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: _crimson.withValues(alpha: 0.45),
+                    color: AppColors.crimson.withValues(alpha: 0.45),
                   ),
                 ),
                 child: Column(
@@ -3133,8 +3154,8 @@ class _CoreScreenState extends State<CoreScreen>
                         const Text(
                           '📨 SENTINELA DE MENSAGENS & WHATSAPP',
                           style: TextStyle(
-                            color: _crimson,
-                            fontSize: 10,
+                            color: AppColors.accent,
+                            fontSize: 12,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -3145,8 +3166,8 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                           decoration: BoxDecoration(
                             color: notificationSentinelEnabled
-                                ? const Color(0xFF75020F)
-                                : const Color(0xFF2B0307),
+                                ? AppColors.crimson
+                                : AppColors.surface,
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
@@ -3155,9 +3176,9 @@ class _CoreScreenState extends State<CoreScreen>
                                 : 'PERMISSÃO PENDENTE',
                             style: TextStyle(
                               color: notificationSentinelEnabled
-                                  ? const Color(0xFFFF707C)
-                                  : _rose,
-                              fontSize: 8,
+                                  ? AppColors.accent
+                                  : AppColors.accent,
+                              fontSize: 11,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -3172,8 +3193,8 @@ class _CoreScreenState extends State<CoreScreen>
                           onPressed: () =>
                               deviceService.openNotificationListenerSettings(),
                           style: FilledButton.styleFrom(
-                            backgroundColor: _crimson,
-                            foregroundColor: const Color(0xFFF0E6E7),
+                            backgroundColor: AppColors.crimson,
+                            foregroundColor: AppColors.text,
                             visualDensity: VisualDensity.compact,
                           ),
                           icon: const Icon(
@@ -3183,7 +3204,7 @@ class _CoreScreenState extends State<CoreScreen>
                           label: const Text(
                             'ATIVAR LEITURA E RESPOSTA EM 2º PLANO',
                             style: TextStyle(
-                              fontSize: 9.5,
+                              fontSize: 12,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -3214,7 +3235,7 @@ class _CoreScreenState extends State<CoreScreen>
                                 const SnackBar(
                                   content: Text(
                                     'Permissão de contatos solicitada ao Android.',
-                                    style: TextStyle(fontSize: 11),
+                                    style: TextStyle(fontSize: 13),
                                   ),
                                 ),
                               );
@@ -3236,19 +3257,19 @@ class _CoreScreenState extends State<CoreScreen>
                         const Text(
                           '📭 Nenhuma mensagem capturada ainda. Quando chegar WhatsApp, Telegram, Instagram ou SMS, o U.L.T.R.O.N. exibirá aqui para leitura ou resposta em 2º plano.',
                           style: TextStyle(
-                            color: Color(0xFFA89698),
-                            fontSize: 9.5,
+                            color: AppColors.muted,
+                            fontSize: 12,
                           ),
                         )
                       else
                         for (final m in recentMessages.take(4))
                           Container(
                             margin: const EdgeInsets.only(bottom: 6),
-                            padding: const EdgeInsets.all(8),
+                            padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF19171B),
+                              color: AppColors.background,
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: _border),
+                              border: Border.all(color: AppColors.border),
                             ),
                             child: Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3261,8 +3282,8 @@ class _CoreScreenState extends State<CoreScreen>
                                       Text(
                                         '[${m.timeFormatted}] ${m.appLabel} • ${m.sender}',
                                         style: const TextStyle(
-                                          color: _rose,
-                                          fontSize: 9,
+                                          color: AppColors.accent,
+                                          fontSize: 11,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),
@@ -3270,8 +3291,8 @@ class _CoreScreenState extends State<CoreScreen>
                                       Text(
                                         m.text,
                                         style: const TextStyle(
-                                          color: Color(0xFFF0E6E7),
-                                          fontSize: 10.5,
+                                          color: AppColors.text,
+                                          fontSize: 12,
                                         ),
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
@@ -3288,18 +3309,18 @@ class _CoreScreenState extends State<CoreScreen>
                                         vertical: 4,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF2B0307),
+                                        color: AppColors.surface,
                                         borderRadius: BorderRadius.circular(6),
                                         border: Border.all(
                                           color:
-                                              _crimson.withValues(alpha: 0.5),
+                                              AppColors.crimson.withValues(alpha: 0.5),
                                         ),
                                       ),
                                       child: const Text(
                                         '↩️ RESPONDER',
                                         style: TextStyle(
-                                          color: _crimson,
-                                          fontSize: 8.5,
+                                          color: AppColors.accent,
+                                          fontSize: 11,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),
@@ -3309,12 +3330,12 @@ class _CoreScreenState extends State<CoreScreen>
                             ),
                           ),
                     ],
-                    const Divider(color: _border, height: 14),
+                    const Divider(color: AppColors.border, height: 14),
                     const Text(
                       'ENVIAR WHATSAPP OU SMS (NOME DO CONTATO OU NÚMERO):',
                       style: TextStyle(
-                        color: _rose,
-                        fontSize: 9,
+                        color: AppColors.accent,
+                        fontSize: 11,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -3327,14 +3348,14 @@ class _CoreScreenState extends State<CoreScreen>
                             controller: messageTargetController,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 11,
+                              fontSize: 13,
                             ),
                             decoration: const InputDecoration(
                               isDense: true,
                               hintText: 'Contato ou 1199999...',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
-                                fontSize: 10,
+                                color: AppColors.subtle,
+                                fontSize: 12,
                               ),
                             ),
                           ),
@@ -3346,14 +3367,14 @@ class _CoreScreenState extends State<CoreScreen>
                             controller: messageBodyController,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 11,
+                              fontSize: 13,
                             ),
                             decoration: const InputDecoration(
                               isDense: true,
                               hintText: 'Texto da mensagem…',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
-                                fontSize: 10,
+                                color: AppColors.subtle,
+                                fontSize: 12,
                               ),
                             ),
                           ),
@@ -3367,15 +3388,15 @@ class _CoreScreenState extends State<CoreScreen>
                           child: FilledButton.icon(
                             onPressed: () => _sendQuickMessage(viaSms: false),
                             style: FilledButton.styleFrom(
-                              backgroundColor: _crimson,
-                              foregroundColor: const Color(0xFFF0E6E7),
+                              backgroundColor: AppColors.crimson,
+                              foregroundColor: AppColors.text,
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.chat_bubble, size: 13),
                             label: const Text(
                               'WHATSAPP',
                               style: TextStyle(
-                                fontSize: 9.5,
+                                fontSize: 12,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -3386,15 +3407,15 @@ class _CoreScreenState extends State<CoreScreen>
                           child: FilledButton.icon(
                             onPressed: () => _sendQuickMessage(viaSms: true),
                             style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF2B0307),
-                              foregroundColor: _rose,
+                              backgroundColor: AppColors.surface,
+                              foregroundColor: AppColors.accent,
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.sms, size: 13),
                             label: const Text(
                               'ENVIAR SMS',
                               style: TextStyle(
-                                fontSize: 9.5,
+                                fontSize: 12,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -3411,9 +3432,9 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _border),
+                  border: Border.all(color: AppColors.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -3424,8 +3445,8 @@ class _CoreScreenState extends State<CoreScreen>
                         const Text(
                           'OBSIDIAN SEGUNDO CÉREBRO & SKILLS (.MD)',
                           style: TextStyle(
-                            color: _crimson,
-                            fontSize: 10,
+                            color: AppColors.accent,
+                            fontSize: 12,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -3440,7 +3461,7 @@ class _CoreScreenState extends State<CoreScreen>
                                   opened
                                       ? '📓 Abrindo cofre no app oficial Obsidian…'
                                       : '⚠️ Aplicativo Obsidian não encontrado.',
-                                  style: const TextStyle(fontSize: 11),
+                                  style: const TextStyle(fontSize: 13),
                                 ),
                               ),
                             );
@@ -3450,13 +3471,13 @@ class _CoreScreenState extends State<CoreScreen>
                             padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                             child: Row(
                               children: [
-                                Icon(Icons.open_in_new, size: 11, color: _rose),
+                                Icon(Icons.open_in_new, size: 11, color: AppColors.accent),
                                 SizedBox(width: 4),
                                 Text(
                                   'ABRIR OBSIDIAN',
                                   style: TextStyle(
-                                    color: _rose,
-                                    fontSize: 8.5,
+                                    color: AppColors.accent,
+                                    fontSize: 11,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -3476,14 +3497,14 @@ class _CoreScreenState extends State<CoreScreen>
                             onSubmitted: _saveQuickObsidianNote,
                             style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 11,
+                              fontSize: 13,
                             ),
                             decoration: const InputDecoration(
                               isDense: true,
                               hintText: 'Nota rápida para o Diário ou Inbox…',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
-                                fontSize: 10,
+                                color: AppColors.subtle,
+                                fontSize: 12,
                               ),
                             ),
                           ),
@@ -3493,15 +3514,15 @@ class _CoreScreenState extends State<CoreScreen>
                           onPressed: () =>
                               _saveQuickObsidianNote(quickNoteController.text),
                           style: FilledButton.styleFrom(
-                            backgroundColor: _crimson,
-                            foregroundColor: const Color(0xFFF0E6E7),
+                            backgroundColor: AppColors.crimson,
+                            foregroundColor: AppColors.text,
                             visualDensity: VisualDensity.compact,
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                           ),
                           child: const Text(
                             'DIÁRIO',
                             style: TextStyle(
-                              fontSize: 9.5,
+                              fontSize: 12,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -3512,14 +3533,14 @@ class _CoreScreenState extends State<CoreScreen>
                               _saveObsidianInbox(quickNoteController.text),
                           style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF4A0A12),
-                            foregroundColor: _rose,
+                            foregroundColor: AppColors.accent,
                             visualDensity: VisualDensity.compact,
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                           ),
                           child: const Text(
                             'INBOX',
                             style: TextStyle(
-                              fontSize: 9.5,
+                              fontSize: 12,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -3531,8 +3552,8 @@ class _CoreScreenState extends State<CoreScreen>
                       const Text(
                         'SKILLS PROCEDURAIS LOCAIS (Skills/*.md):',
                         style: TextStyle(
-                          color: _rose,
-                          fontSize: 9,
+                          color: AppColors.accent,
+                          fontSize: 11,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -3562,8 +3583,8 @@ class _CoreScreenState extends State<CoreScreen>
                   onPressed: _toggleTorchQuick,
                   style: FilledButton.styleFrom(
                     backgroundColor:
-                        torchOn ? const Color(0xFFFF707C) : _crimson,
-                    foregroundColor: const Color(0xFFF0E6E7),
+                        torchOn ? AppColors.accent : AppColors.crimson,
+                    foregroundColor: torchOn ? Colors.black : AppColors.text,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -3578,7 +3599,7 @@ class _CoreScreenState extends State<CoreScreen>
                         ? 'DESLIGAR LANTERNA DO CELULAR'
                         : 'LIGAR LANTERNA DO CELULAR',
                     style: const TextStyle(
-                      fontSize: 11,
+                      fontSize: 13,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -3590,9 +3611,9 @@ class _CoreScreenState extends State<CoreScreen>
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2B0307),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _border),
+                  border: Border.all(color: AppColors.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -3600,8 +3621,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const Text(
                       'CONTROLE DE ÁUDIO DO SISTEMA',
                       style: TextStyle(
-                        color: _rose,
-                        fontSize: 10,
+                        color: AppColors.accent,
+                        fontSize: 12,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -3660,8 +3681,8 @@ class _CoreScreenState extends State<CoreScreen>
               const Text(
                 'AÇÕES DE SISTEMA E SENSORES',
                 style: TextStyle(
-                  color: _rose,
-                  fontSize: 10,
+                  color: AppColors.accent,
+                  fontSize: 12,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -3712,8 +3733,8 @@ class _CoreScreenState extends State<CoreScreen>
               const Text(
                 'LANÇADOR RÁPIDO DE APLICATIVOS',
                 style: TextStyle(
-                  color: _rose,
-                  fontSize: 10,
+                  color: AppColors.accent,
+                  fontSize: 12,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -3743,7 +3764,7 @@ class _CoreScreenState extends State<CoreScreen>
                             SnackBar(
                               content: Text(
                                 '$e',
-                                style: const TextStyle(fontSize: 11),
+                                style: const TextStyle(fontSize: 13),
                               ),
                             ),
                           );
@@ -3760,9 +3781,9 @@ class _CoreScreenState extends State<CoreScreen>
           child: OutlinedButton(
             onPressed: () => _setPanel(_ActivePanel.main),
             style: OutlinedButton.styleFrom(
-              backgroundColor: const Color(0xFF2B0307),
-              foregroundColor: _crimson,
-              side: BorderSide(color: _crimson.withValues(alpha: 0.35)),
+              backgroundColor: AppColors.surface,
+              foregroundColor: AppColors.accent,
+              side: BorderSide(color: AppColors.crimson.withValues(alpha: 0.35)),
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -3771,7 +3792,7 @@ class _CoreScreenState extends State<CoreScreen>
             child: const Text(
               'VOLTAR AO NÚCLEO',
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 13,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -3819,9 +3840,9 @@ class _CoreScreenState extends State<CoreScreen>
       SnackBar(
         content: Text(
           '⚡ Provedor ativado: ${preset.name}',
-          style: const TextStyle(fontSize: 11),
+          style: const TextStyle(fontSize: 13),
         ),
-        backgroundColor: const Color(0xFF2B0307),
+        backgroundColor: AppColors.surface,
         duration: const Duration(seconds: 2),
       ),
     );
@@ -3834,7 +3855,7 @@ class _CoreScreenState extends State<CoreScreen>
         Container(
           padding: const EdgeInsets.only(bottom: 10),
           decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: _border)),
+            border: Border(bottom: BorderSide(color: AppColors.border)),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -3843,13 +3864,13 @@ class _CoreScreenState extends State<CoreScreen>
                 onTap: () => _setPanel(_ActivePanel.main),
                 child: const Row(
                   children: [
-                    Icon(Icons.arrow_back, size: 15, color: _crimson),
+                    Icon(Icons.arrow_back, size: 15, color: AppColors.accent),
                     SizedBox(width: 4),
                     Text(
                       'VOLTAR',
                       style: TextStyle(
-                        color: _crimson,
-                        fontSize: 12,
+                        color: AppColors.accent,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -3868,7 +3889,7 @@ class _CoreScreenState extends State<CoreScreen>
                     'CENTRAL DE PROVEDORES DE IA',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -3879,7 +3900,7 @@ class _CoreScreenState extends State<CoreScreen>
                 child: const Icon(
                   Icons.settings,
                   size: 16,
-                  color: _rose,
+                  color: AppColors.accent,
                 ),
               ),
             ],
@@ -3894,15 +3915,15 @@ class _CoreScreenState extends State<CoreScreen>
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                    colors: [Color(0xFF2B0307), Color(0xFF19171B)],
+                    colors: [AppColors.surface, AppColors.background],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _crimson.withValues(alpha: 0.5)),
+                  border: Border.all(color: AppColors.crimson.withValues(alpha: 0.5)),
                   boxShadow: [
                     BoxShadow(
-                      color: _crimson.withValues(alpha: 0.12),
+                      color: AppColors.crimson.withValues(alpha: 0.12),
                       blurRadius: 10,
                     ),
                   ],
@@ -3919,15 +3940,15 @@ class _CoreScreenState extends State<CoreScreen>
                             vertical: 2,
                           ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF75020F),
+                            color: AppColors.crimson,
                             borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFFFF707C)),
+                            border: Border.all(color: AppColors.accent),
                           ),
                           child: const Text(
                             'ZERO-KEY NATIVO',
                             style: TextStyle(
-                              color: Color(0xFFFF707C),
-                              fontSize: 8.5,
+                              color: AppColors.accent,
+                              fontSize: 11,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -3935,8 +3956,8 @@ class _CoreScreenState extends State<CoreScreen>
                         Text(
                           'USANDO: $activeProviderUsed',
                           style: const TextStyle(
-                            color: _rose,
-                            fontSize: 9,
+                            color: AppColors.accent,
+                            fontSize: 11,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -3946,8 +3967,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const Text(
                       '9 Provedores Gratuitos com Failover Automático. Toque em qualquer satélite abaixo para ativar ou alternar.',
                       style: TextStyle(
-                        color: Color(0xFFF0E6E7),
-                        fontSize: 9.5,
+                        color: AppColors.text,
+                        fontSize: 12,
                       ),
                     ),
                   ],
@@ -3957,8 +3978,8 @@ class _CoreScreenState extends State<CoreScreen>
               const Text(
                 'SATÉLITES & PROVEDORES CONECTADOS (9 OPÇÕES)',
                 style: TextStyle(
-                  color: _crimson,
-                  fontSize: 10,
+                  color: AppColors.accent,
+                  fontSize: 12,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 0.8,
                 ),
@@ -3970,13 +3991,13 @@ class _CoreScreenState extends State<CoreScreen>
                   margin: const EdgeInsets.only(bottom: 8),
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF19171B),
+                    color: AppColors.background,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
                       color: activeProviderUsed
                               .contains(preset.name.split(' ').first)
-                          ? _crimson
-                          : _border,
+                          ? AppColors.crimson
+                          : AppColors.border,
                       width: activeProviderUsed
                               .contains(preset.name.split(' ').first)
                           ? 1.3
@@ -3995,7 +4016,7 @@ class _CoreScreenState extends State<CoreScreen>
                                   preset.name,
                                   style: const TextStyle(
                                     color: Colors.white,
-                                    fontSize: 11,
+                                    fontSize: 13,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -4007,17 +4028,17 @@ class _CoreScreenState extends State<CoreScreen>
                                   ),
                                   decoration: BoxDecoration(
                                     color: preset.requiresKey
-                                        ? const Color(0xFF2B0307)
-                                        : const Color(0xFF75020F),
+                                        ? AppColors.surface
+                                        : AppColors.crimson,
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: Text(
                                     preset.badge,
                                     style: TextStyle(
                                       color: preset.requiresKey
-                                          ? _rose
-                                          : const Color(0xFFFF707C),
-                                      fontSize: 7.5,
+                                          ? AppColors.accent
+                                          : AppColors.accent,
+                                      fontSize: 11,
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
@@ -4028,8 +4049,8 @@ class _CoreScreenState extends State<CoreScreen>
                             Text(
                               'Modelos: ${preset.recommendedModels.take(2).join(', ')}',
                               style: const TextStyle(
-                                color: Color(0xFFA89698),
-                                fontSize: 8.5,
+                                color: AppColors.muted,
+                                fontSize: 11,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -4041,8 +4062,8 @@ class _CoreScreenState extends State<CoreScreen>
                       FilledButton(
                         onPressed: () => _activatePreset(preset),
                         style: FilledButton.styleFrom(
-                          backgroundColor: _crimson,
-                          foregroundColor: const Color(0xFFF0E6E7),
+                          backgroundColor: AppColors.crimson,
+                          foregroundColor: AppColors.text,
                           padding: const EdgeInsets.symmetric(
                             horizontal: 10,
                             vertical: 6,
@@ -4055,7 +4076,7 @@ class _CoreScreenState extends State<CoreScreen>
                         child: const Text(
                           'ATIVAR',
                           style: TextStyle(
-                            fontSize: 9,
+                            fontSize: 11,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -4069,8 +4090,8 @@ class _CoreScreenState extends State<CoreScreen>
                 child: OutlinedButton.icon(
                   onPressed: _openSettings,
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: _rose,
-                    side: const BorderSide(color: _border),
+                    foregroundColor: AppColors.accent,
+                    side: const BorderSide(color: AppColors.border),
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10),
@@ -4080,7 +4101,7 @@ class _CoreScreenState extends State<CoreScreen>
                   label: const Text(
                     'CONFIGURAR CHAVES DE API DETALHADAS (/settings)',
                     style: TextStyle(
-                      fontSize: 10,
+                      fontSize: 12,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -4099,7 +4120,7 @@ class _CoreScreenState extends State<CoreScreen>
           Container(
             padding: const EdgeInsets.only(bottom: 10),
             decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: _border)),
+              border: Border(bottom: BorderSide(color: AppColors.border)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -4108,13 +4129,13 @@ class _CoreScreenState extends State<CoreScreen>
                   onTap: () => _setPanel(_ActivePanel.main),
                   child: const Row(
                     children: [
-                      Icon(Icons.arrow_back, size: 15, color: _crimson),
+                      Icon(Icons.arrow_back, size: 15, color: AppColors.accent),
                       SizedBox(width: 4),
                       Text(
                         'VOLTAR',
                         style: TextStyle(
-                          color: _crimson,
-                          fontSize: 12,
+                          color: AppColors.accent,
+                          fontSize: 14,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -4129,7 +4150,7 @@ class _CoreScreenState extends State<CoreScreen>
                       'SINTAXE DE COMANDOS',
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: 12,
+                        fontSize: 14,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -4145,8 +4166,8 @@ class _CoreScreenState extends State<CoreScreen>
                 Text(
                   'Comandos rápidos e controles do celular (funcionam offline e pela IA):',
                   style: TextStyle(
-                    color: Color(0xFFA89698),
-                    fontSize: 10,
+                    color: AppColors.muted,
+                    fontSize: 12,
                   ),
                 ),
                 SizedBox(height: 8),
@@ -4212,9 +4233,9 @@ class _CoreScreenState extends State<CoreScreen>
             child: OutlinedButton(
               onPressed: () => _setPanel(_ActivePanel.main),
               style: OutlinedButton.styleFrom(
-                backgroundColor: const Color(0xFF2B0307),
-                foregroundColor: _crimson,
-                side: BorderSide(color: _crimson.withValues(alpha: 0.35)),
+                backgroundColor: AppColors.surface,
+                foregroundColor: AppColors.accent,
+                side: BorderSide(color: AppColors.crimson.withValues(alpha: 0.35)),
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -4223,7 +4244,7 @@ class _CoreScreenState extends State<CoreScreen>
               child: const Text(
                 'ENTENDIDO, VOLTAR AO NÚCLEO',
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 13,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -4249,16 +4270,16 @@ class _TopNavPill extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(6),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
           decoration: BoxDecoration(
-            color: selected ? const Color(0xFF75020F) : Colors.transparent,
+            color: selected ? AppColors.crimson : Colors.transparent,
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
             label,
             style: TextStyle(
-              color: selected ? const Color(0xFFF0E6E7) : const Color(0xFFA89698),
-              fontSize: 10,
+              color: selected ? AppColors.text : AppColors.muted,
+              fontSize: 12,
               fontWeight: selected ? FontWeight.bold : FontWeight.normal,
             ),
           ),
@@ -4282,22 +4303,22 @@ class _StageChip extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(8),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
           decoration: BoxDecoration(
-            color: const Color(0xFF2B0307),
+            color: AppColors.surface,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFF51080D)),
+            border: Border.all(color: AppColors.border),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 12, color: const Color(0xFFFF707C)),
+              Icon(icon, size: 16, color: AppColors.accent),
               const SizedBox(width: 4),
               Text(
                 label,
                 style: const TextStyle(
-                  color: Color(0xFFF0E6E7),
-                  fontSize: 9,
+                  color: AppColors.text,
+                  fontSize: 11,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -4321,13 +4342,13 @@ class _QuickCommandCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         child: Container(
-          padding: const EdgeInsets.all(8),
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: const Color(0xFF2B0307),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFF51080D)),
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.border),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -4336,8 +4357,8 @@ class _QuickCommandCard extends StatelessWidget {
               Text(
                 command,
                 style: const TextStyle(
-                  color: Color(0xFFFF707C),
-                  fontSize: 10,
+                  color: AppColors.accent,
+                  fontSize: 12,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -4345,8 +4366,8 @@ class _QuickCommandCard extends StatelessWidget {
               Text(
                 description,
                 style: const TextStyle(
-                  color: Color(0xFFA89698),
-                  fontSize: 9,
+                  color: AppColors.muted,
+                  fontSize: 11,
                 ),
                 overflow: TextOverflow.ellipsis,
               ),
@@ -4370,11 +4391,11 @@ class _TelemetryBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFF2B0307),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF51080D)),
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -4383,7 +4404,7 @@ class _TelemetryBox extends StatelessWidget {
               title,
               style: TextStyle(
                 color: titleColor,
-                fontSize: 10,
+                fontSize: 12,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -4391,8 +4412,8 @@ class _TelemetryBox extends StatelessWidget {
             Text(
               body,
               style: const TextStyle(
-                color: Color(0xFFF0E6E7),
-                fontSize: 11,
+                color: AppColors.text,
+                fontSize: 13,
               ),
             ),
           ],
@@ -4418,15 +4439,15 @@ class _SecurityRow extends StatelessWidget {
           Text(
             label,
             style: const TextStyle(
-              color: Color(0xFFA89698),
-              fontSize: 10,
+              color: AppColors.muted,
+              fontSize: 12,
             ),
           ),
           Text(
             value,
             style: TextStyle(
               color: valueColor,
-              fontSize: 10,
+              fontSize: 12,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -4450,9 +4471,9 @@ class _HelpSyntaxItem extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: const Color(0xFF2B0307),
+          color: AppColors.surface,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFF51080D)),
+          border: Border.all(color: AppColors.border),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -4461,9 +4482,9 @@ class _HelpSyntaxItem extends StatelessWidget {
               cmd,
               style: TextStyle(
                 color: highlight
-                    ? const Color(0xFFFF707C)
-                    : const Color(0xFFF0E6E7),
-                fontSize: 11,
+                    ? AppColors.accent
+                    : AppColors.text,
+                fontSize: 13,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -4471,8 +4492,8 @@ class _HelpSyntaxItem extends StatelessWidget {
             Text(
               desc,
               style: const TextStyle(
-                color: Color(0xFFA89698),
-                fontSize: 10,
+                color: AppColors.muted,
+                fontSize: 12,
               ),
             ),
           ],
@@ -4499,9 +4520,9 @@ class CorePainter extends CustomPainter {
 
   static const _hotspotGradient = RadialGradient(
     colors: [
-      Color(0xFFF0E6E7),
-      Color(0xFFFF707C),
-      Color(0xFF75020F),
+      AppColors.text,
+      AppColors.accent,
+      AppColors.accent,
       Color(0x0075020F),
     ],
     stops: [0.0, 0.28, 0.70, 1.0],
@@ -4512,14 +4533,14 @@ class CorePainter extends CustomPainter {
     ..style = PaintingStyle.stroke
     ..strokeWidth = 1.8;
 
-  static final _nodePaint = Paint()..color = const Color(0xFFFF707C);
+  static final _nodePaint = Paint()..color = AppColors.accent;
 
   static final _ring2Paint = Paint()
     ..color = const Color(0x8051080D)
     ..style = PaintingStyle.stroke
     ..strokeWidth = 1.3;
 
-  static final _majorTickPaint = Paint()..color = const Color(0xFF75020F);
+  static final _majorTickPaint = Paint()..color = AppColors.accent;
   static final _minorTickPaint = Paint()..color = const Color(0x5951080D);
 
   static final _hexPaint = Paint()
@@ -4648,9 +4669,9 @@ class _CircularTelemetryGauge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFF2B0307),
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF51080D)),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -4664,7 +4685,7 @@ class _CircularTelemetryGauge extends StatelessWidget {
                 const CircularProgressIndicator(
                   value: 1.0,
                   strokeWidth: 4.5,
-                  color: Color(0xFF51080D),
+                  color: AppColors.border,
                 ),
                 CircularProgressIndicator(
                   value: percentage.clamp(0.0, 1.0),
@@ -4676,7 +4697,7 @@ class _CircularTelemetryGauge extends StatelessWidget {
                   value,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 10.5,
+                    fontSize: 12,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -4687,8 +4708,8 @@ class _CircularTelemetryGauge extends StatelessWidget {
           Text(
             label,
             style: const TextStyle(
-              color: Color(0xFFA89698),
-              fontSize: 8.5,
+              color: AppColors.muted,
+              fontSize: 11,
               fontWeight: FontWeight.bold,
               letterSpacing: 0.5,
             ),
@@ -4697,7 +4718,7 @@ class _CircularTelemetryGauge extends StatelessWidget {
             subLabel,
             style: TextStyle(
               color: color,
-              fontSize: 8,
+              fontSize: 11,
               fontWeight: FontWeight.w600,
             ),
             maxLines: 1,

@@ -1,7 +1,7 @@
 name: ultron_mobile
 description: U.L.T.R.O.N. Mobile autonomous Android assistant
 publish_to: none
-version: 1.3.0+15
+version: 1.3.1+16
 environment:
   sdk: '>=3.3.0 <4.0.0'
 dependencies:
@@ -16,6 +16,7 @@ dependencies:
   package_info_plus: ^8.3.0
   open_filex: ^4.7.0
   crypto: ^3.0.6
+  audioplayers: ^6.8.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

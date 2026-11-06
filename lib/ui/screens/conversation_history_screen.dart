@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../models/chat_message.dart';
 import '../../services/conversation_history.dart';
+import '../theme.dart';
 
 class ConversationHistoryScreen extends StatefulWidget {
   const ConversationHistoryScreen({super.key});
@@ -13,9 +14,6 @@ class ConversationHistoryScreen extends StatefulWidget {
 }
 
 class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
-  static const _crimson = Color(0xFF75020F);
-  static const _rose = Color(0xFFFF707C);
-  static const _border = Color(0xFF51080D);
 
   late Future<List<ChatMessage>> _messages;
 
@@ -34,22 +32,22 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2B0307),
+        backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
-          side: const BorderSide(color: _border),
+          side: const BorderSide(color: AppColors.border),
         ),
         title: const Text(
           'LIMPAR HISTÓRICO LOCAL?',
           style: TextStyle(
-            color: _crimson,
-            fontSize: 13,
+            color: AppColors.accent,
+            fontSize: 15,
             fontWeight: FontWeight.bold,
           ),
         ),
         content: const Text(
           'Todas as conversas salvas neste aparelho serão apagadas permanentemente.',
-          style: TextStyle(color: Color(0xFFF0E6E7), fontSize: 11),
+          style: TextStyle(color: AppColors.text, fontSize: 13),
         ),
         actions: [
           TextButton(
@@ -60,7 +58,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
             onPressed: () => Navigator.pop(context, true),
             child: const Text(
               'APAGAR',
-              style: TextStyle(color: _crimson, fontWeight: FontWeight.bold),
+              style: TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold),
             ),
           ),
         ],
@@ -74,7 +72,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        backgroundColor: const Color(0xFF19171B),
+        backgroundColor: AppColors.background,
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -84,7 +82,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                 Container(
                   padding: const EdgeInsets.only(bottom: 10),
                   decoration: const BoxDecoration(
-                    border: Border(bottom: BorderSide(color: _border)),
+                    border: Border(bottom: BorderSide(color: AppColors.border)),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -93,13 +91,13 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                         onTap: () => Navigator.of(context).pop(),
                         child: const Row(
                           children: [
-                            Icon(Icons.arrow_back, size: 15, color: _crimson),
+                            Icon(Icons.arrow_back, size: 15, color: AppColors.accent),
                             SizedBox(width: 4),
                             Text(
                               'VOLTAR',
                               style: TextStyle(
-                                color: _crimson,
-                                fontSize: 12,
+                                color: AppColors.accent,
+                                fontSize: 14,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -114,7 +112,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                             'HISTÓRICO DE SESSÕES',
                             style: TextStyle(
                               color: Colors.white,
-                              fontSize: 12,
+                              fontSize: 14,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -131,8 +129,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                     child: Text(
                       'Armazenamento local isolado (SQLite sem backup em nuvem).',
                       style: TextStyle(
-                        color: Color(0xFF635355),
-                        fontSize: 10,
+                        color: AppColors.subtle,
+                        fontSize: 12,
                       ),
                     ),
                   ),
@@ -144,7 +142,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const Center(
-                          child: CircularProgressIndicator(color: _crimson),
+                          child: CircularProgressIndicator(color: AppColors.accent),
                         );
                       }
                       if (snapshot.hasError) {
@@ -152,8 +150,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                           child: Text(
                             'Não foi possível carregar: ${snapshot.error}',
                             style: const TextStyle(
-                              color: _rose,
-                              fontSize: 11,
+                              color: AppColors.accent,
+                              fontSize: 13,
                             ),
                           ),
                         );
@@ -164,15 +162,15 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                           child: Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF19171B),
+                              color: AppColors.background,
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: _border),
+                              border: Border.all(color: AppColors.border),
                             ),
                             child: const Text(
                               'Nenhuma mensagem salva ainda.',
                               style: TextStyle(
-                                color: Color(0xFFA89698),
-                                fontSize: 11,
+                                color: AppColors.muted,
+                                fontSize: 13,
                               ),
                             ),
                           ),
@@ -198,7 +196,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                                 const SnackBar(
                                   content: Text(
                                     'Mensagem copiada para a área de transferência.',
-                                    style: TextStyle(fontSize: 11),
+                                    style: TextStyle(fontSize: 13),
                                   ),
                                   duration: Duration(seconds: 2),
                                 ),
@@ -209,13 +207,13 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
                                 color: isUser
-                                    ? const Color(0xFF2B0307)
-                                    : const Color(0xFF19171B),
+                                    ? AppColors.surface
+                                    : AppColors.background,
                                 borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
                                   color: isUser
-                                      ? _crimson.withValues(alpha: 0.4)
-                                      : _border,
+                                      ? AppColors.crimson.withValues(alpha: 0.4)
+                                      : AppColors.border,
                                 ),
                               ),
                               child: Column(
@@ -228,16 +226,16 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                                       Text(
                                         isUser ? 'OPERADOR' : 'U.L.T.R.O.N.',
                                         style: TextStyle(
-                                          color: isUser ? _rose : _crimson,
-                                          fontSize: 10,
+                                          color: isUser ? AppColors.accent : AppColors.accent,
+                                          fontSize: 12,
                                           fontWeight: FontWeight.bold,
                                         ),
                                       ),
                                       Text(
                                         timestamp,
                                         style: const TextStyle(
-                                          color: Color(0xFF635355),
-                                          fontSize: 9,
+                                          color: AppColors.subtle,
+                                          fontSize: 11,
                                         ),
                                       ),
                                     ],
@@ -246,8 +244,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                                   Text(
                                     message.content,
                                     style: const TextStyle(
-                                      color: Color(0xFFF0E6E7),
-                                      fontSize: 11,
+                                      color: AppColors.text,
+                                      fontSize: 13,
                                       height: 1.4,
                                     ),
                                   ),
@@ -258,8 +256,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                                       Text(
                                         'Isolado Localmente',
                                         style: TextStyle(
-                                          color: Color(0xFFFF707C),
-                                          fontSize: 9,
+                                          color: AppColors.accent,
+                                          fontSize: 11,
                                         ),
                                       ),
                                     ],
@@ -280,8 +278,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                   child: OutlinedButton.icon(
                     onPressed: _clear,
                     style: OutlinedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2B0307),
-                      foregroundColor: const Color(0xFFFF707C),
+                      backgroundColor: AppColors.surface,
+                      foregroundColor: AppColors.accent,
                       side: const BorderSide(color: Color(0x6651080D)),
                       padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: RoundedRectangleBorder(
@@ -292,7 +290,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                     label: const Text(
                       'LIMPAR HISTÓRICO LOCAL',
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: 13,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -304,9 +302,9 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                   child: OutlinedButton(
                     onPressed: () => Navigator.of(context).pop(),
                     style: OutlinedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2B0307),
-                      foregroundColor: const Color(0xFFF0E6E7),
-                      side: const BorderSide(color: _border),
+                      backgroundColor: AppColors.surface,
+                      foregroundColor: AppColors.text,
+                      side: const BorderSide(color: AppColors.border),
                       padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -315,7 +313,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                     child: const Text(
                       'RETORNAR',
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: 13,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
