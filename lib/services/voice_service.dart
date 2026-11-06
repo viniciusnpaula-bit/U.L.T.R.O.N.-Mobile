@@ -206,25 +206,21 @@ class VoiceService {
     await _tts.stop();
     await _fishAudio.stop();
     await _notifyNativeSpeaking(true);
-    var tryFishAudio = true;
     try {
-      for (final chunk in chunks) {
-        if (generation != _generation) break;
-        if (tryFishAudio) {
-          try {
-            final usedFishAudio = await _fishAudio.speakIfEnabled(chunk);
-            if (usedFishAudio) {
-              lastFishAudioError = null;
-              continue;
-            }
-            tryFishAudio = false;
-          } catch (error) {
-            lastFishAudioError = error.toString();
-            tryFishAudio = false;
-          }
+      var useLocalTts = true;
+      try {
+        final usedFishAudio =
+            await _fishAudio.speakIfEnabled(chunks.join(' '));
+        useLocalTts = !usedFishAudio;
+        lastFishAudioError = null;
+      } catch (error) {
+        lastFishAudioError = error.toString();
+      }
+      if (useLocalTts) {
+        for (final chunk in chunks) {
+          if (generation != _generation) break;
+          await _tts.speak(chunk);
         }
-        if (generation != _generation) break;
-        await _tts.speak(chunk);
       }
     } finally {
       if (generation == _generation) {
