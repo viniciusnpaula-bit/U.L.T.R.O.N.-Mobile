@@ -232,7 +232,7 @@ class WakeWordDiagnostics {
         'Microfone: ${micPermission ? "permitido" : "NEGADO"} · Reconhecedor de comando: ${recognitionAvailable ? "disponível" : "INDISPONÍVEL"}',
         'Bateria: ${ignoringBatteryOptimizations ? "isento" : "sujeito a economia"} · Boot: ${bootAutostart ? "opt-in" : "off"}',
         'Ativações KWS: $detections · Última palavra: ${lastPhrase.isEmpty ? "nenhuma" : lastPhrase}',
-        'Falhas KWS: $kwsErrors · Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
+        'Falhas KWS/captura: $kwsErrors · Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
         'Falsos acionamentos: não mensuráveis automaticamente.',
         'Último gatilho: $lastTrigger',
         'Último erro: $lastError',
