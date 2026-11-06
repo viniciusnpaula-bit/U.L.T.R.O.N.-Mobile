@@ -4,7 +4,8 @@ O sentinela de wake word usa o sherpa-onnx Zipformer KWS no Android. A detecçã
 
 ## Modelo e palavra de ativação
 
-- Runtime Kotlin/Android: sherpa-onnx v1.13.8 (com.github.k2-fsa:sherpa-onnx via JitPack).
+- Runtime Kotlin/Android: sherpa-onnx v1.13.8 (com.github.k2-fsa:sherpa-onnx via JitPack), projeto sob Apache-2.0.
+- Licença do modelo: a documentação oficial do KWS não apresenta uma licença explícita para o pacote GigaSpeech. Não inferir a licença do modelo a partir da licença do runtime; confirmar os termos específicos antes de distribuir publicamente ou usar comercialmente.
 - Modelo: sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01-mobile, publicado no release oficial kws-models do projeto sherpa-onnx.
 - Entrada: PCM16 mono, 16 kHz.
 - Palavra: ULTRON, convertida para tokens SentencePiece BPE durante a preparação dos assets.
