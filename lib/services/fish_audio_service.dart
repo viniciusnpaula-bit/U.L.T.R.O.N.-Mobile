@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -125,7 +126,7 @@ class FishAudioService {
         'A reprodução do Fish Audio excedeu o tempo limite.',
       ),
     );
-    await _player.play(BytesSource(bytes));
+    await _player.play(BytesSource(Uint8List.fromList(bytes), mimeType: 'audio/mpeg'));
     await completed;
   }
 
