@@ -359,7 +359,37 @@ class UltronAudioService : Service() {
         stopSelf()
     }
 
+    /**
+     * O JNI do sherpa-onnx lê os backing fields da data class por nome exato.
+     * Esta validação produz um erro claro antes de entrar no código nativo.
+     */
+    private fun validateSherpaJniConfigFields() {
+        val requiredFields = listOf(
+            "maxActivePaths",
+            "keywordsFile",
+            "keywordsScore",
+            "keywordsThreshold",
+            "numTrailingBlanks",
+            "featConfig",
+            "modelConfig"
+        )
+        val configClass = KeywordSpotterConfig::class.java
+        requiredFields.forEach { fieldName ->
+            try {
+                configClass.getDeclaredField(fieldName)
+            } catch (e: NoSuchFieldException) {
+                throw IllegalStateException(
+                    "API Kotlin/JNI sherpa-onnx incompatível: campo '$fieldName' ausente " +
+                        "em ${configClass.name}. Verifique se classes Kotlin e libsherpa-onnx-jni.so " +
+                        "vieram do mesmo AAR.",
+                    e
+                )
+            }
+        }
+    }
+
     private fun createKeywordSpotter(): KeywordSpotter {
+        validateSherpaJniConfigFields()
         val modelConfig = OnlineModelConfig(
             transducer = OnlineTransducerModelConfig(
                 encoder = "$MODEL_DIR/encoder-epoch-12-avg-2-chunk-16-left-64.onnx",

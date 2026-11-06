@@ -52,6 +52,11 @@ android {
 
     buildTypes {
         release {
+            // sherpa-onnx reads Kotlin config fields directly through JNI.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             signingConfig = if (keystorePropertiesFile.exists()) {
                 signingConfigs.getByName("release")
             } else {

@@ -15,12 +15,35 @@ AAR_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$AAR_NA
 command -v curl >/dev/null
 command -v tar >/dev/null
 
-# Download the official Android AAR (Kotlin API + Android JNI binaries).
+# Always refresh the official AAR so Kotlin API classes and JNI binaries
+# cannot come from different cached/local versions.
 mkdir -p "$(dirname "$AAR_PATH")"
-if [[ ! -s "$AAR_PATH" ]]; then
-  curl --fail --location --retry 3 --retry-delay 2 "$AAR_URL" --output "$AAR_PATH"
-fi
-python3 -m zipfile -t "$AAR_PATH" >/dev/null
+AAR_TMP="$(mktemp)"
+trap 'rm -f "$AAR_TMP"' EXIT
+curl --fail --location --retry 3 --retry-delay 2 "$AAR_URL" --output "$AAR_TMP"
+python3 -m zipfile -t "$AAR_TMP" >/dev/null
+
+# Fail early if the downloaded AAR does not contain the expected Kotlin API
+# class and native JNI library for Android ARM devices.
+python3 - "$AAR_TMP" <<'PY'
+import sys
+import zipfile
+aar = zipfile.ZipFile(sys.argv[1])
+names = set(aar.namelist())
+required = {
+    "classes.jar",
+    "jni/arm64-v8a/libsherpa-onnx-jni.so",
+    "jni/armeabi-v7a/libsherpa-onnx-jni.so",
+}
+missing = sorted(required - names)
+if missing:
+    raise SystemExit("AAR sherpa-onnx incompleto; faltando: " + ", ".join(missing))
+classes = zipfile.ZipFile(__import__("io").BytesIO(aar.read("classes.jar")))
+class_name = "com/k2fsa/sherpa/onnx/KeywordSpotterConfig.class"
+if class_name not in classes.namelist():
+    raise SystemExit("AAR não contém KeywordSpotterConfig.class")
+PY
+mv "$AAR_TMP" "$AAR_PATH"
 
 required_files=(
   "encoder-epoch-12-avg-2-chunk-16-left-64.onnx"
