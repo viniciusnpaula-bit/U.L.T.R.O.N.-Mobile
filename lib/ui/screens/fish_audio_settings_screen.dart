@@ -212,7 +212,7 @@ class _FishAudioSettingsScreenState extends State<FishAudioSettingsScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: _model,
+                    initialValue: _model,
                     dropdownColor: _surface,
                     style: const TextStyle(color: Colors.white, fontSize: 12),
                     decoration: _decoration('Modelo de síntese'),
