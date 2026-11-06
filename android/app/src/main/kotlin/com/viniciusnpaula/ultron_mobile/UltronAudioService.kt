@@ -479,7 +479,6 @@ class UltronAudioService : Service() {
                 if (hasNonZeroSample) {
                     silentFrames = 0
                     captureHealthy = true
-                    consecutiveFailures = 0
                 } else {
                     captureHealthy = false
                     if (++silentFrames >= SILENT_FRAMES_BEFORE_RESTART) {
@@ -502,6 +501,8 @@ class UltronAudioService : Service() {
                         break
                     }
                 }
+                // Só zera o backoff depois de uma iteração completa do pipeline KWS.
+                consecutiveFailures = 0
 
                 if (detectedKeyword.isNotBlank()) {
                     // O microfone KWS é liberado antes do reconhecimento do comando no fluxo Flutter.
