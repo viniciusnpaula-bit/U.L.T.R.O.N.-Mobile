@@ -9,33 +9,11 @@ MODEL_DIR="$ASSETS_DIR/$MODEL_NAME"
 ARCHIVE_NAME="$MODEL_NAME.tar.bz2"
 MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/$ARCHIVE_NAME"
 
-# The Flutter-generated settings file is not committed by this project. Add
-# JitPack there (not in app/build.gradle, because Flutter may enforce settings repos).
-SETTINGS_FILE="$ANDROID_DIR/settings.gradle"
-if [[ ! -f "$SETTINGS_FILE" ]]; then
-  SETTINGS_FILE="$ANDROID_DIR/settings.gradle.kts"
-fi
-if [[ ! -f "$SETTINGS_FILE" ]]; then
-  echo "ERRO: android/settings.gradle não existe. Execute flutter create --platforms=android antes deste script." >&2
+# JitPack is declared in the Android app module build script. This is compatible
+# with the current Flutter-generated settings.gradle.kts template.
+if ! grep -q "jitpack.io" "$ANDROID_DIR/app/build.gradle.kts"; then
+  echo "ERRO: repositório JitPack ausente em android/app/build.gradle.kts" >&2
   exit 1
-fi
-if ! grep -q "jitpack.io" "$SETTINGS_FILE"; then
-  python3 - "$SETTINGS_FILE" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-text = path.read_text()
-marker = "dependencyResolutionManagement"
-pos = text.find(marker)
-if pos < 0:
-    raise SystemExit("Não foi encontrado dependencyResolutionManagement em android/settings.gradle")
-repo = text.find("repositories", pos)
-brace = text.find("{", repo)
-if repo < 0 or brace < 0:
-    raise SystemExit("Bloco repositories do dependencyResolutionManagement não encontrado")
-text = text[:brace + 1] + '\n        maven { url "https://jitpack.io" }' + text[brace + 1:]
-path.write_text(text)
-PY
 fi
 
 required_files=(
