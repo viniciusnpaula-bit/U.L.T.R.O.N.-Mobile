@@ -30,24 +30,14 @@ import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.sqrt
 
 /**
- * UltronAudioService (Wake Word Reliability v1.2.1):
- * 1. Escuta CONTÍNUA e leve: AudioRecord (8 kHz) lido em frames de 100 ms, sem janelas cegas.
- *    Limiar de voz ADAPTATIVO (piso de ruído x margem) no lugar do RMS fixo.
- * 2. Ao detectar voz, libera o AudioRecord (o microfone é exclusivo) e abre o
- *    SpeechRecognizer; ao terminar, reabre a captura. Backoff exponencial para falsos
- *    gatilhos repetidos, mantendo o consumo de bateria sob controle.
- * 3. Half-Duplex Anti-Eco preservado: nunca escuta enquanto o Ultron fala.
- * 4. Watchdog: qualquer falha do AudioRecord/SpeechRecognizer religa a captura com
- *    backoff exponencial (1s até 30s), detecta microfone silenciado pelo sistema e
- *    registra tudo em [diagnostics].
- * 5. Ativação com app em segundo plano/tela bloqueada via notificação full-screen; o
- *    evento fica pendente em [MainActivity] até o Flutter consumi-lo.
+ * Sentinela de wake word com sherpa-onnx Zipformer KWS.
+ * O modelo roda localmente/offline e recebe PCM16 mono a 16 kHz em frames de 100 ms.
+ * O AudioRecord só é liberado para o reconhecimento de comando depois da detecção KWS.
+ * Half-duplex anti-eco, serviço em primeiro plano, watchdog, backoff e notificação
+ * de falha são mantidos. Energia de áudio nunca é usada como gatilho de ativação.
  */
 class UltronAudioService : Service() {
 
@@ -488,14 +478,17 @@ class UltronAudioService : Service() {
                 }
                 if (hasNonZeroSample) {
                     silentFrames = 0
-                } else if (++silentFrames >= SILENT_FRAMES_BEFORE_RESTART) {
-                    Stats.micSilencedEvents++
-                    throw IllegalStateException("Microfone sem amostras não nulas por 30 s")
+                    captureHealthy = true
+                    consecutiveFailures = 0
+                } else {
+                    captureHealthy = false
+                    if (++silentFrames >= SILENT_FRAMES_BEFORE_RESTART) {
+                        Stats.micSilencedEvents++
+                        throw IllegalStateException("Microfone sem amostras não nulas por 30 s")
+                    }
                 }
 
-                // Leitura real confirmada. O nível de volume não participa da detecção.
-                captureHealthy = true
-                consecutiveFailures = 0
+                // O nível de volume não participa da detecção: somente o decoder KWS decide.
                 val samples = if (readCount == windowSamples) floatBuffer else floatBuffer.copyOf(readCount)
                 stream.acceptWaveform(samples, sampleRate = SAMPLE_RATE_HZ)
 
@@ -516,6 +509,8 @@ class UltronAudioService : Service() {
                     recorder = null
                     captureHealthy = false
                     Stats.detections++
+                    Stats.voiceTriggers++
+                    lastTriggerTimestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                     Stats.lastPhrase = detectedKeyword
                     wakeHandoffUntilMs = System.currentTimeMillis() + WAKE_HANDOFF_GUARD_MS
                     updateNotification("Palavra \"Ultron\" detectada — aguardando comando")
