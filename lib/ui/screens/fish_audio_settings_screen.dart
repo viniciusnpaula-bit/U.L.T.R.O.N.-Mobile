@@ -73,7 +73,7 @@ class _FishAudioSettingsScreenState extends State<FishAudioSettingsScreen> {
     setState(() => _saving = true);
     try {
       await _service.saveSettings(_settings);
-      if (!mounted) return;
+      if (!mounted) return false;
       if (!quiet) _message('Configurações do Fish Audio salvas com segurança.');
       return true;
     } catch (error) {
