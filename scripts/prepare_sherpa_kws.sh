@@ -45,7 +45,7 @@ curl --fail --location --retry 3 --retry-delay 2 "$MODEL_URL" --output "$TMP_DIR
 tar -xjf "$TMP_DIR/$ARCHIVE_NAME" -C "$TMP_DIR"
 SOURCE_DIR="$TMP_DIR/$MODEL_NAME"
 if [[ ! -d "$SOURCE_DIR" ]]; then
-  SOURCE_DIR="$(find "$TMP_DIR" -type f -name "tokens.txt" -printf '%h\\n' | head -1)"
+  SOURCE_DIR="$(find "$TMP_DIR" -type f -name "tokens.txt" -printf '%h\n' | head -1)"
 fi
 if [[ -z "$SOURCE_DIR" || ! -d "$SOURCE_DIR" ]]; then
   echo "ERRO: diretório do modelo não encontrado no pacote KWS." >&2
