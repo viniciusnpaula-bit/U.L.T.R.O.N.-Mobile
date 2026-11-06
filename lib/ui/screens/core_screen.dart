@@ -571,7 +571,7 @@ class _CoreScreenState extends State<CoreScreen>
     deviceService.setNativeEventHandlers(onFlip: null, onWakeWord: null);
     ticker.dispose();
     coreTime.dispose();
-    voiceService.stop();
+    voiceService.dispose();
     commandController.dispose();
     quickNoteController.dispose();
     duressPinController.dispose();
