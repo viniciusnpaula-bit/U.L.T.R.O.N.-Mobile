@@ -130,7 +130,7 @@ class CapturedNotification {
       );
 }
 
-/// Diagnóstico do sentinela de wake word (v1.2.1), vindo do serviço nativo.
+/// Diagnóstico do sentinela sherpa-onnx KWS, vindo do serviço nativo.
 class WakeWordDiagnostics {
   const WakeWordDiagnostics({
     this.running = false,
@@ -199,7 +199,7 @@ class WakeWordDiagnostics {
   final bool paused;
   /// Motor de detecção realmente em uso.
   final String engine;
-  /// false enquanto não houver motor de keyword spotting dedicado (Porcupine, Vosk etc.).
+  /// true somente quando o motor sherpa-onnx dedicado estiver realmente carregado.
   final bool dedicatedKws;
   final bool modelLoaded;
   final int sdk;
