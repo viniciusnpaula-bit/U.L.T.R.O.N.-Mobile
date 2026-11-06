@@ -4,7 +4,7 @@ O sentinela de wake word usa o sherpa-onnx Zipformer KWS no Android. A detecçã
 
 ## Modelo e palavra de ativação
 
-- Runtime Kotlin/Android: sherpa-onnx v1.13.8 (com.github.k2-fsa:sherpa-onnx via JitPack), projeto sob Apache-2.0.
+- Runtime Kotlin/Android: sherpa-onnx v1.13.8, AAR oficial do release Android (Kotlin API + JNI), projeto sob Apache-2.0.
 - Licença do modelo: a documentação oficial do KWS não apresenta uma licença explícita para o pacote GigaSpeech. Não inferir a licença do modelo a partir da licença do runtime; confirmar os termos específicos antes de distribuir publicamente ou usar comercialmente.
 - Modelo: sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01, publicado no release oficial kws-models do projeto sherpa-onnx.
 - Entrada: PCM16 mono, 16 kHz.
@@ -19,7 +19,7 @@ Após gerar/recuperar a plataforma Android com Flutter, execute:
 
     bash scripts/prepare_sherpa_kws.sh
 
-O script adiciona JitPack ao bloco de repositórios do android/settings.gradle, baixa o pacote oficial do modelo, mantém apenas encoder/decoder/joiner/tokens/BPE, gera keywords.txt para ULTRON e coloca os assets no diretório Android que será empacotado no APK.
+O script baixa o AAR oficial do runtime e o pacote oficial do modelo, valida o AAR, mantém apenas encoder/decoder/joiner/tokens/BPE, gera keywords.txt para ULTRON e coloca os arquivos nos diretórios Android que serão empacotados no APK.
 
 O modelo é gerado no build e ignorado pelo Git para evitar armazenar binários pesados no repositório. Os workflows CI e Android Release executam essa preparação antes da compilação.
 
