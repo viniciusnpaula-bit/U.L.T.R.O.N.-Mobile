@@ -5,6 +5,7 @@ import 'core/security/pin_vault.dart';
 import 'ui/screens/ai_settings_screen.dart';
 import 'ui/screens/auth_screen.dart';
 import 'ui/screens/core_screen.dart';
+import 'ui/theme/ultron_colors.dart';
 
 void main() => runApp(UltronApp(gate: AuthGate(), vault: PinVault()));
 
@@ -21,21 +22,21 @@ class UltronApp extends StatelessWidget {
         theme: ThemeData(
           brightness: Brightness.dark,
           fontFamily: 'monospace',
-          scaffoldBackgroundColor: const Color(0xFF19171B),
+          scaffoldBackgroundColor: UltronColors.background,
           colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF75020F),
-            primary: const Color(0xFF75020F),
-            secondary: const Color(0xFFFF707C),
-            surface: const Color(0xFF2B0307),
+            seedColor: UltronColors.redAlert,
+            primary: UltronColors.redAlert,
+            secondary: UltronColors.electricBlue,
+            surface: UltronColors.surface,
             brightness: Brightness.dark,
           ),
           appBarTheme: const AppBarTheme(
-            backgroundColor: Color(0xFF19171B),
-            foregroundColor: Color(0xFFF0E6E7),
+            backgroundColor: UltronColors.black,
+            foregroundColor: UltronColors.textPrimary,
             elevation: 0,
             centerTitle: false,
           ),
-          dividerColor: const Color(0xFF51080D),
+          dividerColor: UltronColors.border,
           useMaterial3: true,
         ),
         home: AnimatedBuilder(
