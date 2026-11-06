@@ -36,6 +36,8 @@ jobs:
         run: bash scripts/prepare_sherpa_kws.sh
       - name: Install dependencies
         run: flutter pub get
+      - name: Format Dart sources
+        run: dart format lib test
       - name: Analyze
         run: flutter analyze
       - name: Test
