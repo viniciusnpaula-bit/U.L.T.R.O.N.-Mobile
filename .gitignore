@@ -10,3 +10,6 @@ build/
 
 # Downloaded during build; sherpa-onnx KWS model is packaged into the APK.
 /android/app/src/main/assets/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/
+
+# Official sherpa-onnx Android runtime AAR downloaded during build.
+/android/app/libs/sherpa-onnx-1.13.8.aar
