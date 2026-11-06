@@ -122,7 +122,9 @@ class AppUpdateService {
       }
       final expected = update.checksumSha256;
       if (expected != null) {
-        if (!RegExp(r'^[a-f0-9]{64}
+        if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(expected)) {
+          throw const FormatException('SHA-256 publicado inválido.');
+        }
         final actual = sha256.convert(await file.readAsBytes()).toString();
         if (actual != expected) {
           await file.delete();
@@ -133,28 +135,6 @@ class AppUpdateService {
       if (result.type != ResultType.done) {
         throw Exception(result.message);
       }
-    } finally {
-      await sink?.close();
-      client.close(force: true);
-    }
-  }
-
-  Future<String> currentVersion() async {
-    final info = await PackageInfo.fromPlatform();
-    return info.version;
-  }
-}
-).hasMatch(expected)) {
-          throw const FormatException('SHA-256 publicado inválido.');
-        }
-        final actual = sha256.convert(await file.readAsBytes()).toString();
-        if (actual != expected) {
-          await file.delete();
-          throw const FormatException('Integridade do APK não confere (SHA-256). Download cancelado.');
-        }
-      }
-      final result = await OpenFilex.open(file.path, type: 'application/vnd.android.package-archive');
-      if (result.type != ResultType.done) throw Exception(result.message);
     } finally {
       await sink?.close();
       client.close(force: true);
