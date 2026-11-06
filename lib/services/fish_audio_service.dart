@@ -204,8 +204,14 @@ class FishAudioService {
 
   Future<void> stop() async {
     _generation++;
-    await _player.stop();
+    try {
+      await _player.stop();
+    } catch (_) {}
   }
 
-  Future<void> dispose() => _player.dispose();
+  Future<void> dispose() async {
+    try {
+      await _player.dispose();
+    } catch (_) {}
+  }
 }
