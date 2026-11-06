@@ -255,8 +255,7 @@ class UltronAudioService : Service() {
         return false
     }
 
-    /** Watchdog externo: religa a sessão de captura com backoff exponencial em qualquer falha. */
-    /** Watchdog: inicializa o modelo real e recupera falhas da captura com backoff. */
+    /** Inicializa o modelo real e recupera falhas de captura/decodificação com backoff. */
     private fun startEcoVadLoop() {
         if (!workerActive.compareAndSet(false, true)) return
         vadThread = Thread({
@@ -289,6 +288,7 @@ class UltronAudioService : Service() {
                     } catch (e: Exception) {
                         captureHealthy = false
                         Stats.lastError = "${e.javaClass.simpleName}: ${e.message}"
+                        Stats.kwsErrors++
                         Stats.captureRestarts++
                         if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                             giveUpAfterPersistentFailure()
