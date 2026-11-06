@@ -8,13 +8,16 @@ MODEL_NAME="sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
 MODEL_DIR="$ASSETS_DIR/$MODEL_NAME"
 ARCHIVE_NAME="$MODEL_NAME.tar.bz2"
 MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/$ARCHIVE_NAME"
+AAR_NAME="sherpa-onnx-1.13.8.aar"
+AAR_PATH="$ANDROID_DIR/app/libs/$AAR_NAME"
+AAR_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$AAR_NAME"
 
-# JitPack is declared in the Android app module build script. This is compatible
-# with the current Flutter-generated settings.gradle.kts template.
-if ! grep -q "jitpack.io" "$ANDROID_DIR/app/build.gradle.kts"; then
-  echo "ERRO: repositório JitPack ausente em android/app/build.gradle.kts" >&2
-  exit 1
+# Download the official Android AAR (Kotlin API + Android JNI binaries).
+mkdir -p "$(dirname "$AAR_PATH")"
+if [[ ! -s "$AAR_PATH" ]]; then
+  curl --fail --location --retry 3 --retry-delay 2 "$AAR_URL" --output "$AAR_PATH"
 fi
+python3 -m zipfile -t "$AAR_PATH" >/dev/null
 
 required_files=(
   "encoder-epoch-12-avg-2-chunk-16-left-64.onnx"
@@ -24,7 +27,7 @@ required_files=(
   "bpe.model"
   "keywords.txt"
 )
-if [[ -d "$MODEL_DIR" ]] && [[ "${#required_files[@]}" -gt 0 ]]; then
+if [[ -s "$AAR_PATH" && -d "$MODEL_DIR" ]] && [[ "${#required_files[@]}" -gt 0 ]]; then
   complete=true
   for file in "${required_files[@]}"; do
     [[ -s "$MODEL_DIR/$file" ]] || complete=false
