@@ -71,6 +71,10 @@ flutter {
     source = "../.."
 }
 
+repositories {
+    maven { url = uri("https://jitpack.io") }
+}
+
 dependencies {
     implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
