@@ -52,7 +52,7 @@ class UltronAudioService : Service() {
 
         const val ENGINE_DESCRIPTION = "sherpa-onnx Zipformer KWS (offline / CPU)"
         const val ENGINE_IS_DEDICATED_KWS = true
-        private const val MODEL_DIR = "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01-mobile"
+        private const val MODEL_DIR = "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
         const val EXTRA_WAKE_WORD = "ultron_wake_word_trigger"
 
         const val PREFS_NAME = "ultron_sentinel_prefs"
