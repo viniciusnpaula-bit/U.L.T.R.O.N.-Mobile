@@ -305,6 +305,9 @@ class UltronAudioService : Service() {
             } finally {
                 captureHealthy = false
                 releaseWakeLockSafely()
+                safely("KeywordSpotter.release") { keywordSpotter?.release() }
+                keywordSpotter = null
+                modelLoaded = false
                 isRunning = false
                 workerActive.set(false)
             }
@@ -709,9 +712,7 @@ class UltronAudioService : Service() {
         workerActive.set(false)
         isRunning = false
         vadThread?.interrupt()
-        modelLoaded = false
-        safely("KeywordSpotter.release") { keywordSpotter?.release() }
-        keywordSpotter = null
+        // O worker libera o KeywordSpotter no finally, depois de soltar o stream nativo.
         releaseWakeLockSafely()
         super.onDestroy()
     }
