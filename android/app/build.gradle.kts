@@ -45,6 +45,11 @@ android {
         }
     }
 
+    androidResources {
+        // ONNX files are loaded by the native sherpa-onnx runtime from APK assets.
+        noCompress += listOf("onnx", "model")
+    }
+
     buildTypes {
         release {
             signingConfig = if (keystorePropertiesFile.exists()) {
@@ -67,6 +72,7 @@ flutter {
 }
 
 dependencies {
+    implementation("com.github.k2-fsa:sherpa-onnx:v1.13.8")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     testImplementation("junit:junit:4.13.2")
 }
