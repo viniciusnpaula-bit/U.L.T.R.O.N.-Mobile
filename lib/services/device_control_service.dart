@@ -151,6 +151,8 @@ class WakeWordDiagnostics {
     this.recognizerMisses = 0,
     this.recognizerErrors = 0,
     this.kwsErrors = 0,
+    this.kwsFrames = 0,
+    this.kwsDecodes = 0,
     this.captureRestarts = 0,
     this.micSilencedEvents = 0,
     this.lastError = 'nenhum',
@@ -183,6 +185,8 @@ class WakeWordDiagnostics {
       recognizerMisses: i('recognizerMisses'),
       recognizerErrors: i('recognizerErrors'),
       kwsErrors: i('kwsErrors'),
+      kwsFrames: i('kwsFrames'),
+      kwsDecodes: i('kwsDecodes'),
       captureRestarts: i('captureRestarts'),
       micSilencedEvents: i('micSilencedEvents'),
       lastError: s('lastError', 'nenhum'),
@@ -214,6 +218,10 @@ class WakeWordDiagnostics {
   final int recognizerMisses;
   final int recognizerErrors;
   final int kwsErrors;
+  /// Janelas de áudio entregues ao decoder KWS.
+  final int kwsFrames;
+  /// Execuções de decode do KWS (prova que o pipeline nativo rodou).
+  final int kwsDecodes;
   final int captureRestarts;
   final int micSilencedEvents;
   final String lastError;
@@ -233,6 +241,7 @@ class WakeWordDiagnostics {
         'Bateria: ${ignoringBatteryOptimizations ? "isento" : "sujeito a economia"} · Boot: ${bootAutostart ? "opt-in" : "off"}',
         'Ativações KWS: $detections · Última palavra: ${lastPhrase.isEmpty ? "nenhuma" : lastPhrase}',
         'Falhas KWS/captura: $kwsErrors · Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
+        'Pipeline KWS: $kwsFrames janelas · $kwsDecodes decodes',
         'Falsos acionamentos: não mensuráveis automaticamente.',
         'Último gatilho: $lastTrigger',
         'Último erro: $lastError',

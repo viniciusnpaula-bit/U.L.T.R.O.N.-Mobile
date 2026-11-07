@@ -1,5 +1,7 @@
 # Auditoria do Wake Word — U.L.T.R.O.N. Mobile v1.2.1
 
+> Documento histórico da v1.2.1 (antes do sherpa-onnx). O motor atual é o Zipformer KWS offline descrito em `docs/SHERPA_KWS.md`; a evidência sobre o Vosk abaixo continua válida para justificar por que ele não foi usado.
+
 Estado: **motor de keyword spotting (KWS) dedicado = PENDENTE.** Nada neste repositório finge o contrário.
 
 ## 3. Auditoria do Motor de Detecção
