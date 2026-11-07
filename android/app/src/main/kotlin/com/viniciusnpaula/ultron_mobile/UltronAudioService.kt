@@ -107,6 +107,8 @@ class UltronAudioService : Service() {
             @Volatile var recognizerMisses = 0
             @Volatile var recognizerErrors = 0
             @Volatile var kwsErrors = 0
+            @Volatile var kwsFrames = 0
+            @Volatile var kwsDecodes = 0
             @Volatile var captureRestarts = 0
             @Volatile var micSilencedEvents = 0
             @Volatile var lastError = "nenhum"
@@ -147,6 +149,8 @@ class UltronAudioService : Service() {
                 "recognizerMisses" to Stats.recognizerMisses,
                 "recognizerErrors" to Stats.recognizerErrors,
                 "kwsErrors" to Stats.kwsErrors,
+                "kwsFrames" to Stats.kwsFrames,
+                "kwsDecodes" to Stats.kwsDecodes,
                 "captureRestarts" to Stats.captureRestarts,
                 "micSilencedEvents" to Stats.micSilencedEvents,
                 "lastError" to Stats.lastError,
@@ -526,10 +530,12 @@ class UltronAudioService : Service() {
                 // O nível de volume não participa da detecção: somente o decoder KWS decide.
                 val samples = if (readCount == windowSamples) floatBuffer else floatBuffer.copyOf(readCount)
                 stream.acceptWaveform(samples, sampleRate = SAMPLE_RATE_HZ)
+                Stats.kwsFrames++
 
                 var detectedKeyword = ""
                 while (spotter.isReady(stream)) {
                     spotter.decode(stream)
+                    Stats.kwsDecodes++
                     val result = spotter.getResult(stream)
                     if (result.keyword.isNotBlank()) {
                         spotter.reset(stream)

@@ -45,26 +45,59 @@ if class_name not in classes.namelist():
 PY
 mv "$AAR_TMP" "$AAR_PATH"
 
-required_files=(
+model_files=(
   "encoder-epoch-12-avg-2-chunk-16-left-64.onnx"
   "decoder-epoch-12-avg-2-chunk-16-left-64.onnx"
   "joiner-epoch-12-avg-2-chunk-16-left-64.onnx"
   "tokens.txt"
   "bpe.model"
-  "keywords.txt"
 )
-if [[ -s "$AAR_PATH" && -d "$MODEL_DIR" ]] && [[ "${#required_files[@]}" -gt 0 ]]; then
+
+# Palavras de ativação em pt-BR. Formato oficial: tokens BPE + ":boosting" + "#threshold".
+# "ULTRON" é a forma escrita; "UTRON" cobre a pronúncia brasileira /uˈtɾõ/, em que o L
+# antes de consoante é vocalizado. O boosting menor da variante reflete que ela ainda é
+# uma hipótese a validar em aparelho, não um resultado medido.
+# shortcut: tokens fixos para o modelo Gigaspeech fixado; ao trocar MODEL_NAME, regenere
+# com sentencepiece a partir de bpe.model e confirme que nenhum token vira <unk>.
+keywords=(
+  "▁ UL T RO N :1.5 #0.25"
+  "▁ U T RO N :1.0 #0.25"
+)
+
+write_keywords() {
+  printf '%s\n' "${keywords[@]}" > "$MODEL_DIR/keywords.txt"
+  python3 - "$MODEL_DIR" "${keywords[@]}" <<'PY'
+from pathlib import Path
+import sys
+
+model_dir = Path(sys.argv[1])
+vocab = {
+    line.split(maxsplit=1)[0]
+    for line in (model_dir / "tokens.txt").read_text(encoding="utf-8").splitlines()
+    if line
+}
+for line in sys.argv[2:]:
+    tokens = [item for item in line.split() if not item.startswith((":", "#"))]
+    invalid = [token for token in tokens if token not in vocab or token == "<unk>"]
+    if not tokens or invalid:
+        raise SystemExit(f"keywords.txt inválido ({line!r}): {invalid or 'vazio'}")
+print("Palavras de ativação:", " | ".join(" ".join(
+    item for item in line.split() if not item.startswith((":", "#")))
+    for line in sys.argv[2:]))
+PY
+}
+
+if [[ -s "$AAR_PATH" && -d "$MODEL_DIR" ]]; then
   complete=true
-  for file in "${required_files[@]}"; do
+  for file in "${model_files[@]}"; do
     [[ -s "$MODEL_DIR/$file" ]] || complete=false
   done
   if [[ "$complete" == true ]]; then
+    write_keywords
     echo "Modelo KWS sherpa-onnx já preparado em $MODEL_DIR"
     exit 0
   fi
 fi
-
-python3 -m pip install --quiet --disable-pip-version-check sentencepiece==0.2.0
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -81,7 +114,7 @@ if [[ -z "$SOURCE_DIR" || ! -d "$SOURCE_DIR" ]]; then
 fi
 
 mkdir -p "$MODEL_DIR"
-for file in "${required_files[@]:0:5}"; do
+for file in "${model_files[@]}"; do
   if [[ ! -s "$SOURCE_DIR/$file" ]]; then
     echo "ERRO: arquivo do modelo ausente: $file" >&2
     exit 1
@@ -89,20 +122,7 @@ for file in "${required_files[@]:0:5}"; do
   cp "$SOURCE_DIR/$file" "$MODEL_DIR/$file"
 done
 
-# sherpa-onnx uses SentencePiece BPE tokens for this English Zipformer KWS model.
-# The acoustic model is local; tokenization is performed only at build time.
-python3 - "$MODEL_DIR" <<'PY'
-from pathlib import Path
-import sentencepiece as spm
-import sys
-model_dir = Path(sys.argv[1])
-processor = spm.SentencePieceProcessor(model_file=str(model_dir / "bpe.model"))
-pieces = processor.encode("ULTRON", out_type=str)
-if not pieces:
-    raise SystemExit("Não foi possível tokenizar a palavra de ativação ULTRON")
-(model_dir / "keywords.txt").write_text(" ".join(pieces) + "\n", encoding="utf-8")
-print("Palavra de ativação tokenizada:", " ".join(pieces))
-PY
+write_keywords
 
 test -s "$MODEL_DIR/keywords.txt"
 echo "Modelo sherpa-onnx KWS preparado para uso offline em: $MODEL_DIR"

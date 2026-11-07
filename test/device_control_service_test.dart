@@ -110,6 +110,8 @@ void main() {
             'dedicatedKws': false,
             'modelLoaded': false,
             'kwsErrors': 2,
+            'kwsFrames': 11,
+            'kwsDecodes': 9,
             'detections': 3,
             'voiceTriggers': 7,
             'lastError': 'nenhum',
@@ -131,6 +133,9 @@ void main() {
     expect(diag.threshold, 992);
     expect(diag.toReport(), contains('Ativações KWS: 3'));
     expect(diag.kwsErrors, 2);
+    expect(diag.kwsFrames, 11);
+    expect(diag.kwsDecodes, 9);
+    expect(diag.toReport(), contains('Pipeline KWS: 11 janelas · 9 decodes'));
     expect(diag.toReport(), contains('FALHA: modelo sherpa-onnx não carregado'));
     // Sem modelo KWS carregado e sem captura confirmada: o relatório não pode fingir o contrário.
     expect(diag.dedicatedKws, isFalse);
