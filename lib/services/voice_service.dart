@@ -38,6 +38,12 @@ class TtsVoiceOption {
   final String quality;
 
   Map<String, String> toEngineMap() => {'name': name, 'locale': locale};
+
+  String get displayLabel {
+    final mode = offline ? 'Offline' : 'Rede';
+    final qual = quality.isEmpty ? 'padrão' : quality;
+    return '$name ($locale • $mode • $qual)';
+  }
 }
 
 class VoiceService {
@@ -60,6 +66,8 @@ class VoiceService {
   VoidCallback? onSpeakComplete;
   Future<void>? _initializing;
   bool _ready = false;
+  bool _profileExplicitlySet = false;
+  bool _voiceExplicitlySet = false;
   int _generation = 0;
 
   bool enabled = true;
@@ -68,13 +76,24 @@ class VoiceService {
   VoiceProfile profile = VoiceProfile.grave;
   String? activeVoiceName;
 
+  void _syncNativeTtsConfig() {
+    try {
+      unawaited(
+        _deviceChannel.invokeMethod<bool>('configureTts', {
+          'voiceName': activeVoiceName ?? '',
+          'pitch': profile.pitch,
+          'rate': whisperMode ? profile.rate * 0.85 : profile.rate,
+        }).then<void>((_) {}, onError: (_) {}),
+      );
+    } catch (_) {}
+  }
+
   void _notifyNativeSpeaking(bool speaking) {
     isSpeaking = speaking;
     try {
       unawaited(
-        _deviceChannel
-            .invokeMethod<bool>('setUltronSpeaking', {'speaking': speaking})
-            .then<void>((_) {}, onError: (_) {}),
+        _deviceChannel.invokeMethod<bool>('setUltronSpeaking',
+            {'speaking': speaking}).then<void>((_) {}, onError: (_) {}),
       );
     } catch (_) {}
   }
@@ -95,19 +114,26 @@ class VoiceService {
   Future<void> _configure() async {
     await _tts.setLanguage('pt-BR');
     await _tts.awaitSpeakCompletion(true);
-    try {
-      final savedProfile = await _storage.read(key: _profileKey);
-      profile = VoiceProfile.values.firstWhere(
-        (p) => p.name == savedProfile,
-        orElse: () => VoiceProfile.grave,
-      );
-    } catch (_) {}
+    if (!_profileExplicitlySet) {
+      try {
+        final savedProfile = await _storage.read(key: _profileKey);
+        if (!_profileExplicitlySet) {
+          profile = VoiceProfile.values.firstWhere(
+            (p) => p.name == savedProfile,
+            orElse: () => VoiceProfile.grave,
+          );
+        }
+      } catch (_) {}
+    }
+    if (!_voiceExplicitlySet) {
+      await _selectVoice();
+    }
     await _applyProfile();
-    await _selectVoice();
     try {
       _tts.setErrorHandler((_) => _notifyNativeSpeaking(false));
     } catch (_) {}
     _ready = true;
+    _syncNativeTtsConfig();
   }
 
   Future<void> _applyProfile() async {
@@ -116,18 +142,26 @@ class VoiceService {
     await _tts.setVolume(whisperMode ? 0.28 : 1.0);
   }
 
-  /// Lista as vozes pt-BR instaladas, das melhores para as piores.
+  /// Lista as vozes pt-BR (e fallback pt) instaladas, das melhores para as piores.
   Future<List<TtsVoiceOption>> listPortugueseVoices() async {
     try {
       final raw = await _tts.getVoices;
       if (raw is! List) return const [];
+      final seen = <String>{};
       final voices = <TtsVoiceOption>[];
       for (final item in raw) {
         if (item is! Map) continue;
         final name = (item['name'] ?? '').toString();
         final locale = (item['locale'] ?? '').toString();
         final normalizedLocale = locale.toLowerCase().replaceAll('_', '-');
-        if (name.isEmpty || !normalizedLocale.startsWith('pt-br')) continue;
+        if (name.isEmpty ||
+            !(normalizedLocale.startsWith('pt-br') ||
+                normalizedLocale == 'pt' ||
+                normalizedLocale.startsWith('pt-'))) {
+          continue;
+        }
+        final key = '$name|$locale';
+        if (!seen.add(key)) continue;
         final network = (item['network_required'] ?? '').toString();
         final offline = network == '0' ||
             (network.isEmpty && !name.toLowerCase().contains('network'));
@@ -149,6 +183,9 @@ class VoiceService {
 
   static int _score(TtsVoiceOption v) {
     var score = 0;
+    if (v.locale.toLowerCase().replaceAll('_', '-').startsWith('pt-br')) {
+      score += 8;
+    }
     if (v.offline) score += 4;
     if (v.quality.contains('very')) {
       score += 3;
@@ -177,18 +214,26 @@ class VoiceService {
   }
 
   Future<void> setPreferredVoice(TtsVoiceOption voice) async {
+    _voiceExplicitlySet = true;
     await initialize();
+    await _tts.stop();
     await _tts.setVoice(voice.toEngineMap());
     activeVoiceName = voice.name;
+    // Android TextToSpeech.setVoice() can reset pitch/rate back to engine defaults.
+    await _applyProfile();
+    _syncNativeTtsConfig();
     try {
       await _storage.write(key: _voiceKey, value: voice.name);
     } catch (_) {}
   }
 
   Future<void> setProfile(VoiceProfile next) async {
+    _profileExplicitlySet = true;
     profile = next;
     await initialize();
+    await _tts.stop();
     await _applyProfile();
+    _syncNativeTtsConfig();
     try {
       await _storage.write(key: _profileKey, value: next.name);
     } catch (_) {}
@@ -198,6 +243,7 @@ class VoiceService {
     whisperMode = whisper;
     await initialize();
     await _applyProfile();
+    _syncNativeTtsConfig();
   }
 
   /// Fala [text] já higienizado, em blocos curtos e interrompíveis.

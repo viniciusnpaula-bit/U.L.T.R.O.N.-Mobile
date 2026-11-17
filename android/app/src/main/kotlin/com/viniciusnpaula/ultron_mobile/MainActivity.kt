@@ -621,6 +621,13 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 val spoken = UltronTtsHelper.answerQuickOfflineQuery(this, text)
                 result.success(spoken)
             }
+            "configureTts" -> {
+                val voiceName = call.argument<String>("voiceName")
+                val pitch = (call.argument<Double>("pitch") ?: 0.55).toFloat()
+                val rate = (call.argument<Double>("rate") ?: 0.45).toFloat()
+                UltronTtsHelper.configure(voiceName, pitch, rate)
+                result.success(true)
+            }
             else -> result.notImplemented()
         }
     }

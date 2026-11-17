@@ -27,6 +27,7 @@ import '../../services/voice_service.dart';
 import '../../services/voice_shortcuts_service.dart';
 import '../widgets/action_confirmation_dialog.dart';
 import '../widgets/core_orb.dart' show CoreOrb, CoreStage;
+import '../widgets/voice_selector_sheet.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
 import 'desktop_pairing_screen.dart';
@@ -1191,6 +1192,18 @@ class _CoreScreenState extends State<CoreScreen>
     return result ?? false;
   }
 
+  Future<void> _openVoiceSelector() async {
+    await showVoiceSelectorSheet(
+      context,
+      voiceService: voiceService,
+      onChanged: () {
+        if (mounted) {
+          setState(() => selectedVoiceProfile = voiceService.profile);
+        }
+      },
+    );
+  }
+
   Future<bool> _setOfflineSentinelEnabled(bool next) async {
     if (next && voicePipeline.isContinuousEnabled) {
       await voicePipeline.stopContinuousListening();
@@ -1306,8 +1319,13 @@ class _CoreScreenState extends State<CoreScreen>
         break;
       case UltronCommand.memory:
         await Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const MemorySettingsScreen()),
+          MaterialPageRoute(
+            builder: (_) => MemorySettingsScreen(voiceService: voiceService),
+          ),
         );
+        if (mounted) {
+          setState(() => selectedVoiceProfile = voiceService.profile);
+        }
         break;
       case UltronCommand.desktop:
         await Navigator.of(context).push(
@@ -1651,6 +1669,12 @@ class _CoreScreenState extends State<CoreScreen>
                               label: 'NÚCLEO',
                               selected: panel == _ActivePanel.main,
                               onTap: () => _setPanel(_ActivePanel.main),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'VOZ',
+                              selected: false,
+                              onTap: _openVoiceSelector,
                             ),
                             const SizedBox(width: 4),
                             _TopNavPill(
@@ -3403,6 +3427,28 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _openVoiceSelector,
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2E0305),
+                          foregroundColor: _rose,
+                          side: const BorderSide(color: _crimson),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        icon: const Icon(Icons.record_voice_over, size: 14),
+                        label: Text(
+                          'TROCAR VOZ NO APARELHO (${voiceService.activeVoiceName ?? "Padrão"})',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),

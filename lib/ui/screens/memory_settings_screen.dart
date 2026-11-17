@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../services/user_preferences_service.dart';
 import '../../services/voice_corrections_service.dart';
+import '../../services/voice_service.dart';
 import '../../services/voice_shortcuts_service.dart';
+import '../widgets/voice_selector_sheet.dart';
 
 class MemorySettingsScreen extends StatefulWidget {
   const MemorySettingsScreen({
@@ -10,11 +12,13 @@ class MemorySettingsScreen extends StatefulWidget {
     this.correctionsService,
     this.shortcutsService,
     this.preferencesService,
+    this.voiceService,
   });
 
   final VoiceCorrectionsService? correctionsService;
   final VoiceShortcutsService? shortcutsService;
   final UserPreferencesService? preferencesService;
+  final VoiceService? voiceService;
 
   @override
   State<MemorySettingsScreen> createState() => _MemorySettingsScreenState();
@@ -24,6 +28,7 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
   late final VoiceCorrectionsService _corrections;
   late final VoiceShortcutsService _shortcuts;
   late final UserPreferencesService _preferences;
+  late final VoiceService _voiceService;
 
   List<VoiceCorrection> _correctionRows = const [];
   List<VoiceShortcut> _shortcutRows = const [];
@@ -37,6 +42,7 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
     _corrections = widget.correctionsService ?? VoiceCorrectionsService();
     _shortcuts = widget.shortcutsService ?? VoiceShortcutsService();
     _preferences = widget.preferencesService ?? UserPreferencesService();
+    _voiceService = widget.voiceService ?? VoiceService();
     _reload();
   }
 
@@ -75,7 +81,8 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
           children: [
             TextField(
               controller: wrongCtrl,
-              decoration: const InputDecoration(labelText: 'Transcrição errada'),
+              decoration:
+                  const InputDecoration(labelText: 'Transcrição errada'),
             ),
             TextField(
               controller: correctCtrl,
@@ -137,6 +144,33 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
               : ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
+                    const _SectionHeader(title: 'Voz do U.L.T.R.O.N. (TTS)'),
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(
+                          Icons.record_voice_over,
+                          color: Color(0xFFE50914),
+                        ),
+                        title: Text(
+                          'Voz: ${_voiceService.activeVoiceName ?? "Padrão do aparelho"}',
+                        ),
+                        subtitle:
+                            Text('Timbre: ${_voiceService.profile.label}'),
+                        trailing: FilledButton(
+                          onPressed: () async {
+                            await showVoiceSelectorSheet(
+                              context,
+                              voiceService: _voiceService,
+                              onChanged: () {
+                                if (mounted) setState(() {});
+                              },
+                            );
+                          },
+                          child: const Text('Trocar'),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     _SectionHeader(
                       title: 'Correções de Voz (${_correctionRows.length})',
                     ),
@@ -146,7 +180,8 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
                       for (final item in _correctionRows)
                         Card(
                           child: ListTile(
-                            title: Text('${item.wrongPhrase} → ${item.correctPhrase}'),
+                            title: Text(
+                                '${item.wrongPhrase} → ${item.correctPhrase}'),
                             trailing: IconButton(
                               tooltip: 'Remover correção',
                               icon: const Icon(Icons.delete_outline),
