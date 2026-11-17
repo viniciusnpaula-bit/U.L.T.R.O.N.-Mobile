@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -22,10 +23,26 @@ import 'update_screen.dart';
 enum CoreStage { center, corner, hidden }
 
 class CoreScreen extends StatefulWidget {
-  const CoreScreen({super.key, required this.gate, required this.vault});
+  const CoreScreen({
+    super.key,
+    required this.gate,
+    required this.vault,
+    this.voiceService,
+    this.captureSource,
+    this.sttService,
+    this.shaderProgram,
+    this.announceOnline = false,
+    this.onlineAnnouncement = 'Ultron online. Todos os sistemas prontos.',
+  });
 
   final AuthGate gate;
   final PinVault vault;
+  final VoiceService? voiceService;
+  final AudioCaptureSource? captureSource;
+  final GroqWhisperSttService? sttService;
+  final FragmentProgram? shaderProgram;
+  final bool announceOnline;
+  final String onlineAnnouncement;
 
   @override
   State<CoreScreen> createState() => _CoreScreenState();
@@ -40,7 +57,7 @@ class _CoreScreenState extends State<CoreScreen>
   bool active = false;
   bool sending = false;
   bool hasUpdate = false;
-  final voiceService = VoiceService();
+  late final VoiceService voiceService;
   final updateService = AppUpdateService();
   late final VoicePipelineController voicePipeline;
 
@@ -48,10 +65,11 @@ class _CoreScreenState extends State<CoreScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    voiceService = widget.voiceService ?? VoiceService();
     voicePipeline = VoicePipelineController(
       gate: widget.gate,
-      capture: MethodChannelAudioCaptureSource(),
-      stt: GroqWhisperSttService(),
+      capture: widget.captureSource ?? MethodChannelAudioCaptureSource(),
+      stt: widget.sttService ?? GroqWhisperSttService(),
       voiceService: voiceService,
       onTranscript: _handleVoiceTranscript,
     )..addListener(_onVoicePipelineChanged);
@@ -62,7 +80,12 @@ class _CoreScreenState extends State<CoreScreen>
     });
     ticker.start();
     active = true;
-    voiceService.initialize();
+    unawaited(voiceService.initialize().catchError((_) {}));
+    if (widget.announceOnline) {
+      unawaited(
+        voiceService.speak(widget.onlineAnnouncement).catchError((_) {}),
+      );
+    }
     _checkUpdate();
   }
 
