@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- AI providers and the GitHub updater are the only network users. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Voice pipeline captures microphone audio only when authenticated in foreground. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!-- open_filex opens the downloaded update APK; Android still asks the user to confirm. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 

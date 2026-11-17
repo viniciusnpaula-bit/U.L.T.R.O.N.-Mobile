@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -8,7 +10,10 @@ import '../../core/security/pin_vault.dart';
 import '../../services/conversation_history.dart';
 import '../../services/ai_provider_service.dart';
 import '../../services/app_update_service.dart';
+import '../../services/audio_capture_service.dart';
 import '../../services/slash_command_parser.dart';
+import '../../services/stt_service.dart';
+import '../../services/voice_pipeline_controller.dart';
 import '../../services/voice_service.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
@@ -37,12 +42,19 @@ class _CoreScreenState extends State<CoreScreen>
   bool hasUpdate = false;
   final voiceService = VoiceService();
   final updateService = AppUpdateService();
-
+  late final VoicePipelineController voicePipeline;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    voicePipeline = VoicePipelineController(
+      gate: widget.gate,
+      capture: MethodChannelAudioCaptureSource(),
+      stt: GroqWhisperSttService(),
+      voiceService: voiceService,
+      onTranscript: _handleVoiceTranscript,
+    )..addListener(_onVoicePipelineChanged);
     // Only the core repaints at 60fps; rebuilding the whole screen would repaint
     // the text field and buttons on every frame.
     ticker = createTicker((duration) {
@@ -52,6 +64,15 @@ class _CoreScreenState extends State<CoreScreen>
     active = true;
     voiceService.initialize();
     _checkUpdate();
+  }
+
+  void _onVoicePipelineChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _handleVoiceTranscript(String transcript) async {
+    if (!mounted || sending) return;
+    await _submitText(transcript);
   }
 
   /// Silent, best effort: only paints a dot on the update button.
@@ -69,13 +90,16 @@ class _CoreScreenState extends State<CoreScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    voicePipeline.handleLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       if (!active) {
-        ticker.start();
         active = true;
+        if (stage != CoreStage.hidden && !ticker.isActive) {
+          ticker.start();
+        }
       }
     } else if (active) {
-      ticker.stop();
+      if (ticker.isActive) ticker.stop();
       active = false;
       voiceService.stop();
     }
@@ -84,6 +108,8 @@ class _CoreScreenState extends State<CoreScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    voicePipeline.removeListener(_onVoicePipelineChanged);
+    voicePipeline.dispose();
     ticker.dispose();
     coreTime.dispose();
     voiceService.stop();
@@ -93,53 +119,61 @@ class _CoreScreenState extends State<CoreScreen>
 
   void nextStage() => setState(() {
         stage = CoreStage.values[(stage.index + 1) % CoreStage.values.length];
+        if (stage == CoreStage.hidden) {
+          if (ticker.isActive) ticker.stop();
+        } else if (active && !ticker.isActive) {
+          ticker.start();
+        }
       });
 
   Future<void> saveCommand() async {
     if (sending) return;
     final text = commandController.text.trim();
     if (text.isEmpty) return;
+    commandController.clear();
+    await _submitText(text);
+  }
+
+  Future<void> _submitText(String rawText) async {
+    final text = rawText.trim();
+    if (text.isEmpty || sending) return;
     final command = SlashCommandParser.parse(text);
     if (command != null) {
-      commandController.clear();
       await _runCommand(command.command);
       return;
     }
     if (text.startsWith('/')) {
-      commandController.clear();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Comando desconhecido. Use /help.')),
       );
       return;
     }
 
-    commandController.clear();
-    final now = DateTime.now();
-    final previousMessages = await ConversationHistory.instance.messages(
-      conversationId: 'default',
-      limit: 12,
-    );
-    final aiHistory = previousMessages
-        .where((message) =>
-            message.role == ChatRole.user ||
-            message.role == ChatRole.assistant)
-        .map((message) => <String, String>{
-              'role': message.role.name,
-              'content': message.content,
-            })
-        .toList();
-
-    await ConversationHistory.instance.save(ChatMessage(
-      id: null,
-      conversationId: 'default',
-      role: ChatRole.user,
-      content: text,
-      createdAt: now,
-    ));
-    if (!mounted) return;
     setState(() => sending = true);
 
     try {
+      final now = DateTime.now();
+      final previousMessages = await ConversationHistory.instance.messages(
+        conversationId: 'default',
+        limit: 12,
+      );
+      final aiHistory = previousMessages
+          .where((message) =>
+              message.role == ChatRole.user ||
+              message.role == ChatRole.assistant)
+          .map((message) => <String, String>{
+                'role': message.role.name,
+                'content': message.content,
+              })
+          .toList();
+
+      await ConversationHistory.instance.save(ChatMessage(
+        id: null,
+        conversationId: 'default',
+        role: ChatRole.user,
+        content: text,
+        createdAt: now,
+      ));
       final reply = await AiFailover().ask(text, history: aiHistory);
       await ConversationHistory.instance.save(ChatMessage(
         id: null,
@@ -149,15 +183,14 @@ class _CoreScreenState extends State<CoreScreen>
         createdAt: DateTime.now(),
       ));
       if (!mounted) return;
-      await voiceService.speak(reply.text);
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Resposta recebida de ${reply.provider}. Consulte o histórico.')),
       );
+      unawaited(voiceService.speak(reply.text).catchError((_) {}));
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Mensagem salva, mas a IA falhou: $error')),
+        SnackBar(content: Text('Não foi possível concluir o comando: $error')),
       );
     } finally {
       if (mounted) setState(() => sending = false);
@@ -225,6 +258,32 @@ class _CoreScreenState extends State<CoreScreen>
     if (lock == true) widget.gate.lock();
   }
 
+  Future<void> _toggleContinuousListening() async {
+    HapticFeedback.selectionClick();
+    if (voicePipeline.isContinuousEnabled) {
+      await voicePipeline.stopContinuousListening();
+      return;
+    }
+    final ok = await voicePipeline.startContinuousListening();
+    if (!mounted || ok || voicePipeline.lastError == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(voicePipeline.lastError!)),
+    );
+  }
+
+  Future<void> _togglePushToTalk() async {
+    HapticFeedback.lightImpact();
+    if (voicePipeline.isPushToTalkActive) {
+      await voicePipeline.stopPushToTalk();
+      return;
+    }
+    final ok = await voicePipeline.startPushToTalk();
+    if (!mounted || ok || voicePipeline.lastError == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(voicePipeline.lastError!)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
         backgroundColor: const Color(0xFF0A0002),
@@ -236,13 +295,23 @@ class _CoreScreenState extends State<CoreScreen>
                   alignment: stage == CoreStage.center
                       ? Alignment.center
                       : const Alignment(0.82, -0.82),
-                  child: SizedBox(
-                    width: stage == CoreStage.center ? 280 : 90,
-                    height: stage == CoreStage.center ? 280 : 90,
-                    child: ValueListenableBuilder<double>(
-                      valueListenable: coreTime,
-                      builder: (context, time, child) =>
-                          CustomPaint(painter: CorePainter(time)),
+                  child: GestureDetector(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      if (voiceService.isSpeaking) {
+                        voiceService.stop();
+                      } else {
+                        nextStage();
+                      }
+                    },
+                    child: SizedBox(
+                      width: stage == CoreStage.center ? 280 : 90,
+                      height: stage == CoreStage.center ? 280 : 90,
+                      child: ValueListenableBuilder<double>(
+                        valueListenable: coreTime,
+                        builder: (context, time, child) =>
+                            CustomPaint(painter: CorePainter(time)),
+                      ),
                     ),
                   ),
                 ),
@@ -302,9 +371,44 @@ class _CoreScreenState extends State<CoreScreen>
                             color: Color(0xFFE50914)),
                       ),
                       IconButton(
-                        tooltip: 'Microfone (em breve)',
-                        onPressed: () => HapticFeedback.lightImpact(),
-                        icon: const Icon(Icons.mic, color: Color(0xFFE50914)),
+                        tooltip: voicePipeline.isContinuousEnabled
+                            ? 'Desativar escuta contínua'
+                            : 'Ativar escuta contínua',
+                        onPressed: _toggleContinuousListening,
+                        icon: Icon(
+                          voicePipeline.isContinuousEnabled
+                              ? Icons.hearing
+                              : Icons.hearing_disabled,
+                          color: voicePipeline.isContinuousEnabled
+                              ? const Color(0xFFFF4D57)
+                              : const Color(0xFF993036),
+                        ),
+                      ),
+                      GestureDetector(
+                        onLongPressStart: (_) async {
+                          HapticFeedback.mediumImpact();
+                          await voicePipeline.startPushToTalk();
+                        },
+                        onLongPressEnd: (_) async {
+                          await voicePipeline.stopPushToTalk();
+                        },
+                        onLongPressCancel: () async {
+                          await voicePipeline.stopPushToTalk();
+                        },
+                        child: IconButton(
+                          tooltip: voicePipeline.isPushToTalkActive
+                              ? 'Solte ou toque para enviar fala'
+                              : 'Segure para falar (Push-to-Talk)',
+                          onPressed: _togglePushToTalk,
+                          icon: Icon(
+                            voicePipeline.isPushToTalkActive
+                                ? Icons.mic_none
+                                : Icons.mic,
+                            color: voicePipeline.isPushToTalkActive
+                                ? const Color(0xFFFF6B73)
+                                : const Color(0xFFE50914),
+                          ),
+                        ),
                       ),
                     ],
                   ),
