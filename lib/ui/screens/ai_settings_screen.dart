@@ -12,13 +12,35 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   final model=TextEditingController(text:'gpt-4o-mini');
   final key=TextEditingController();
   final prompt=TextEditingController(text:'Teste de conexão');
+  final sttUrl=TextEditingController(text:SttConfig.defaultEndpointUrl);
+  final sttModel=TextEditingController(text:SttConfig.defaultModel);
+  final sttKey=TextEditingController();
   List<AiProviderConfig> providers=[];
   bool busy=false, showKey=false;
   String providerPreset='OpenAI';
   void _selectPreset(String value){setState(()=>providerPreset=value);if(value=='Groq'){name.text='Groq';url.text='https://api.groq.com/openai/v1';model.text='openai/gpt-oss-120b';}else{name.text='OpenAI';url.text='https://api.openai.com/v1';model.text='gpt-4o-mini';}}
   String status='Chaves ficam no armazenamento seguro do Android.';
   @override void initState(){super.initState();_load();}
-  Future<void> _load() async {providers=await store.load();if(mounted)setState((){});}
+  Future<void> _load() async {
+    providers=await store.load();
+    final stt=await store.loadSttConfig();
+    if(stt!=null){sttUrl.text=stt.endpointUrl;sttModel.text=stt.model;}
+    if(mounted)setState((){});
+  }
+  Future<void> _saveStt() async {
+    final endpoint=sttUrl.text.trim();
+    final modelName=sttModel.text.trim();
+    final parsed=Uri.tryParse(endpoint);
+    if(parsed==null||parsed.scheme!='https'||parsed.host.isEmpty||modelName.isEmpty){
+      setState(()=>status='Informe endpoint https e modelo válidos para STT.');
+      return;
+    }
+    final existing=await store.loadSttConfig();
+    final dedicatedKey=sttKey.text.trim().isNotEmpty?sttKey.text.trim():(existing?.apiKey??'');
+    await store.saveSttConfig(SttConfig(endpointUrl:endpoint,model:modelName,apiKey:dedicatedKey));
+    sttKey.clear();
+    if(mounted)setState(()=>status='Configuração STT salva com segurança.');
+  }
   Future<void> _save() async {
     if(name.text.trim().isEmpty||url.text.trim().isEmpty||model.text.trim().isEmpty||key.text.trim().isEmpty){setState(()=>status='Preencha nome, URL, modelo e chave.');return;}
     final base=url.text.trim();
@@ -32,7 +54,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   Future<void> _test(AiProviderConfig p) async {setState(()=>busy=true);try{final answer=await AiFailover(store:store).test(p);status='Conexão OK: $answer';}catch(e){status='Falha: $e';}finally{if(mounted)setState(()=>busy=false);}}
   Future<void> _delete(AiProviderConfig p) async {providers.removeWhere((x)=>x.id==p.id);await store.save(providers);setState(()=>status='Provedor removido.');}
   Future<void> _toggle(AiProviderConfig p) async {providers=providers.map((x)=>x.id==p.id?AiProviderConfig(id:x.id,name:x.name,baseUrl:x.baseUrl,model:x.model,apiKey:x.apiKey,enabled:!x.enabled,priority:x.priority):x).toList();await store.save(providers);setState((){});}
-  @override void dispose(){name.dispose();url.dispose();model.dispose();key.dispose();prompt.dispose();super.dispose();}
+  @override void dispose(){name.dispose();url.dispose();model.dispose();key.dispose();prompt.dispose();sttUrl.dispose();sttModel.dispose();sttKey.dispose();super.dispose();}
   @override Widget build(BuildContext context)=>Scaffold(backgroundColor:const Color(0xFF0A0002),appBar:AppBar(title:const Text('Inteligência Artificial')),body:ListView(padding:const EdgeInsets.all(16),children:[
     const Text('Adicionar provedor compatível com API Chat Completions'),
     DropdownButtonFormField<String>(initialValue:providerPreset,decoration:const InputDecoration(labelText:'Provedor'),items:const [DropdownMenuItem(value:'OpenAI',child:Text('OpenAI')),DropdownMenuItem(value:'Groq',child:Text('Groq'))],onChanged:(v){if(v!=null)_selectPreset(v);}),
@@ -46,6 +68,13 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
     Text(status,style:const TextStyle(color:Color(0xFFFFA0A0))),
     const SizedBox(height:12),
     for(final p in providers) Card(child:ListTile(title:Text('${p.priority+1}. ${p.name}'),subtitle:Text('${p.model}\n${p.baseUrl}',maxLines:2,overflow:TextOverflow.ellipsis),leading:Switch(value:p.enabled,onChanged:(_)=>_toggle(p)),trailing:Wrap(spacing:0,children:[IconButton(onPressed:busy?null:()=>_test(p),icon:const Icon(Icons.wifi_tethering)),IconButton(onPressed:()=>_delete(p),icon:const Icon(Icons.delete_outline))]))),
+    const Divider(height:32),
+    const Text('Transcrição de Voz (STT Whisper)'),
+    TextField(controller:sttUrl,keyboardType:TextInputType.url,decoration:const InputDecoration(labelText:'Endpoint STT')),
+    TextField(controller:sttModel,decoration:const InputDecoration(labelText:'Modelo STT')),
+    TextField(controller:sttKey,obscureText:!showKey,decoration:const InputDecoration(labelText:'Chave API STT (opcional; reutiliza Groq cadastrado)')),
+    const SizedBox(height:8),
+    OutlinedButton(onPressed:_saveStt,child:const Text('Salvar STT')),
     const SizedBox(height:8),const Text('Failover: provedores ativos são tentados em ordem de prioridade. Esta primeira versão usa endpoint compatível com OpenAI Chat Completions; Gemini nativo e Anthropic exigem adaptadores próprios.')
   ]));
 }
