@@ -222,7 +222,8 @@ class _UpdateScreenState extends State<UpdateScreen> {
                                     borderRadius: BorderRadius.circular(10),
                                   ),
                                 ),
-                                icon: const Icon(Icons.install_mobile, size: 16),
+                                icon:
+                                    const Icon(Icons.install_mobile, size: 16),
                                 label: const Text(
                                   'BAIXAR APK E ABRIR INSTALADOR',
                                   style: TextStyle(
@@ -275,10 +276,10 @@ class _UpdateScreenState extends State<UpdateScreen> {
                     OutlinedButton.icon(
                       onPressed: checking || downloading ? null : _check,
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: _crimson,
-                        backgroundColor: const Color(0xFFE50914),
+                        foregroundColor: _rose,
+                        backgroundColor: const Color(0xFF2E0305),
                         side: BorderSide(
-                          color: _crimson.withValues(alpha: 0.35),
+                          color: _crimson.withValues(alpha: 0.45),
                         ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
