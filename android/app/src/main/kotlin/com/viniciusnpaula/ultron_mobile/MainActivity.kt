@@ -20,6 +20,7 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -30,6 +31,7 @@ import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -42,6 +44,7 @@ import kotlin.math.roundToInt
 class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     companion object {
         private const val CHANNEL = "com.viniciusnpaula.ultron_mobile/device"
+        private const val ACTIONS_CHANNEL = "com.viniciusnpaula.ultron_mobile/android_actions"
         private const val SPEECH_REQUEST_CODE = 9042
 
         @Volatile
@@ -57,9 +60,12 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         var isForegroundRecognizerActive: Boolean = false
 
         @Volatile
+        var isForegroundCaptureActive: Boolean = false
+
+        @Volatile
         var isActivityResumed: Boolean = false
 
-        private const val PENDING_WAKE_TTL_MS = 30_000L
+        private const val PENDING_WAKE_TTL_MS = 90_000L
 
         private var instance: MainActivity? = null
 
@@ -88,10 +94,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         }
     }
 
-    /** Entrega a wake word pendente ao Flutter; se o canal falhar, ela permanece pendente. */
+    /** Entrega a wake word pendente ao Flutter; só consome quando a Activity está em 1º plano. */
     private fun deliverPendingWakeWord() {
+        if (!isActivityResumed || isUltronSpeakingGlobal || isForegroundRecognizerActive) return
         val channel = deviceChannel ?: return
-        if (isUltronSpeakingGlobal || isForegroundRecognizerActive) return
         val phrase = consumePendingWakeWord() ?: return
         channel.invokeMethod("onWakeWordDetected", phrase, object : MethodChannel.Result {
             override fun success(result: Any?) {}
@@ -125,6 +131,9 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
+        if (audioCaptureHandler?.onRequestPermissionsResult(requestCode, permissions, grantResults) == true) {
+            return
+        }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 9044) {
             val micGranted = ContextCompat.checkSelfPermission(
@@ -160,7 +169,19 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         }
     }
 
+    private fun captureTileIntent(intent: Intent?) {
+        if (intent?.action != UltronTileService.ACTION_TILE_LAUNCH) {
+            pendingTileAction = null
+            return
+        }
+        val action = intent.getStringExtra(UltronTileService.EXTRA_TILE_ACTION)
+        if (!action.isNullOrBlank()) {
+            pendingTileAction = action
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        captureTileIntent(intent)
         handleWakeIntent(intent)
         super.onCreate(savedInstanceState)
     }
@@ -168,9 +189,13 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        captureTileIntent(intent)
         handleWakeIntent(intent)
     }
 
+    private var audioCaptureHandler: AudioCaptureHandler? = null
+    private var actionsChannel: MethodChannel? = null
+    private var pendingTileAction: String? = null
     private var torchEnabled: Boolean = false
     private var torchCameraId: String? = null
     private var cameraManager: CameraManager? = null
@@ -206,11 +231,62 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 result.error("DEVICE_ERROR", e.message ?: "Falha na execução nativa Android", null)
             }
         }
+
+        audioCaptureHandler?.release()
+        audioCaptureHandler = AudioCaptureHandler(
+            activity = this,
+            messenger = flutterEngine.dartExecutor.binaryMessenger,
+        )
+
+        actionsChannel?.setMethodCallHandler(null)
+        actionsChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            ACTIONS_CHANNEL,
+        ).apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "consumePendingTileAction" -> {
+                        val action = pendingTileAction
+                        pendingTileAction = null
+                        result.success(action)
+                    }
+                    "isNotificationAccessGranted" -> {
+                        result.success(isNotificationServiceEnabled())
+                    }
+                    "openNotificationAccessSettings" -> {
+                        startActivity(
+                            Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                        result.success(null)
+                    }
+                    "readRecentNotifications" -> {
+                        if (!isNotificationServiceEnabled()) {
+                            result.success(emptyList<Map<String, Any?>>())
+                        } else {
+                            result.success(UltronNotificationService.getRecentMessages(20))
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
         isActivityResumed = true
+        // Se o sentinela estava habilitado pelo operador, garante retomada ao reabrir o app.
+        val sentinelPrefs = getSharedPreferences(UltronAudioService.PREFS_NAME, Context.MODE_PRIVATE)
+        if (sentinelPrefs.getBoolean(UltronAudioService.PREF_ENABLED, false) &&
+            !UltronAudioService.isRunning &&
+            !isForegroundCaptureActive &&
+            !isForegroundRecognizerActive &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            startSentinelService()
+        }
         // Entrega com pequeno atraso para o Dart já ter registrado o handler (cold start).
         window?.decorView?.postDelayed({ deliverPendingWakeWord() }, 600L)
         try {
@@ -269,6 +345,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     }
 
     override fun onStop() {
+        audioCaptureHandler?.stopCapture()
         // Ao sair de cena, volta ao comportamento normal da tela de bloqueio.
         applyLockScreenMode(false)
         super.onStop()
@@ -277,6 +354,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     override fun onDestroy() {
         isActivityResumed = false
         if (instance == this) instance = null
+        actionsChannel?.setMethodCallHandler(null)
+        actionsChannel = null
+        audioCaptureHandler?.release()
+        audioCaptureHandler = null
         destroyInlineRecognizer()
         try {
             sensorManager?.unregisterListener(this)
@@ -321,6 +402,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 val direction = call.argument<String>("direction") ?: "up"
                 val updated = adjustMediaVolume(direction)
                 result.success(updated)
+            }
+            "mediaControl" -> {
+                val action = call.argument<String>("action") ?: "play_pause"
+                result.success(dispatchMediaControl(action))
             }
             "vibrate" -> {
                 val durationMs = (call.argument<Int>("durationMs") ?: 180).coerceIn(20, 3000)
@@ -536,6 +621,13 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 val spoken = UltronTtsHelper.answerQuickOfflineQuery(this, text)
                 result.success(spoken)
             }
+            "configureTts" -> {
+                val voiceName = call.argument<String>("voiceName")
+                val pitch = (call.argument<Double>("pitch") ?: 0.55).toFloat()
+                val rate = (call.argument<Double>("rate") ?: 0.45).toFloat()
+                UltronTtsHelper.configure(voiceName, pitch, rate)
+                result.success(true)
+            }
             else -> result.notImplemented()
         }
     }
@@ -586,6 +678,23 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
         return ((cur.toDouble() / max) * 100.0).roundToInt()
+    }
+
+    private fun dispatchMediaControl(action: String): Boolean {
+        val keyCode = when (action.trim().lowercase()) {
+            "play" -> KeyEvent.KEYCODE_MEDIA_PLAY
+            "pause" -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            "play_pause", "toggle" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+            "next" -> KeyEvent.KEYCODE_MEDIA_NEXT
+            "previous", "prev" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            "stop" -> KeyEvent.KEYCODE_MEDIA_STOP
+            else -> return false
+        }
+        val audio = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        val eventTime = SystemClock.uptimeMillis()
+        audio.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0))
+        audio.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0))
+        return true
     }
 
     private fun triggerVibration(durationMs: Long) {
@@ -1110,4 +1219,3 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         }
     }
 }
-

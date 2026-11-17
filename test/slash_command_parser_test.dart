@@ -9,6 +9,9 @@ void main() {
     expect(SlashCommandParser.parse('/seguranca')?.command, UltronCommand.security);
     expect(SlashCommandParser.parse('/history')?.command, UltronCommand.history);
     expect(SlashCommandParser.parse('/historico')?.command, UltronCommand.history);
+    expect(SlashCommandParser.parse('/memory')?.command, UltronCommand.memory);
+    expect(SlashCommandParser.parse('/memoria')?.command, UltronCommand.memory);
+    expect(SlashCommandParser.parse('/desktop')?.command, UltronCommand.desktop);
     expect(SlashCommandParser.parse('/settings')?.command, UltronCommand.settings);
     expect(SlashCommandParser.parse('/device')?.command, UltronCommand.device);
     expect(SlashCommandParser.parse('/celular')?.command, UltronCommand.device);

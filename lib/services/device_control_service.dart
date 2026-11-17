@@ -198,11 +198,14 @@ class WakeWordDiagnostics {
   }
 
   final bool running;
+
   /// true somente com leitura real de áudio confirmada (não basta o serviço estar vivo).
   final bool capturing;
   final bool paused;
+
   /// Motor de detecção realmente em uso.
   final String engine;
+
   /// true somente quando o motor sherpa-onnx dedicado estiver realmente carregado.
   final bool dedicatedKws;
   final bool modelLoaded;
@@ -218,8 +221,10 @@ class WakeWordDiagnostics {
   final int recognizerMisses;
   final int recognizerErrors;
   final int kwsErrors;
+
   /// Janelas de áudio entregues ao decoder KWS.
   final int kwsFrames;
+
   /// Execuções de decode do KWS (prova que o pipeline nativo rodou).
   final int kwsDecodes;
   final int captureRestarts;
@@ -233,7 +238,8 @@ class WakeWordDiagnostics {
   /// Resumo multilinha para exibir no HUD.
   String toReport() => [
         'Motor: $engine',
-        if (!modelLoaded) 'FALHA: modelo sherpa-onnx não carregado; escuta indisponível.',
+        if (!modelLoaded)
+          'FALHA: modelo sherpa-onnx não carregado; escuta indisponível.',
         'Motor KWS dedicado: ${dedicatedKws ? "SIM" : "NÃO"} · Modelo: ${modelLoaded ? "CARREGADO" : "INDISPONÍVEL"}',
         'Captura real: ${capturing ? "CONFIRMADA" : "NÃO confirmada"} · Serviço: ${running ? "vivo" : "parado"}${paused ? " · PAUSADO" : ""}${economyMode ? " · economia" : ""}',
         'Android API $sdk · Notificações: ${notificationsPermission ? "permitidas" : "NEGADAS"}',
@@ -292,10 +298,9 @@ class DeviceControlService {
     setNativeEventHandlers(onFlip: onFlip);
   }
 
-  Future<ObsidianService> _getObsidian() =>
-      obsidianProvider != null
-          ? obsidianProvider!()
-          : ObsidianService.openDefaultVault();
+  Future<ObsidianService> _getObsidian() => obsidianProvider != null
+      ? obsidianProvider!()
+      : ObsidianService.openDefaultVault();
 
   /// Retorna a instância do serviço do cofre Obsidian (Segundo Cérebro).
   Future<ObsidianService> getObsidianVault() => _getObsidian();
@@ -362,11 +367,9 @@ class DeviceControlService {
         .convert(utf8.encode(payload))
         .toString();
 
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 6);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
     try {
-      final req =
-          await client.postUrl(uri).timeout(const Duration(seconds: 8));
+      final req = await client.postUrl(uri).timeout(const Duration(seconds: 8));
       req.headers.contentType = ContentType.json;
       req.headers.set('X-Ultron-Signature', 'sha256=$signature');
       req.headers.set('X-Ultron-Timestamp', timestamp);
@@ -407,9 +410,8 @@ class DeviceControlService {
       'timestamp': timestamp,
       'payload': data,
     });
-    final signature = Hmac(sha256, utf8.encode(secret))
-        .convert(utf8.encode(body))
-        .toString();
+    final signature =
+        Hmac(sha256, utf8.encode(secret)).convert(utf8.encode(body)).toString();
     return {
       'body': body,
       'signature': 'sha256=$signature',
@@ -433,6 +435,7 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
 - Aumentar volume: [ACTION:VOLUME_UP]
 - Diminuir volume: [ACTION:VOLUME_DOWN]
 - Silenciar / mudo: [ACTION:VOLUME_MUTE]
+- Controlar reprodução de mídia: [ACTION:MEDIA_PLAY], [ACTION:MEDIA_PAUSE], [ACTION:MEDIA_PLAY_PAUSE], [ACTION:MEDIA_NEXT], [ACTION:MEDIA_PREVIOUS], [ACTION:MEDIA_STOP]
 - Salvar nota rápida no Cofre Obsidian: [ACTION:NOTE:texto da anotação]
 - Executar Skill Mobile (.md): [ACTION:SKILL:modo_estudo]
 - Abrir aplicativo (ex: whatsapp, youtube, instagram, chrome, spotify, calculadora, camera, relogio, maps): [ACTION:OPEN_APP:whatsapp]
@@ -479,6 +482,29 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       {'direction': direction},
     );
     return res ?? 50;
+  }
+
+  static const Set<String> supportedMediaActions = <String>{
+    'play',
+    'pause',
+    'play_pause',
+    'next',
+    'previous',
+    'stop',
+  };
+
+  /// Sends an Android hardware media key event (`AudioManager.dispatchMediaKeyEvent`)
+  /// to the active media session (Spotify, YouTube, players, podcasts).
+  Future<bool> controlMedia(String action) async {
+    final normalized = action.trim().toLowerCase();
+    if (!supportedMediaActions.contains(normalized)) {
+      throw ArgumentError.value(action, 'action', 'Ação de mídia inválida');
+    }
+    final res = await _channel.invokeMethod<bool>(
+      'mediaControl',
+      {'action': normalized},
+    );
+    return res ?? false;
   }
 
   Future<void> vibrate({int durationMs = 200}) async {
@@ -694,7 +720,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         final on = await setTorch(true);
         return DeviceActionResult(
           handled: true,
-          message: '🔦 Lanterna do dispositivo ativada (Estado: ${on ? 'ON' : 'OFF'}).',
+          message:
+              '🔦 Lanterna do dispositivo ativada (Estado: ${on ? 'ON' : 'OFF'}).',
           speakText: 'Lanterna ligada.',
         );
       }
@@ -705,7 +732,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         final on = await setTorch(false);
         return DeviceActionResult(
           handled: true,
-          message: '🔦 Lanterna do dispositivo desativada (Estado: ${on ? 'ON' : 'OFF'}).',
+          message:
+              '🔦 Lanterna do dispositivo desativada (Estado: ${on ? 'ON' : 'OFF'}).',
           speakText: 'Lanterna desligada.',
         );
       }
@@ -765,6 +793,17 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
           handled: true,
           message: '🔇 Áudio de mídia silenciado.',
           speakText: 'Áudio silenciado.',
+        );
+      }
+
+      // 2B. Media Playback Control (play, pause, next, previous, stop)
+      final mediaMatch = _matchMediaNaturalCommand(lower);
+      if (mediaMatch != null) {
+        await controlMedia(mediaMatch.action);
+        return DeviceActionResult(
+          handled: true,
+          message: mediaMatch.message,
+          speakText: mediaMatch.speakText,
         );
       }
 
@@ -863,7 +902,9 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       }
 
       // 8. Vibrate
-      if (lower == 'vibrar' || lower == 'testar vibração' || lower == 'vibracao') {
+      if (lower == 'vibrar' ||
+          lower == 'testar vibração' ||
+          lower == 'vibracao') {
         await vibrate(durationMs: 350);
         return const DeviceActionResult(
           handled: true,
@@ -1030,7 +1071,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
           );
         } catch (_) {
           if (target.isNotEmpty) {
-            final waStatus = await sendWhatsApp(target: target, text: replyBody);
+            final waStatus =
+                await sendWhatsApp(target: target, text: replyBody);
             return DeviceActionResult(
               handled: true,
               message: '💬 $waStatus',
@@ -1159,7 +1201,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
           await vault.saveMemory('Operador', body);
           return DeviceActionResult(
             handled: true,
-            message: '🧠 Memória persistida no perfil do Operador (Obsidian):\n"$body"',
+            message:
+                '🧠 Memória persistida no perfil do Operador (Obsidian):\n"$body"',
             speakText: 'Memória guardada no seu segundo cérebro.',
           );
         }
@@ -1198,7 +1241,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     final pattern = RegExp(r'\[ACTION:([^\]]+)\]', caseSensitive: false);
     final matches = pattern.allMatches(rawReply).toList();
     if (matches.isEmpty) {
-      return AiActionExecution(cleanText: rawReply.trim(), executedLogs: const []);
+      return AiActionExecution(
+          cleanText: rawReply.trim(), executedLogs: const []);
     }
 
     final logs = <String>[];
@@ -1240,6 +1284,16 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
           case 'VOLUME_MUTE':
             await adjustVolume('mute');
             logs.add('🔇 Áudio silenciado');
+            break;
+          case 'MEDIA_PLAY':
+          case 'MEDIA_PAUSE':
+          case 'MEDIA_PLAY_PAUSE':
+          case 'MEDIA_NEXT':
+          case 'MEDIA_PREVIOUS':
+          case 'MEDIA_STOP':
+            final mediaSpec = _mediaActionSpecs[cmd]!;
+            await controlMedia(mediaSpec.action);
+            logs.add(mediaSpec.logLabel);
             break;
           case 'OPEN_CAMERA':
             await openApp('camera');
@@ -1322,7 +1376,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
             break;
           case 'OPEN_OBSIDIAN':
             final opened = await openObsidianVault();
-            logs.add(opened ? '📓 Obsidian aberto' : '⚠️ Obsidian não encontrado');
+            logs.add(
+                opened ? '📓 Obsidian aberto' : '⚠️ Obsidian não encontrado');
             break;
           case 'SKILL':
             if (arg1.isNotEmpty) {
@@ -1387,4 +1442,103 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       executedLogs: logs,
     );
   }
+
+  static const Map<String, _MediaActionSpec> _mediaActionSpecs = {
+    'MEDIA_PLAY': _MediaActionSpec(
+      action: 'play',
+      logLabel: '▶️ Reprodução retomada',
+      message: '▶️ Reprodução de mídia retomada.',
+      speakText: 'Reproduzindo mídia.',
+    ),
+    'MEDIA_PAUSE': _MediaActionSpec(
+      action: 'pause',
+      logLabel: '⏸️ Mídia pausada',
+      message: '⏸️ Reprodução de mídia pausada.',
+      speakText: 'Mídia pausada.',
+    ),
+    'MEDIA_PLAY_PAUSE': _MediaActionSpec(
+      action: 'play_pause',
+      logLabel: '⏯️ Play/Pause enviado',
+      message: '⏯️ Comando Play/Pause enviado ao player ativo.',
+      speakText: 'Alternando reprodução.',
+    ),
+    'MEDIA_NEXT': _MediaActionSpec(
+      action: 'next',
+      logLabel: '⏭️ Próxima faixa',
+      message: '⏭️ Avançando para a próxima faixa.',
+      speakText: 'Próxima faixa.',
+    ),
+    'MEDIA_PREVIOUS': _MediaActionSpec(
+      action: 'previous',
+      logLabel: '⏮️ Faixa anterior',
+      message: '⏮️ Voltando para a faixa anterior.',
+      speakText: 'Faixa anterior.',
+    ),
+    'MEDIA_STOP': _MediaActionSpec(
+      action: 'stop',
+      logLabel: '⏹️ Mídia parada',
+      message: '⏹️ Reprodução de mídia interrompida.',
+      speakText: 'Mídia parada.',
+    ),
+  };
+
+  static final List<({RegExp pattern, String tag})> _naturalMediaMatchers = [
+    (
+      pattern: RegExp(
+        r'\b(pr[oó]xima|avan[cç]ar|pular)\s+(?:a\s+)?(?:m[uú]sica|faixa|v[ií]deo|m[ií]dia)\b|^(?:pr[oó]xima|pular)$',
+      ),
+      tag: 'MEDIA_NEXT',
+    ),
+    (
+      pattern: RegExp(
+        r'\b(?:m[uú]sica|faixa|v[ií]deo)\s+anterior\b|\bvoltar\s+(?:a\s+)?(?:m[uú]sica|faixa)\b',
+      ),
+      tag: 'MEDIA_PREVIOUS',
+    ),
+    (
+      pattern: RegExp(
+        r'\b(pausar|pausa)\s+(?:a\s+)?(?:m[uú]sica|m[ií]dia|reprodu[cç][aã]o|v[ií]deo|spotify|player)\b|^(?:pausar|pausa)$',
+      ),
+      tag: 'MEDIA_PAUSE',
+    ),
+    (
+      pattern: RegExp(
+        r'\b(tocar|reproduzir|continuar|retomar|dar\s+play|play\s+na)\s+(?:a\s+)?(?:m[uú]sica|m[ií]dia|reprodu[cç][aã]o|v[ií]deo|spotify|player)\b|^(?:dar\s+)?play$|^(?:retomar|continuar)\s+m[uú]sica$',
+      ),
+      tag: 'MEDIA_PLAY',
+    ),
+    (
+      pattern: RegExp(r'\bplay\s*/?\s*pause\b|^alternar\s+m[ií]dia$'),
+      tag: 'MEDIA_PLAY_PAUSE',
+    ),
+    (
+      pattern: RegExp(
+        r'\b(parar|interromper|encerrar)\s+(?:a\s+)?(?:m[uú]sica|m[ií]dia|reprodu[cç][aã]o|spotify|player)\b',
+      ),
+      tag: 'MEDIA_STOP',
+    ),
+  ];
+
+  static _MediaActionSpec? _matchMediaNaturalCommand(String lower) {
+    for (final entry in _naturalMediaMatchers) {
+      if (entry.pattern.hasMatch(lower)) {
+        return _mediaActionSpecs[entry.tag];
+      }
+    }
+    return null;
+  }
+}
+
+class _MediaActionSpec {
+  const _MediaActionSpec({
+    required this.action,
+    required this.logLabel,
+    required this.message,
+    required this.speakText,
+  });
+
+  final String action;
+  final String logLabel;
+  final String message;
+  final String speakText;
 }

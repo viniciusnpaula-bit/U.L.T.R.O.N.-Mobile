@@ -1,7 +1,7 @@
 name: ultron_mobile
 description: U.L.T.R.O.N. Mobile autonomous Android assistant
 publish_to: none
-version: 1.3.2+16
+version: 1.4.0+17
 environment:
   sdk: '>=3.3.0 <4.0.0'
 dependencies:
@@ -12,6 +12,7 @@ dependencies:
   path: ^1.9.1
   path_provider: ^2.1.5
   sqflite: ^2.4.2
+  sqflite_sqlcipher: ^3.1.0+1
   flutter_secure_storage: ^9.2.4
   package_info_plus: ^8.3.0
   open_filex: ^4.7.0
@@ -24,3 +25,5 @@ dev_dependencies:
   sqflite_common_ffi: ^2.3.0
 flutter:
   uses-material-design: true
+  shaders:
+    - shaders/crimson_core.frag

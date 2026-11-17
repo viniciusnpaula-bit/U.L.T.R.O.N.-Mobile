@@ -37,6 +37,35 @@ object UltronTtsHelper {
     private var player: MediaPlayer? = null
     private var offlineTts: TextToSpeech? = null
     private var ttsReady: Boolean = false
+    private var preferredVoiceName: String? = null
+    private var configuredPitch: Float = 0.55f
+    private var configuredRate: Float = 0.92f
+
+    fun configure(voiceName: String?, pitch: Float, rate: Float) {
+        preferredVoiceName = voiceName?.takeIf { it.isNotBlank() }
+        configuredPitch = pitch.coerceIn(0.3f, 2.0f)
+        // FlutterTts rate (~0.45..0.58) vs Android TextToSpeech native rate (1.0 normal)
+        configuredRate = (rate * 2.0f).coerceIn(0.5f, 2.0f)
+        if (ttsReady) {
+            applyConfigToEngine(offlineTts)
+        }
+    }
+
+    private fun applyConfigToEngine(engine: TextToSpeech?) {
+        if (engine == null) return
+        val name = preferredVoiceName
+        if (!name.isNullOrBlank()) {
+            try {
+                val match = engine.voices?.firstOrNull { it.name == name }
+                if (match != null) {
+                    engine.voice = match
+                }
+            } catch (_: Exception) {
+            }
+        }
+        engine.setPitch(configuredPitch)
+        engine.setSpeechRate(configuredRate)
+    }
 
     private fun markSpeechStarted() {
         isSpeaking = true
@@ -137,6 +166,7 @@ object UltronTtsHelper {
         scheduleIdleShutdown()
         markSpeechStarted()
         if (offlineTts != null && ttsReady) {
+            applyConfigToEngine(offlineTts)
             offlineTts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ultron_offline_utt")
             return
         }
@@ -144,9 +174,7 @@ object UltronTtsHelper {
             if (status == TextToSpeech.SUCCESS) {
                 ttsReady = true
                 offlineTts?.language = Locale("pt", "BR")
-                // Calibração do timbre característico do U.L.T.R.O.N. (grave, tático, pitch: ~0.55)
-                offlineTts?.setPitch(0.55f)
-                offlineTts?.setSpeechRate(0.92f)
+                applyConfigToEngine(offlineTts)
                 offlineTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
                         mainHandler.removeCallbacks(idleShutdownRunnable)

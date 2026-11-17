@@ -26,6 +26,9 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   final _url = TextEditingController(text: 'https://api.groq.com/openai/v1');
   final _model = TextEditingController(text: 'openai/gpt-oss-120b');
   final _key = TextEditingController();
+  final _sttUrl = TextEditingController(text: SttConfig.defaultEndpointUrl);
+  final _sttModel = TextEditingController(text: SttConfig.defaultModel);
+  final _sttKey = TextEditingController();
 
   List<AiProviderConfig> _providers = const [];
   List<String> _fetchedModels = const [];
@@ -46,16 +49,52 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
     _url.dispose();
     _model.dispose();
     _key.dispose();
+    _sttUrl.dispose();
+    _sttModel.dispose();
+    _sttKey.dispose();
     super.dispose();
   }
 
   Future<void> _reload() async {
     final list = await _store.load();
+    final stt = await _store.loadSttConfig();
     if (!mounted) return;
     setState(() {
       _providers = list;
+      if (stt != null) {
+        _sttUrl.text = stt.endpointUrl;
+        _sttModel.text = stt.model;
+      }
       _loading = false;
     });
+  }
+
+  Future<void> _saveStt() async {
+    final endpoint = _sttUrl.text.trim();
+    final modelName = _sttModel.text.trim();
+    final parsed = Uri.tryParse(endpoint);
+    if (parsed == null ||
+        parsed.scheme != 'https' ||
+        parsed.host.isEmpty ||
+        modelName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Informe endpoint HTTPS e modelo válidos para STT.'),
+        ),
+      );
+      return;
+    }
+    final existing = await _store.loadSttConfig();
+    final dedicatedKey =
+        _sttKey.text.trim().isNotEmpty ? _sttKey.text.trim() : (existing?.apiKey ?? '');
+    await _store.saveSttConfig(
+      SttConfig(endpointUrl: endpoint, model: modelName, apiKey: dedicatedKey),
+    );
+    _sttKey.clear();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Configuração STT salva com segurança.')),
+    );
   }
 
   Future<void> _persist(List<AiProviderConfig> next) async {
@@ -1044,6 +1083,56 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               letterSpacing: 0.8,
                             ),
                           ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  color: const Color(0xFF160509),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text(
+                          'TRANSCRIÇÃO DE VOZ (STT WHISPER)',
+                          style: TextStyle(
+                            color: _crimson,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _sttUrl,
+                          keyboardType: TextInputType.url,
+                          decoration: const InputDecoration(
+                            labelText: 'Endpoint STT',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _sttModel,
+                          decoration: const InputDecoration(
+                            labelText: 'Modelo STT',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: _sttKey,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText:
+                                'Chave API STT (opcional; reutiliza Groq cadastrado)',
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton(
+                          onPressed: _saveStt,
+                          child: const Text('SALVAR STT'),
                         ),
                       ],
                     ),

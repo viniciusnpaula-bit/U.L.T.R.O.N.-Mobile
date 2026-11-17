@@ -292,6 +292,45 @@ class AiProviderConfig {
   }
 }
 
+class SttConfig {
+  const SttConfig({
+    this.endpointUrl = defaultEndpointUrl,
+    this.model = defaultModel,
+    this.apiKey = '',
+    this.language = 'pt',
+  });
+
+  static const String defaultEndpointUrl =
+      'https://api.groq.com/openai/v1/audio/transcriptions';
+  static const String defaultModel = 'whisper-large-v3';
+
+  final String endpointUrl;
+  final String model;
+  final String apiKey;
+  final String language;
+
+  Map<String, dynamic> toJson() => {
+        'endpointUrl': endpointUrl,
+        'model': model,
+        'apiKey': apiKey,
+        'language': language,
+      };
+
+  factory SttConfig.fromJson(Map<String, dynamic> j) => SttConfig(
+        endpointUrl:
+            (j['endpointUrl'] as String?)?.trim().isNotEmpty == true
+                ? (j['endpointUrl'] as String).trim()
+                : defaultEndpointUrl,
+        model: (j['model'] as String?)?.trim().isNotEmpty == true
+            ? (j['model'] as String).trim()
+            : defaultModel,
+        apiKey: (j['apiKey'] as String?) ?? '',
+        language: (j['language'] as String?)?.trim().isNotEmpty == true
+            ? (j['language'] as String).trim()
+            : 'pt',
+      );
+}
+
 class _SingleProviderStore extends AiProviderStore {
   _SingleProviderStore(this._provider) : super(storage: null);
   final AiProviderConfig _provider;
@@ -308,7 +347,49 @@ class AiProviderStore {
       : _storage = storage ?? const FlutterSecureStorage();
 
   static const _key = 'ultron.ai.providers.v1';
+  static const _sttKey = 'ultron.ai.stt.v1';
   final FlutterSecureStorage _storage;
+
+  Future<SttConfig?> loadSttConfig() async {
+    final raw = await _storage.read(key: _sttKey);
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      return SttConfig.fromJson(Map<String, dynamic>.from(jsonDecode(raw)));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveSttConfig(SttConfig config) =>
+      _storage.write(key: _sttKey, value: jsonEncode(config.toJson()));
+
+  Future<void> deleteSttConfig() => _storage.delete(key: _sttKey);
+
+  /// Resolves the active STT configuration, reusing an enabled Groq chat
+  /// provider key automatically when no dedicated STT key was saved.
+  Future<SttConfig> resolveSttConfig() async {
+    final saved = await loadSttConfig();
+    if (saved != null && saved.apiKey.trim().isNotEmpty) {
+      return saved;
+    }
+    final providers = (await load())
+        .where((p) => p.enabled && p.apiKey.trim().isNotEmpty)
+        .toList()
+      ..sort((a, b) => a.priority.compareTo(b.priority));
+    for (final p in providers) {
+      final baseLower = p.baseUrl.toLowerCase();
+      final nameLower = p.name.toLowerCase();
+      if (baseLower.contains('api.groq.com') || nameLower.contains('groq')) {
+        return SttConfig(
+          endpointUrl: saved?.endpointUrl ?? SttConfig.defaultEndpointUrl,
+          model: saved?.model ?? SttConfig.defaultModel,
+          apiKey: p.apiKey,
+          language: saved?.language ?? 'pt',
+        );
+      }
+    }
+    return saved ?? const SttConfig();
+  }
 
   /// Legacy Llama models that were deprecated/decommissioned or replaced by
   /// newer default flagship models.

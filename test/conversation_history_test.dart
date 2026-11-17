@@ -82,4 +82,22 @@ void main() {
     expect(await history.clear(), 1);
     expect(await history.messages(), isEmpty);
   });
+
+  test('v2 schema creates memory and voice tables alongside messages', () async {
+    final history = await _open();
+    final db = await history.database;
+    final rows = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table'",
+    );
+    final tables = rows.map((r) => r['name'] as String).toSet();
+    expect(
+      tables,
+      containsAll(<String>[
+        'messages',
+        'voice_corrections',
+        'voice_shortcuts',
+        'user_preferences',
+      ]),
+    );
+  });
 }

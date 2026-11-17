@@ -1,6 +1,6 @@
-# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.2.0`)
+# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.3.2`)
 
-Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado para operar com estética tática **AMOLED Carmesim**, segurança **Fail-Closed**, **Action Gate tático**, 16 **Slash Commands determinísticos**, **Visão Multimodal**, controle direto sobre o hardware do celular e integração nativa com múltiplos provedores de IA.
+Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado para operar com estética tática **AMOLED Carmesim**, segurança **Fail-Closed**, **Action Gate tático**, **Slash Commands determinísticos**, **Visão Multimodal**, controle direto sobre o hardware do celular e integração nativa com múltiplos provedores de IA.
 
 > **Alvo de Referência**: Dispositivos Android `arm64-v8a` (ex.: Samsung Galaxy A34 5G — Dimensity 1080, Mali-G68, 6–8 GB RAM), sem pesos de LLM locais para preservar bateria, memória e temperatura.
 
@@ -152,4 +152,10 @@ android/
 
 ### Esteira CI/CD e Releases Automáticos (GitHub Actions)
 - **Flutter CI (`.github/workflows/flutter-ci.yml`)**: Executado a cada push ou PR na `main` (roda `flutter analyze`, `flutter test`, compila o APK de debug e valida permissões e `applicationId`).
-- **Android Release (`.github/workflows/android-release.yml`)**: Ao enviar uma tag no formato `vX.Y.Z` (ex.: `git tag v0.6.0 && git push origin v0.6.0`), o GitHub Actions compila o APK `arm64` assinado com os segredos do repositório (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`), verifica a assinatura com `apksigner` e publica automaticamente na aba **Releases** do GitHub.
+- **Android Release (`.github/workflows/android-release.yml`)**: Ao enviar uma tag no formato `vX.Y.Z` (ex.: `git tag v0.6.0 && git push origin v0.6.0`), o GitHub Actions compila o APK `arm64` assinado com os segredos do repositório (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`), verifica a assinatura com `apksigner` e publica automaticamente na aba **Releases** do GitHub. Consulte [docs/release-checklist.md](docs/release-checklist.md) para o checklist de validação no Galaxy A34 5G.
+
+### 7. 🔒 Pipeline de Áudio, Memória SQLCipher e Pareamento Desktop LAN
+- **Banco Criptografado SQLCipher v2 (`DatabaseKeyVault` + `ConversationHistory`)**: Chave aleatória de 256 bits no `flutter_secure_storage` com migração atômica do SQLite legado (`ultron_conversations.db`).
+- **Pipeline Whisper STT + VAD (`AudioCaptureSource`, `VadSegmenter`, `GroqWhisperSttService`, `VoicePipelineController`)**: Captura PCM em memória com AEC/NS/AGC nativo, detecção de fala/silêncio, filtros anti-alucinação Whisper, Push-to-Talk e modo contínuo com barge-in seletivo.
+- **Memória, Correções PT-BR e Atalhos (`/memory`)**: Correções fonéticas persistidas (`VoiceCorrectionsService`), preferências e atalhos por voz com confirmação explícita em `MemorySettingsScreen`.
+- **Desktop LAN & Quick Settings Tile (`/desktop`)**: Pareamento LAN assinado com HMAC-SHA256 (`DesktopPairingService`) e atalho rápido na barra do Android (`UltronTileService`) sempre protegido pelo `AuthGate`.

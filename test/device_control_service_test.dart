@@ -69,11 +69,13 @@ void main() {
   test('executes offline time readout and Eco-VAD sentinel toggle', () async {
     final service = DeviceControlService(channel: channel);
 
-    final timeRes = await service.tryExecuteNaturalCommand('Ei Ultron, que horas são?');
+    final timeRes =
+        await service.tryExecuteNaturalCommand('Ei Ultron, que horas são?');
     expect(timeRes?.handled, isTrue);
     expect(calls.last.method, 'speakOfflineFishVoice');
 
-    final vadRes = await service.tryExecuteNaturalCommand('ativar sentinela de voz');
+    final vadRes =
+        await service.tryExecuteNaturalCommand('ativar sentinela de voz');
     expect(vadRes?.handled, isTrue);
     expect(calls.last.method, 'setAudioSentinel');
     expect(calls.last.arguments, {'enabled': true});
@@ -95,7 +97,8 @@ void main() {
     expect(triggeredWake, isTrue);
   });
 
-  test('wake word reliability: pending queue, diagnostics and boot opt-in', () async {
+  test('wake word reliability: pending queue, diagnostics and boot opt-in',
+      () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
@@ -136,7 +139,8 @@ void main() {
     expect(diag.kwsFrames, 11);
     expect(diag.kwsDecodes, 9);
     expect(diag.toReport(), contains('Pipeline KWS: 11 janelas · 9 decodes'));
-    expect(diag.toReport(), contains('FALHA: modelo sherpa-onnx não carregado'));
+    expect(
+        diag.toReport(), contains('FALHA: modelo sherpa-onnx não carregado'));
     // Sem modelo KWS carregado e sem captura confirmada: o relatório não pode fingir o contrário.
     expect(diag.dedicatedKws, isFalse);
     expect(diag.capturing, isFalse);
@@ -159,7 +163,9 @@ void main() {
     expect(diag.lastError, 'nenhum');
   });
 
-  test('reads, replies in background, and sends WhatsApp/SMS via natural language', () async {
+  test(
+      'reads, replies in background, and sends WhatsApp/SMS via natural language',
+      () async {
     final service = DeviceControlService(channel: channel);
 
     final readRes = await service.tryExecuteNaturalCommand('ler mensagens');
@@ -182,7 +188,8 @@ void main() {
     expect(calls.last.arguments['text'], 'Já estou a caminho');
   });
 
-  test('listenVoice invokes native speech recognizer and trims output', () async {
+  test('listenVoice invokes native speech recognizer and trims output',
+      () async {
     final service = DeviceControlService(channel: channel);
     final spoken = await service.listenVoice();
     expect(spoken, 'ligar lanterna');
@@ -204,7 +211,8 @@ void main() {
     expect(calls.last.arguments, {'percent': 85});
   });
 
-  test('parses and executes AI [ACTION:...] tags and cleans reply text', () async {
+  test('parses and executes AI [ACTION:...] tags and cleans reply text',
+      () async {
     final service = DeviceControlService(channel: channel);
 
     final res = await service.executeAiActions(
@@ -225,14 +233,17 @@ void main() {
       final hash = await service.computeFileSha256(file);
       expect(hash.length, 64);
       expect(await service.verifyFileIntegrity(file, hash), isTrue);
-      expect(await service.verifyFileIntegrity(file, 'wrong_hash_value'), isFalse);
+      expect(
+          await service.verifyFileIntegrity(file, 'wrong_hash_value'), isFalse);
     } finally {
       await tempDir.delete(recursive: true);
     }
   });
 
-  test('executes Obsidian Second Brain actions and builds contextual prompt', () async {
-    final tempDir = await Directory.systemTemp.createTemp('ultron_obsidian_test_dc_');
+  test('executes Obsidian Second Brain actions and builds contextual prompt',
+      () async {
+    final tempDir =
+        await Directory.systemTemp.createTemp('ultron_obsidian_test_dc_');
     try {
       final obs = ObsidianService(tempDir);
       await obs.initialize();
@@ -242,18 +253,21 @@ void main() {
       );
 
       // Natural command: capture thought to inbox
-      final inboxRes = await service.tryExecuteNaturalCommand('ideia: Criar dashboard tático');
+      final inboxRes = await service
+          .tryExecuteNaturalCommand('ideia: Criar dashboard tático');
       expect(inboxRes?.handled, isTrue);
       expect(inboxRes?.message, contains('Inbox'));
 
       // Natural command: save long-term memory
-      final memRes = await service.tryExecuteNaturalCommand('lembrar que meu codinome é Hawk');
+      final memRes = await service
+          .tryExecuteNaturalCommand('lembrar que meu codinome é Hawk');
       expect(memRes?.handled, isTrue);
       expect(memRes?.message, contains('Operador'));
 
       // Contextual prompt injection
       final prompt = await service.buildContextualSystemPrompt();
-      expect(prompt, contains('SEGUNDO CÉREBRO — MEMÓRIA ATIVA DO COFRE OBSIDIAN'));
+      expect(prompt,
+          contains('SEGUNDO CÉREBRO — MEMÓRIA ATIVA DO COFRE OBSIDIAN'));
       expect(prompt, contains('Perfil do Operador'));
 
       // AI tags: INBOX, REMEMBER, OPEN_OBSIDIAN
@@ -279,5 +293,49 @@ void main() {
     expect(sync['body'], contains('SYNC_TELEMETRY'));
     expect(sync['signature'], startsWith('sha256='));
     expect(sync['timestamp'], isNotEmpty);
+  });
+
+  test('executes natural media playback commands and AI MEDIA_* tags',
+      () async {
+    final service = DeviceControlService(channel: channel);
+
+    final pauseRes = await service.tryExecuteNaturalCommand('pausar música');
+    expect(pauseRes?.handled, isTrue);
+    expect(calls.last.method, 'mediaControl');
+    expect(calls.last.arguments, {'action': 'pause'});
+
+    final playRes = await service.tryExecuteNaturalCommand('continuar música');
+    expect(playRes?.handled, isTrue);
+    expect(calls.last.arguments, {'action': 'play'});
+
+    final nextRes = await service.tryExecuteNaturalCommand('próxima música');
+    expect(nextRes?.handled, isTrue);
+    expect(calls.last.arguments, {'action': 'next'});
+
+    final prevRes = await service.tryExecuteNaturalCommand('música anterior');
+    expect(prevRes?.handled, isTrue);
+    expect(calls.last.arguments, {'action': 'previous'});
+
+    final stopRes = await service.tryExecuteNaturalCommand('parar mídia');
+    expect(stopRes?.handled, isTrue);
+    expect(calls.last.arguments, {'action': 'stop'});
+
+    // Must not hijack non-media sentinel phrases
+    final sentinelRes =
+        await service.tryExecuteNaturalCommand('parar sentinela de voz');
+    expect(sentinelRes?.handled, isTrue);
+    expect(calls.last.method, 'setAudioSentinel');
+
+    final aiExec = await service.executeAiActions(
+      'Avançando a faixa. [ACTION:MEDIA_NEXT] [ACTION:MEDIA_PAUSE]',
+    );
+    expect(aiExec.cleanText, 'Avançando a faixa.');
+    expect(aiExec.executedLogs.length, 2);
+    expect(calls.skip(calls.length - 2).map((c) => c.arguments['action']), [
+      'next',
+      'pause',
+    ]);
+
+    await expectLater(service.controlMedia('invalid_cmd'), throwsArgumentError);
   });
 }

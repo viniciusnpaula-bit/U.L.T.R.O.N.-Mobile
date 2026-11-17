@@ -60,8 +60,12 @@ model_files=(
 # shortcut: tokens fixos para o modelo Gigaspeech fixado; ao trocar MODEL_NAME, regenere
 # com sentencepiece a partir de bpe.model e confirme que nenhum token vira <unk>.
 keywords=(
-  "▁ UL T RO N :1.5 #0.25"
-  "▁ U T RO N :1.0 #0.25"
+  "▁ UL T RO N :2.0 #0.12"
+  "▁ U T RO N :1.8 #0.12"
+  "▁OUT RO N :1.8 #0.12"
+  "▁O L T RO N :1.6 #0.14"
+  "▁A L T RO N :1.6 #0.14"
+  "▁ UL T RO M :1.6 #0.14"
 )
 
 write_keywords() {

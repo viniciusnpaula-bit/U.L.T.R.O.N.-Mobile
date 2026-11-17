@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:math';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -9,18 +11,30 @@ import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
 import '../../models/chat_message.dart';
 import '../../services/ai_provider_service.dart';
+import '../../services/android_actions_service.dart';
 import '../../services/app_update_service.dart';
+import '../../services/audio_capture_service.dart';
 import '../../services/conversation_history.dart';
+import '../../services/desktop_pairing_service.dart';
 import '../../services/device_control_service.dart';
 import '../../services/obsidian_service.dart';
 import '../../services/slash_command_parser.dart';
 import '../../services/speech_text.dart';
+import '../../services/stt_service.dart';
+import '../../services/voice_corrections_service.dart';
+import '../../services/voice_pipeline_controller.dart';
 import '../../services/voice_service.dart';
+import '../../services/voice_shortcuts_service.dart';
+import '../widgets/action_confirmation_dialog.dart';
+import '../widgets/core_orb.dart' show CoreOrb, CoreStage;
+import '../widgets/voice_selector_sheet.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
+import 'desktop_pairing_screen.dart';
+import 'memory_settings_screen.dart';
 import 'update_screen.dart';
 
-enum CoreStage { center, corner, hidden }
+export '../widgets/core_orb.dart' show CoreStage;
 
 enum _ActivePanel { main, device, security, help, providers }
 
@@ -39,10 +53,26 @@ class _FeedEntry {
 }
 
 class CoreScreen extends StatefulWidget {
-  const CoreScreen({super.key, required this.gate, required this.vault});
+  const CoreScreen({
+    super.key,
+    required this.gate,
+    required this.vault,
+    this.voiceService,
+    this.captureSource,
+    this.sttService,
+    this.shaderProgram,
+    this.announceOnline = false,
+    this.onlineAnnouncement = 'Ultron online. Todos os sistemas prontos.',
+  });
 
   final AuthGate gate;
   final PinVault vault;
+  final VoiceService? voiceService;
+  final AudioCaptureSource? captureSource;
+  final GroqWhisperSttService? sttService;
+  final FragmentProgram? shaderProgram;
+  final bool announceOnline;
+  final String onlineAnnouncement;
 
   @override
   State<CoreScreen> createState() => _CoreScreenState();
@@ -63,11 +93,19 @@ class _CoreScreenState extends State<CoreScreen>
   final messageBodyController = TextEditingController();
   final scrollController = ScrollController();
   final coreTime = ValueNotifier<double>(0);
-  final voiceService = VoiceService();
+  late final VoiceService voiceService = widget.voiceService ?? VoiceService();
   final updateService = AppUpdateService();
   final providerStore = AiProviderStore();
   final deviceService = DeviceControlService();
   final actionGate = const ActionGate();
+  late final VoicePipelineController voicePipeline;
+  late final AndroidActionsService androidActions;
+  final desktopPairing = DesktopPairingService();
+  late AppLifecycleState _lifecycleState;
+
+  bool get _isForegroundActive =>
+      _lifecycleState == AppLifecycleState.resumed &&
+      widget.gate.isAuthenticated;
 
   CoreStage stage = CoreStage.center;
   _ActivePanel panel = _ActivePanel.main;
@@ -85,10 +123,11 @@ class _CoreScreenState extends State<CoreScreen>
   VoiceProfile selectedVoiceProfile = VoiceProfile.grave;
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
-  String installedVersion = 'v1.2.1';
+  String installedVersion = 'v1.4.0';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
+  String? _lastShownPipelineError;
   List<MobileSkill> mobileSkills = const [];
   List<CapturedNotification> recentMessages = const [];
 
@@ -107,13 +146,33 @@ class _CoreScreenState extends State<CoreScreen>
   @override
   void initState() {
     super.initState();
+    _lifecycleState =
+        WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
+    androidActions = AndroidActionsService(gate: widget.gate);
+    voicePipeline = VoicePipelineController(
+      gate: widget.gate,
+      capture: widget.captureSource ?? MethodChannelAudioCaptureSource(),
+      stt: widget.sttService ?? GroqWhisperSttService(),
+      voiceService: voiceService,
+      corrections: VoiceCorrectionsService(),
+      shortcuts: VoiceShortcutsService(),
+      onConfirmShortcut: _confirmShortcut,
+      onExecuteShortcut: _executeShortcut,
+      onTranscript: _handleVoiceTranscript,
+    )..addListener(_onVoicePipelineChanged);
+    voicePipeline.handleLifecycleState(_lifecycleState);
     ticker = createTicker((duration) {
       coreTime.value = duration.inMicroseconds / 1000000;
     });
     ticker.start();
     active = true;
-    voiceService.initialize();
+    unawaited(voiceService.initialize().catchError((_) {}));
+    if (widget.announceOnline && _isForegroundActive) {
+      unawaited(
+        voiceService.speak(widget.onlineAnnouncement).catchError((_) {}),
+      );
+    }
     deviceService.setNativeEventHandlers(
       onFlip: () {
         if (!mounted) return;
@@ -147,21 +206,104 @@ class _CoreScreenState extends State<CoreScreen>
     _loadInitialState();
     _checkUpdate();
     // v1.2.1: wake word captada com o app fechado/bloqueado fica pendente no nativo.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _consumePendingWakeWord());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _consumePendingWakeWord();
+      unawaited(_consumePendingTileAction());
+    });
+  }
+
+  Future<bool> _consumePendingTileAction() async {
+    try {
+      final action = await androidActions.consumeTileActionIfAuthenticated();
+      if (!mounted || !_isForegroundActive) return false;
+      if (action == TileLaunchAction.listenVoice) {
+        await voiceService.stop();
+        await voicePipeline.startPushToTalk();
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _onVoicePipelineChanged() {
+    if (!mounted) return;
+    final err = voicePipeline.lastError;
+    if (err != null && err != _lastShownPipelineError) {
+      _lastShownPipelineError = err;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(err, style: const TextStyle(fontSize: 11)),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } else if (err == null) {
+      _lastShownPipelineError = null;
+    }
+    setState(() {});
+  }
+
+  Future<void> _handleVoiceTranscript(String transcript) async {
+    if (!mounted || sending) return;
+    commandController.text = transcript;
+    await saveCommand();
+  }
+
+  Future<bool> _confirmShortcut(VoiceShortcut shortcut) async {
+    if (!mounted) return false;
+    return showActionConfirmationDialog(
+      context,
+      ActionConfirmationRequest(
+        title: 'Confirmar atalho de voz',
+        description:
+            'Executar "${shortcut.triggerPhrase}" (${shortcut.actionType})?',
+        actionLabel: 'Confirmar',
+      ),
+    );
+  }
+
+  Future<void> _executeShortcut(VoiceShortcut shortcut) async {
+    if (!mounted) return;
+    switch (shortcut.actionType) {
+      case 'open_security':
+        await _runCommand(UltronCommand.security);
+        break;
+      case 'open_history':
+        await _runCommand(UltronCommand.history);
+        break;
+      case 'open_memory':
+        await _runCommand(UltronCommand.memory);
+        break;
+      case 'open_settings':
+        await _runCommand(UltronCommand.settings);
+        break;
+      case 'lock_app':
+        widget.gate.lock();
+        break;
+      default:
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Atalho acionado: ${shortcut.triggerPhrase}')),
+        );
+    }
   }
 
   /// Processa uma ativação por "Ultron" (ao vivo ou pendente do segundo plano).
-  void _handleWakeWord(String phrase) {
-    if (!mounted || sending || listeningVoice || voiceService.isSpeaking) {
+  Future<void> _handleWakeWord(String phrase) async {
+    if (!mounted || sending || listeningVoice || !_isForegroundActive) {
       return;
+    }
+    if (voiceService.isSpeaking) {
+      await voiceService.stop();
     }
     HapticFeedback.heavyImpact();
     final inlineCmd = WakeWord.extractCommand(phrase);
     if (inlineCmd.length >= 2) {
       commandController.text = inlineCmd;
-      saveCommand();
+      await saveCommand();
       return;
     }
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
@@ -171,7 +313,7 @@ class _CoreScreenState extends State<CoreScreen>
         duration: Duration(seconds: 2),
       ),
     );
-    _startVoiceInput();
+    await _startVoiceInput();
   }
 
   Future<void> _consumePendingWakeWord() async {
@@ -380,7 +522,8 @@ class _CoreScreenState extends State<CoreScreen>
     }
     final dump = recentMessages
         .take(10)
-        .map((m) => '[${m.timeFormatted}] ${m.appLabel} - ${m.sender}: ${m.text}')
+        .map((m) =>
+            '[${m.timeFormatted}] ${m.appLabel} - ${m.sender}: ${m.text}')
         .join('\n');
     commandController.text =
         'Faça um Resumo Tático inteligente das minhas mensagens recentes (separe o que é urgente de ruído e sugira respostas rápidas):\n$dump';
@@ -454,7 +597,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Erro ao responder: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Erro ao responder: $e',
+              style: const TextStyle(fontSize: 11)),
         ),
       );
     }
@@ -490,7 +634,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Falha no envio: $e', style: const TextStyle(fontSize: 11)),
+          content:
+              Text('Falha no envio: $e', style: const TextStyle(fontSize: 11)),
         ),
       );
     }
@@ -507,7 +652,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Falha na lanterna: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Falha na lanterna: $e',
+              style: const TextStyle(fontSize: 11)),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -542,10 +688,10 @@ class _CoreScreenState extends State<CoreScreen>
   }
 
   void _syncTickerWithState({AppLifecycleState? lifecycle}) {
-    final shouldRun = (lifecycle == null ||
-            lifecycle == AppLifecycleState.resumed) &&
-        panel == _ActivePanel.main &&
-        stage != CoreStage.hidden;
+    final shouldRun =
+        (lifecycle == null || lifecycle == AppLifecycleState.resumed) &&
+            panel == _ActivePanel.main &&
+            stage != CoreStage.hidden;
     if (shouldRun && !active) {
       ticker.start();
       active = true;
@@ -557,10 +703,13 @@ class _CoreScreenState extends State<CoreScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycleState = state;
+    voicePipeline.handleLifecycleState(state);
     if (state != AppLifecycleState.resumed) {
       voiceService.stop();
     } else {
       _consumePendingWakeWord();
+      unawaited(_consumePendingTileAction());
     }
     _syncTickerWithState(lifecycle: state);
   }
@@ -568,6 +717,8 @@ class _CoreScreenState extends State<CoreScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    voicePipeline.removeListener(_onVoicePipelineChanged);
+    voicePipeline.dispose();
     deviceService.setNativeEventHandlers(onFlip: null, onWakeWord: null);
     ticker.dispose();
     coreTime.dispose();
@@ -670,7 +821,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Erro ao salvar no Vault: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Erro ao salvar no Vault: $e',
+              style: const TextStyle(fontSize: 11)),
         ),
       );
     }
@@ -709,7 +861,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Erro ao salvar no Inbox: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Erro ao salvar no Inbox: $e',
+              style: const TextStyle(fontSize: 11)),
         ),
       );
     }
@@ -984,7 +1137,9 @@ class _CoreScreenState extends State<CoreScreen>
           timestamp: _formatTime(replyNow),
         ),
       );
-      await voiceService.speak(actionExec.cleanText);
+      if (_isForegroundActive) {
+        await voiceService.speak(actionExec.cleanText);
+      }
     } catch (error) {
       if (!mounted) return;
       _appendFeed(
@@ -1037,6 +1192,101 @@ class _CoreScreenState extends State<CoreScreen>
     return result ?? false;
   }
 
+  Future<void> _openVoiceSelector() async {
+    await showVoiceSelectorSheet(
+      context,
+      voiceService: voiceService,
+      onChanged: () {
+        if (mounted) {
+          setState(() => selectedVoiceProfile = voiceService.profile);
+        }
+      },
+    );
+  }
+
+  Future<bool> _setOfflineSentinelEnabled(bool next) async {
+    if (next && voicePipeline.isContinuousEnabled) {
+      await voicePipeline.stopContinuousListening();
+    }
+    final requested = await deviceService.setAudioSentinel(next);
+    var real = false;
+    if (next) {
+      final attempts = requested ? 16 : 12;
+      final step = Duration(milliseconds: requested ? 250 : 500);
+      for (var i = 0; i < attempts && !real; i++) {
+        real = await deviceService.isAudioSentinelRunning();
+        if (real) break;
+        await Future<void>.delayed(step);
+      }
+      if (real) {
+        real = await deviceService.isAudioSentinelRunning();
+      }
+    }
+    if (!mounted) return real;
+    setState(() => ecoVadSentinelRunning = real);
+    if (next && !real) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '⚠️ Sentinela não confirmou captura do microfone. Conceda permissão e veja o diagnóstico em CELULAR.',
+            style: TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+    } else if (next && real) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '🎙️ Palavra de ativação "Ultron" ativa (1º e 2º plano).',
+            style: TextStyle(fontSize: 11),
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+    return real;
+  }
+
+  Future<void> _toggleContinuousListening() async {
+    HapticFeedback.selectionClick();
+    if (ecoVadSentinelRunning) {
+      await _setOfflineSentinelEnabled(false);
+      return;
+    }
+    if (voicePipeline.isContinuousEnabled) {
+      await voicePipeline.stopContinuousListening();
+      return;
+    }
+    SttConfig? dedicatedStt;
+    try {
+      dedicatedStt = await providerStore.loadSttConfig();
+    } catch (_) {
+      dedicatedStt = null;
+    }
+    if (dedicatedStt == null || dedicatedStt.apiKey.trim().isEmpty) {
+      await _setOfflineSentinelEnabled(true);
+      return;
+    }
+    final ok = await voicePipeline.startContinuousListening();
+    if (!mounted || ok || voicePipeline.lastError == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(voicePipeline.lastError!)),
+    );
+  }
+
+  Future<void> _togglePushToTalk() async {
+    HapticFeedback.lightImpact();
+    if (voicePipeline.isPushToTalkActive) {
+      await voicePipeline.stopPushToTalk();
+      return;
+    }
+    final ok = await voicePipeline.startPushToTalk();
+    if (!mounted || ok || voicePipeline.lastError == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(voicePipeline.lastError!)),
+    );
+  }
+
   Future<void> _runCommand(
     UltronCommand command, [
     String argument = '',
@@ -1066,6 +1316,26 @@ class _CoreScreenState extends State<CoreScreen>
         break;
       case UltronCommand.history:
         await _openHistory();
+        break;
+      case UltronCommand.memory:
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => MemorySettingsScreen(voiceService: voiceService),
+          ),
+        );
+        if (mounted) {
+          setState(() => selectedVoiceProfile = voiceService.profile);
+        }
+        break;
+      case UltronCommand.desktop:
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => DesktopPairingScreen(
+              pairingService: desktopPairing,
+              actionsService: androidActions,
+            ),
+          ),
+        );
         break;
       case UltronCommand.settings:
         await _openSettings();
@@ -1144,7 +1414,8 @@ class _CoreScreenState extends State<CoreScreen>
           timestamp: timeStr,
         ));
         try {
-          final providers = (await providerStore.load()).where((p) => p.enabled).toList();
+          final providers =
+              (await providerStore.load()).where((p) => p.enabled).toList();
           if (providers.isEmpty) {
             _appendFeed(_FeedEntry(
               isUser: false,
@@ -1159,7 +1430,8 @@ class _CoreScreenState extends State<CoreScreen>
             _appendFeed(_FeedEntry(
               isUser: false,
               senderLabel: 'Auto-Discovery (/models)',
-              text: 'Modelos disponíveis em ${activeP.name} (${activeP.baseUrl}):\n$modelsList',
+              text:
+                  'Modelos disponíveis em ${activeP.name} (${activeP.baseUrl}):\n$modelsList',
               timestamp: timeStr,
             ));
           }
@@ -1173,7 +1445,8 @@ class _CoreScreenState extends State<CoreScreen>
         }
         break;
       case UltronCommand.messages:
-        final res = await deviceService.tryExecuteNaturalCommand('ler mensagens');
+        final res =
+            await deviceService.tryExecuteNaturalCommand('ler mensagens');
         await _refreshDeviceStatus();
         if (res != null) {
           _appendFeed(_FeedEntry(
@@ -1192,11 +1465,13 @@ class _CoreScreenState extends State<CoreScreen>
           _appendFeed(_FeedEntry(
             isUser: false,
             senderLabel: 'Sentinela de Mensagens',
-            text: 'Uso: /reply <texto da resposta> ou "responder para Nome: <texto>"',
+            text:
+                'Uso: /reply <texto da resposta> ou "responder para Nome: <texto>"',
             timestamp: timeStr,
           ));
         } else {
-          final res = await deviceService.tryExecuteNaturalCommand('responder: $argument');
+          final res = await deviceService
+              .tryExecuteNaturalCommand('responder: $argument');
           if (res != null) {
             _appendFeed(_FeedEntry(
               isUser: false,
@@ -1227,7 +1502,8 @@ class _CoreScreenState extends State<CoreScreen>
           ));
           return;
         }
-        final msg = await deviceService.triggerPcKillSwitch(reason: 'slash_killswitch');
+        final msg =
+            await deviceService.triggerPcKillSwitch(reason: 'slash_killswitch');
         _appendFeed(_FeedEntry(
           isUser: false,
           senderLabel: 'Kill Switch',
@@ -1339,123 +1615,141 @@ class _CoreScreenState extends State<CoreScreen>
       return _buildCamouflageScreen();
     }
     return Scaffold(
-        backgroundColor: const Color(0xFF0A0002),
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: Column(
-              children: [
-                // Global Operator Selector Bar
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xCC0A0002),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _border),
-                  ),
-                  child: Row(
-                    children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: const BoxDecoration(
-                              color: _crimson,
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(color: _crimson, blurRadius: 6),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          const Text(
-                            'U.L.T.R.O.N. 2.0',
-                            style: TextStyle(
-                              color: _crimson,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 1.1,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _TopNavPill(
-                                label: 'NÚCLEO',
-                                selected: panel == _ActivePanel.main,
-                                onTap: () => _setPanel(_ActivePanel.main),
-                              ),
-                              const SizedBox(width: 4),
-                              _TopNavPill(
-                                label: 'CELULAR',
-                                selected: panel == _ActivePanel.device,
-                                onTap: () {
-                                  _refreshDeviceStatus();
-                                  _setPanel(_ActivePanel.device);
-                                },
-                              ),
-                              const SizedBox(width: 4),
-                              _TopNavPill(
-                                label: 'PROVEDORES',
-                                selected: panel == _ActivePanel.providers,
-                                onTap: () => _setPanel(_ActivePanel.providers),
-                              ),
-                              const SizedBox(width: 4),
-                              _TopNavPill(
-                                label: 'HISTÓRICO',
-                                selected: false,
-                                onTap: _openHistory,
-                              ),
-                              const SizedBox(width: 4),
-                              InkWell(
-                                onTap: _toggleAudio,
-                                borderRadius: BorderRadius.circular(6),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(4),
-                                  child: Icon(
-                                    isAudioOn
-                                        ? Icons.volume_up
-                                        : Icons.volume_off,
-                                    size: 15,
-                                    color: isAudioOn
-                                        ? _crimson
-                                        : const Color(0xFFA89698),
-                                  ),
-                                ),
-                              ),
+      backgroundColor: const Color(0xFF0A0002),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Column(
+            children: [
+              // Global Operator Selector Bar
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xCC0A0002),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: Row(
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: _crimson,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(color: _crimson, blurRadius: 6),
                             ],
                           ),
                         ),
+                        const SizedBox(width: 6),
+                        const Text(
+                          'U.L.T.R.O.N. 2.0',
+                          style: TextStyle(
+                            color: _crimson,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _TopNavPill(
+                              label: 'NÚCLEO',
+                              selected: panel == _ActivePanel.main,
+                              onTap: () => _setPanel(_ActivePanel.main),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'VOZ',
+                              selected: false,
+                              onTap: _openVoiceSelector,
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'CELULAR',
+                              selected: panel == _ActivePanel.device,
+                              onTap: () {
+                                _refreshDeviceStatus();
+                                _setPanel(_ActivePanel.device);
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'PROVEDORES',
+                              selected: panel == _ActivePanel.providers,
+                              onTap: () => _setPanel(_ActivePanel.providers),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'MEMÓRIA',
+                              selected: false,
+                              onTap: () => _runCommand(UltronCommand.memory),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'DESKTOP',
+                              selected: false,
+                              onTap: () => _runCommand(UltronCommand.desktop),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'HISTÓRICO',
+                              selected: false,
+                              onTap: _openHistory,
+                            ),
+                            const SizedBox(width: 4),
+                            InkWell(
+                              onTap: _toggleAudio,
+                              borderRadius: BorderRadius.circular(6),
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(
+                                  isAudioOn
+                                      ? Icons.volume_up
+                                      : Icons.volume_off,
+                                  size: 15,
+                                  color: isAudioOn
+                                      ? _crimson
+                                      : const Color(0xFFA89698),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
+              ),
+              const SizedBox(height: 8),
 
-                // Main Screen Content (Main / Device / Security / Help / Providers)
-                Expanded(
-                  child: switch (panel) {
-                    _ActivePanel.main => _buildMainPanel(),
-                    _ActivePanel.device => _buildDevicePanel(),
-                    _ActivePanel.security => _buildSecurityPanel(),
-                    _ActivePanel.help => _buildHelpPanel(),
-                    _ActivePanel.providers => _buildProvidersPanel(),
-                  },
-                ),
-              ],
-            ),
+              // Main Screen Content (Main / Device / Security / Help / Providers)
+              Expanded(
+                child: switch (panel) {
+                  _ActivePanel.main => _buildMainPanel(),
+                  _ActivePanel.device => _buildDevicePanel(),
+                  _ActivePanel.security => _buildSecurityPanel(),
+                  _ActivePanel.help => _buildHelpPanel(),
+                  _ActivePanel.providers => _buildProvidersPanel(),
+                },
+              ),
+            ],
           ),
         ),
-      );
+      ),
+    );
   }
 
   Widget _buildMainPanel() => Column(
@@ -1647,14 +1941,14 @@ class _CoreScreenState extends State<CoreScreen>
             child: Row(
               children: [
                 const Text(
-                  'EI, ULTRON ›',
+                  '›',
                   style: TextStyle(
                     color: _crimson,
-                    fontSize: 11,
+                    fontSize: 13,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 Expanded(
                   child: TextField(
                     controller: commandController,
@@ -1668,41 +1962,109 @@ class _CoreScreenState extends State<CoreScreen>
                     decoration: InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
-                      hintText: listeningVoice
-                          ? '🎤 Ouvindo ao vivo (toque no 🎤 para concluir)…'
-                          : sending
-                              ? 'Consultando provedor ativo…'
-                              : 'Digite /help, /settings ou toque no 🎤 para falar...',
+                      hintText: voicePipeline.isPushToTalkActive
+                          ? '🎤 Gravando Push-to-Talk…'
+                          : listeningVoice
+                              ? '🎤 Ouvindo ao vivo (toque no 🎤 para concluir)…'
+                              : sending
+                                  ? 'Consultando provedor ativo…'
+                                  : 'Comando ou toque/segure 🎤...',
                       hintStyle: TextStyle(
-                        color: listeningVoice
-                            ? _crimson
-                            : const Color(0xFF635355),
+                        color:
+                            (listeningVoice || voicePipeline.isPushToTalkActive)
+                                ? _crimson
+                                : const Color(0xFF635355),
                         fontSize: 11,
                       ),
                     ),
                   ),
                 ),
-                InkWell(
-                  onTap: sending ? null : _startVoiceInput,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.all(7),
-                    margin: const EdgeInsets.only(right: 6),
-                    decoration: BoxDecoration(
-                      color: listeningVoice
-                          ? _crimson.withValues(alpha: 0.25)
-                          : const Color(0xFF2E0305),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: listeningVoice
-                            ? _crimson
-                            : _crimson.withValues(alpha: 0.35),
+                Builder(
+                  builder: (context) {
+                    final continuousActive =
+                        voicePipeline.isContinuousEnabled ||
+                            ecoVadSentinelRunning;
+                    return Tooltip(
+                      message: continuousActive
+                          ? 'Desativar escuta contínua ("Ultron")'
+                          : 'Ativar escuta contínua ("Ultron")',
+                      child: InkWell(
+                        onTap: sending ? null : _toggleContinuousListening,
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          margin: const EdgeInsets.only(right: 5),
+                          decoration: BoxDecoration(
+                            color: continuousActive
+                                ? _crimson.withValues(alpha: 0.25)
+                                : const Color(0xFF2E0305),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: continuousActive
+                                  ? _crimson
+                                  : _crimson.withValues(alpha: 0.25),
+                            ),
+                          ),
+                          child: Icon(
+                            continuousActive
+                                ? Icons.hearing
+                                : Icons.hearing_disabled,
+                            size: 14,
+                            color: continuousActive
+                                ? _rose
+                                : const Color(0xFF993036),
+                          ),
+                        ),
                       ),
-                    ),
-                    child: Icon(
-                      listeningVoice ? Icons.graphic_eq : Icons.mic,
-                      size: 14,
-                      color: listeningVoice ? _rose : _crimson,
+                    );
+                  },
+                ),
+                GestureDetector(
+                  onLongPressStart: sending
+                      ? null
+                      : (_) async {
+                          HapticFeedback.mediumImpact();
+                          await voicePipeline.startPushToTalk();
+                        },
+                  onLongPressEnd: (_) async {
+                    await voicePipeline.stopPushToTalk();
+                  },
+                  onLongPressCancel: () async {
+                    await voicePipeline.stopPushToTalk();
+                  },
+                  child: InkWell(
+                    onTap: sending
+                        ? null
+                        : () => voicePipeline.isPushToTalkActive
+                            ? _togglePushToTalk()
+                            : _startVoiceInput(),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      margin: const EdgeInsets.only(right: 5),
+                      decoration: BoxDecoration(
+                        color:
+                            (listeningVoice || voicePipeline.isPushToTalkActive)
+                                ? _crimson.withValues(alpha: 0.25)
+                                : const Color(0xFF2E0305),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: (listeningVoice ||
+                                  voicePipeline.isPushToTalkActive)
+                              ? _crimson
+                              : _crimson.withValues(alpha: 0.35),
+                        ),
+                      ),
+                      child: Icon(
+                        (listeningVoice || voicePipeline.isPushToTalkActive)
+                            ? Icons.graphic_eq
+                            : Icons.mic,
+                        size: 14,
+                        color:
+                            (listeningVoice || voicePipeline.isPushToTalkActive)
+                                ? _rose
+                                : _crimson,
+                      ),
                     ),
                   ),
                 ),
@@ -1738,19 +2100,31 @@ class _CoreScreenState extends State<CoreScreen>
                 child: SizedBox(
                   width: 210,
                   height: 210,
-                  child: ValueListenableBuilder<double>(
-                    valueListenable: coreTime,
-                    builder: (context, time, child) => CustomPaint(
-                      painter: CorePainter(
-                        time,
-                        intensity: nightFocusMode
-                            ? 0.35
-                            : listeningVoice
-                                ? (1.35 + speechRms * 1.25)
-                                : (sending ? 2.2 : 1.0),
-                      ),
-                    ),
-                  ),
+                  child: widget.shaderProgram != null
+                      ? CoreOrb(
+                          stage: stage,
+                          shaderProgram: widget.shaderProgram,
+                          energy: voiceService.isSpeaking
+                              ? 0.9
+                              : (listeningVoice || voicePipeline.isCapturing)
+                                  ? 0.7
+                                  : sending
+                                      ? 0.55
+                                      : 0.2,
+                        )
+                      : ValueListenableBuilder<double>(
+                          valueListenable: coreTime,
+                          builder: (context, time, child) => CustomPaint(
+                            painter: CorePainter(
+                              time,
+                              intensity: nightFocusMode
+                                  ? 0.35
+                                  : listeningVoice
+                                      ? (1.35 + speechRms * 1.25)
+                                      : (sending ? 2.2 : 1.0),
+                            ),
+                          ),
+                        ),
                 ),
               ),
               Text(
@@ -2214,9 +2588,8 @@ class _CoreScreenState extends State<CoreScreen>
         : hasPinConfigured!
             ? 'Configurado (PBKDF2-SHA256)'
             : 'Não configurado';
-    final duressLabel = hasDuressPinConfigured
-        ? 'Ativo (Modo Camuflado)'
-        : 'Não configurado';
+    final duressLabel =
+        hasDuressPinConfigured ? 'Ativo (Modo Camuflado)' : 'Não configurado';
     return Column(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -2673,9 +3046,8 @@ class _CoreScreenState extends State<CoreScreen>
         ? '${s.ramUsedMb} / ${s.ramTotalMb} MB (${s.ramFreeMb} MB livres)'
         : 'Consultando…';
     final volText = s != null ? '${s.volumePercent}% (${s.ringerMode})' : '…';
-    final modelText = s != null
-        ? '${s.deviceModel} • ${s.androidVersion}'
-        : 'Android Node';
+    final modelText =
+        s != null ? '${s.deviceModel} • ${s.androidVersion}' : 'Android Node';
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2876,7 +3248,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const SizedBox(height: 4),
                     _SecurityRow(
                       label: 'Modo Foco Noturno:',
-                      value: nightFocusMode ? 'ATIVO (Sussurro TTS)' : 'INATIVO',
+                      value:
+                          nightFocusMode ? 'ATIVO (Sussurro TTS)' : 'INATIVO',
                       valueColor: nightFocusMode
                           ? const Color(0xFFFFA0A0)
                           : const Color(0xFFA89698),
@@ -2896,34 +3269,9 @@ class _CoreScreenState extends State<CoreScreen>
                       children: [
                         Expanded(
                           child: FilledButton.icon(
-                            onPressed: () async {
-                              final next = !ecoVadSentinelRunning;
-                              final requested =
-                                  await deviceService.setAudioSentinel(next);
-                              // "ATIVO" só após captura real confirmada pelo serviço nativo.
-                              var real = false;
-                              if (next && requested) {
-                                for (var i = 0; i < 8 && !real; i++) {
-                                  await Future<void>.delayed(
-                                    const Duration(milliseconds: 500),
-                                  );
-                                  real = await deviceService
-                                      .isAudioSentinelRunning();
-                                }
-                              }
-                              if (!mounted) return;
-                              setState(() => ecoVadSentinelRunning = real);
-                              if (next && !real) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      '⚠️ Sentinela não confirmou captura do microfone. Veja o diagnóstico.',
-                                      style: TextStyle(fontSize: 11),
-                                    ),
-                                  ),
-                                );
-                              }
-                            },
+                            onPressed: () => _setOfflineSentinelEnabled(
+                              !ecoVadSentinelRunning,
+                            ),
                             style: FilledButton.styleFrom(
                               backgroundColor: ecoVadSentinelRunning
                                   ? const Color(0xFFE50914)
@@ -3079,6 +3427,28 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _openVoiceSelector,
+                        style: OutlinedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2E0305),
+                          foregroundColor: _rose,
+                          side: const BorderSide(color: _crimson),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        icon: const Icon(Icons.record_voice_over, size: 14),
+                        label: Text(
+                          'TROCAR VOZ NO APARELHO (${voiceService.activeVoiceName ?? "Padrão"})',
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -3403,7 +3773,8 @@ class _CoreScreenState extends State<CoreScreen>
                         InkWell(
                           onTap: () async {
                             final messenger = ScaffoldMessenger.of(context);
-                            final opened = await deviceService.openObsidianVault();
+                            final opened =
+                                await deviceService.openObsidianVault();
                             if (!mounted) return;
                             messenger.showSnackBar(
                               SnackBar(
@@ -3418,7 +3789,8 @@ class _CoreScreenState extends State<CoreScreen>
                           },
                           borderRadius: BorderRadius.circular(4),
                           child: const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                            padding: EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 2),
                             child: Row(
                               children: [
                                 Icon(Icons.open_in_new, size: 11, color: _rose),
@@ -3619,6 +3991,33 @@ class _CoreScreenState extends State<CoreScreen>
                             await deviceService.adjustVolume('up');
                             await _refreshDeviceStatus();
                           },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        _StageChip(
+                          label: 'ANTERIOR',
+                          icon: Icons.skip_previous,
+                          onTap: () => deviceService.controlMedia('previous'),
+                        ),
+                        _StageChip(
+                          label: 'PLAY/PAUSE',
+                          icon: Icons.play_arrow,
+                          onTap: () => deviceService.controlMedia('play_pause'),
+                        ),
+                        _StageChip(
+                          label: 'PARAR',
+                          icon: Icons.stop,
+                          onTap: () => deviceService.controlMedia('stop'),
+                        ),
+                        _StageChip(
+                          label: 'PRÓXIMA',
+                          icon: Icons.skip_next,
+                          onTap: () => deviceService.controlMedia('next'),
                         ),
                       ],
                     ),
@@ -4147,8 +4546,7 @@ class _CoreScreenState extends State<CoreScreen>
                 ),
                 _HelpSyntaxItem(
                   cmd: 'volume 80 | aumentar volume | silenciar',
-                  desc:
-                      'Controla o volume de mídia do Android de 0% a 100%.',
+                  desc: 'Controla o volume de mídia do Android de 0% a 100%.',
                   highlight: false,
                 ),
                 _HelpSyntaxItem(
@@ -4228,7 +4626,8 @@ class _TopNavPill extends StatelessWidget {
           child: Text(
             label,
             style: TextStyle(
-              color: selected ? const Color(0xFFF0E6E7) : const Color(0xFFA89698),
+              color:
+                  selected ? const Color(0xFFF0E6E7) : const Color(0xFFA89698),
               fontSize: 10,
               fontWeight: selected ? FontWeight.bold : FontWeight.normal,
             ),
