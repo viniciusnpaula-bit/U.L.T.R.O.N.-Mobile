@@ -6,6 +6,8 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+enum PinAuthMode { denied, normal, duress }
+
 /// Salted PBKDF2-HMAC-SHA256 verifier. The PIN itself is never stored and the
 /// hash lives in Android's secure storage (Keystore-backed).
 class PinVault {
@@ -14,6 +16,7 @@ class PinVault {
 
   final FlutterSecureStorage _storage;
   static const _key = 'ultron.pin.v1';
+  static const _duressKey = 'ultron.pin.duress.v1';
   static const _lockKey = 'ultron.pin.lock.v1';
   static const _iterations = 120000;
 
@@ -23,6 +26,8 @@ class PinVault {
   static const _maxDelay = Duration(minutes: 15);
 
   Future<bool> get hasPin async => (await _storage.read(key: _key)) != null;
+  Future<bool> get hasDuressPin async =>
+      (await _storage.read(key: _duressKey)) != null;
 
   /// No wait until [freeAttempts], then 30s doubling up to 15 minutes.
   static Duration lockDelay(int failures) {
@@ -38,6 +43,9 @@ class PinVault {
     final left = until.difference(DateTime.now());
     return left.isNegative ? Duration.zero : left;
   }
+
+  Future<int> failureCount() async =>
+      (await _readLock())['failures'] as int? ?? 0;
 
   /// Counts the failure, stores the wait it bought and returns it.
   Future<Duration> registerFailure() async {
@@ -69,21 +77,57 @@ class PinVault {
     await resetFailures();
   }
 
-  Future<bool> verify(String pin) async {
-    // The gate refuses while a wait is pending, not only the keypad.
-    if (await lockRemaining() > Duration.zero) return false;
-    final raw = await _storage.read(key: _key);
+  Future<void> setDuressPin(String pin) async {
+    final salt = _randomSalt();
+    final hash = await _derive(pin, salt);
+    await _storage.write(
+      key: _duressKey,
+      value: jsonEncode({
+        'salt': base64Encode(salt),
+        'hash': base64Encode(hash),
+        'iterations': _iterations,
+      }),
+    );
+  }
+
+  Future<void> clearDuressPin() => _storage.delete(key: _duressKey);
+
+  Future<bool> _matchesStoredKey(String storageKey, String pin) async {
+    final raw = await _storage.read(key: storageKey);
     if (raw == null) return false;
-    final data = jsonDecode(raw) as Map<String, dynamic>;
-    final salt = base64Decode(data['salt'] as String);
-    final expected = base64Decode(data['hash'] as String);
-    final actual = await _derive(pin, salt, iterations: data['iterations'] as int);
-    if (!_constantTimeEquals(actual, expected)) {
-      await registerFailure();
+    final Map<String, dynamic> data;
+    final Uint8List salt;
+    final Uint8List expected;
+    final int iterations;
+    try {
+      data = jsonDecode(raw) as Map<String, dynamic>;
+      salt = base64Decode(data['salt'] as String);
+      expected = base64Decode(data['hash'] as String);
+      iterations = (data['iterations'] as int?) ?? _iterations;
+    } catch (_) {
       return false;
     }
-    await resetFailures();
-    return true;
+    final actual = await _derive(pin, salt, iterations: iterations);
+    return _constantTimeEquals(actual, expected);
+  }
+
+  Future<PinAuthMode> verifyWithDuress(String pin) async {
+    if (await lockRemaining() > Duration.zero) return PinAuthMode.denied;
+    if (await _matchesStoredKey(_key, pin)) {
+      await resetFailures();
+      return PinAuthMode.normal;
+    }
+    if (await _matchesStoredKey(_duressKey, pin)) {
+      await resetFailures();
+      return PinAuthMode.duress;
+    }
+    await registerFailure();
+    return PinAuthMode.denied;
+  }
+
+  Future<bool> verify(String pin) async {
+    final mode = await verifyWithDuress(pin);
+    return mode == PinAuthMode.normal;
   }
 
   Future<void> clear() => _storage.delete(key: _key);

@@ -30,12 +30,18 @@ class AppUpdateService {
         return null;
       }
       final body = await response.transform(utf8.decoder).join();
-      if (response.statusCode != 200) throw HttpException('GitHub respondeu HTTP ${response.statusCode}.');
+      if (response.statusCode != 200) {
+        throw HttpException('GitHub respondeu HTTP ${response.statusCode}.');
+      }
       final release = jsonDecode(body) as Map<String, dynamic>;
-      if (release['draft'] == true || release['prerelease'] == true) return null;
+      if (release['draft'] == true || release['prerelease'] == true) {
+        return null;
+      }
       final assets = (release['assets'] as List? ?? const []).cast<Map<String, dynamic>>();
       final apk = assets.where((asset) => (asset['name'] as String? ?? '').toLowerCase().endsWith('.apk')).firstOrNull;
-      if (apk == null || (apk['browser_download_url'] as String? ?? '').isEmpty) return null;
+      if (apk == null || (apk['browser_download_url'] as String? ?? '').isEmpty) {
+        return null;
+      }
       final digest = (apk['digest'] as String?)?.trim();
       final normalizedDigest = digest != null && digest.startsWith('sha256:') ? digest.substring(7).toLowerCase() : null;
       return UpdateInfo(
@@ -56,7 +62,9 @@ class AppUpdateService {
     for (var i = 0; i < 3; i++) {
       final a = i < next.length ? next[i] : 0;
       final b = i < current.length ? current[i] : 0;
-      if (a != b) return a > b;
+      if (a != b) {
+        return a > b;
+      }
     }
     return false;
   }
@@ -80,7 +88,9 @@ class AppUpdateService {
 
   Future<void> downloadAndInstall(UpdateInfo update, void Function(double) onProgress) async {
     final uri = Uri.parse(update.downloadUrl);
-    if (!isTrustedDownloadUri(uri)) throw const FormatException('URL de atualização não confiável.');
+    if (!isTrustedDownloadUri(uri)) {
+      throw const FormatException('URL de atualização não confiável.');
+    }
     final directory = await getTemporaryDirectory();
     final file = File('${directory.path}/ultron-update.apk');
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
@@ -89,24 +99,34 @@ class AppUpdateService {
       final request = await client.getUrl(uri).timeout(const Duration(seconds: 30));
       request.headers.set(HttpHeaders.userAgentHeader, 'ULTRON-Mobile-Updater');
       final response = await request.close().timeout(const Duration(seconds: 30));
-      if (response.statusCode != 200) throw HttpException('Download HTTP ${response.statusCode}.');
+      if (response.statusCode != 200) {
+        throw HttpException('Download HTTP ${response.statusCode}.');
+      }
       final total = response.contentLength;
       var received = 0;
       sink = file.openWrite();
       await for (final chunk in response) {
         sink.add(chunk);
         received += chunk.length;
-        if (total > 0) onProgress(received / total);
+        if (total > 0) {
+          onProgress(received / total);
+        }
       }
       await sink.flush();
       await sink.close();
       sink = null;
       final length = await file.length();
-      if (length < 1024 * 1024) throw const FormatException('APK baixado parece incompleto.');
-      if (total > 0 && received != total) throw const FormatException('Download incompleto: tamanho recebido diferente do esperado.');
+      if (length < 1024 * 1024) {
+        throw const FormatException('APK baixado parece incompleto.');
+      }
+      if (total > 0 && received != total) {
+        throw const FormatException('Download incompleto: tamanho recebido diferente do esperado.');
+      }
       final expected = update.checksumSha256;
       if (expected != null) {
-        if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(expected)) throw const FormatException('SHA-256 publicado inválido.');
+        if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(expected)) {
+          throw const FormatException('SHA-256 publicado inválido.');
+        }
         final actual = sha256.convert(await file.readAsBytes()).toString();
         if (actual != expected) {
           await file.delete();
@@ -114,7 +134,9 @@ class AppUpdateService {
         }
       }
       final result = await OpenFilex.open(file.path, type: 'application/vnd.android.package-archive');
-      if (result.type != ResultType.done) throw Exception(result.message);
+      if (result.type != ResultType.done) {
+        throw Exception(result.message);
+      }
     } finally {
       await sink?.close();
       client.close(force: true);

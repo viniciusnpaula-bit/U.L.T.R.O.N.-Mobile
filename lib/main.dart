@@ -71,11 +71,22 @@ class _UltronAppState extends State<UltronApp> {
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           brightness: Brightness.dark,
+          fontFamily: 'monospace',
           scaffoldBackgroundColor: const Color(0xFF0A0002),
           colorScheme: ColorScheme.fromSeed(
             seedColor: const Color(0xFFE50914),
+            primary: const Color(0xFFE50914),
+            secondary: const Color(0xFFFF1A24),
+            surface: const Color(0xFF2E0305),
             brightness: Brightness.dark,
           ),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF0A0002),
+            foregroundColor: Color(0xFFF0E6E7),
+            elevation: 0,
+            centerTitle: false,
+          ),
+          dividerColor: const Color(0xFF51080D),
           useMaterial3: true,
         ),
         home: AnimatedBuilder(

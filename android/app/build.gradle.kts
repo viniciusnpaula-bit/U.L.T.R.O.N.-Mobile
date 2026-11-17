@@ -45,8 +45,18 @@ android {
         }
     }
 
+    androidResources {
+        // ONNX files are loaded by the native sherpa-onnx runtime from APK assets.
+        noCompress += listOf("onnx", "model")
+    }
+
     buildTypes {
         release {
+            // sherpa-onnx reads Kotlin config fields directly through JNI.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             signingConfig = if (keystorePropertiesFile.exists()) {
                 signingConfigs.getByName("release")
             } else {
@@ -67,5 +77,7 @@ flutter {
 }
 
 dependencies {
+    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    testImplementation("junit:junit:4.13.2")
 }

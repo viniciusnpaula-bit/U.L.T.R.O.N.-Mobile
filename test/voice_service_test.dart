@@ -103,7 +103,7 @@ void main() {
 
     final speakingFuture = voice.speak('U.L.T.R.O.N. pronto');
     await fake.speakStarted.future;
-    expect(fake.spoken, ['Ultron pronto']);
+    expect(fake.spoken, ['Ultron pronto.']);
     expect(voice.isSpeaking, isTrue);
 
     fake.speakGate!.complete();

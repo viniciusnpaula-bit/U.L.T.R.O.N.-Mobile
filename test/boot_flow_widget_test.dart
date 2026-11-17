@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:ultron_mobile/core/security/auth_gate.dart';
@@ -37,7 +38,26 @@ class _RecordingTts extends FlutterTts {
   }
 
   @override
+  Future<dynamic> get getVoices async => const <dynamic>[];
+
+  @override
   Future<dynamic> stop() async => 1;
+}
+
+class _InMemoryStorage extends FlutterSecureStorage {
+  const _InMemoryStorage();
+
+  @override
+  Future<String?> read({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async =>
+      null;
 }
 
 class _StubCapture implements AudioCaptureSource {
@@ -66,7 +86,10 @@ void main() {
     final vaultCompleter = Completer<void>();
     final shaderCompleter = Completer<void>();
     final fakeTts = _RecordingTts();
-    final voiceService = VoiceService(tts: fakeTts);
+    final voiceService = VoiceService(
+      tts: fakeTts,
+      storage: const _InMemoryStorage(),
+    );
     final coordinator = StartupCoordinator(
       initVault: () => vaultCompleter.future,
       initAiProviders: () async {},

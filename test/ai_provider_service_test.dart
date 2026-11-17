@@ -29,6 +29,22 @@ void main() {
       expect(messages.first['content'], 'm0');
       expect(messages.last, {'role': 'user', 'content': 'agora'});
     });
+
+    test('formats multimodal vision payload when imageBase64 is supplied', () {
+      final messages = buildAiMessages(
+        'Analise esta imagem tática',
+        const [],
+        imageBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+      );
+      expect(messages.length, 1);
+      final turn = messages.first;
+      expect(turn['role'], 'user');
+      final content = turn['content'] as List;
+      expect(content.length, 2);
+      expect(content[0], {'type': 'text', 'text': 'Analise esta imagem tática'});
+      expect((content[1] as Map)['type'], 'image_url');
+      expect(((content[1] as Map)['image_url'] as Map)['url'], contains('data:image/jpeg;base64,'));
+    });
   });
 
   group('parseAiReply', () {
@@ -69,6 +85,81 @@ void main() {
 
     test('leaves the message alone when there is no key', () {
       expect(redactSecret('falha', '  '), 'falha');
+    });
+  });
+
+  group('AiProviderConfig & model migration', () {
+    test('copyWith and JSON serialization preserve fields', () {
+      const original = AiProviderConfig(
+        id: 'p1',
+        name: 'Groq',
+        baseUrl: 'https://api.groq.com/openai/v1',
+        model: 'openai/gpt-oss-120b',
+        apiKey: 'gsk_1234567890',
+        enabled: true,
+        priority: 0,
+      );
+      final updated = original.copyWith(enabled: false, priority: 2);
+      final restored = AiProviderConfig.fromJson(updated.toJson());
+      expect(restored.id, 'p1');
+      expect(restored.name, 'Groq');
+      expect(restored.enabled, isFalse);
+      expect(restored.priority, 2);
+    });
+
+    test('migrates old llama models on Groq to openai/gpt-oss-120b', () {
+      expect(
+        AiProviderStore.normalizeModelForUrl(
+          'https://api.groq.com/openai/v1',
+          'llama-3.3-70b-versatile',
+        ),
+        'openai/gpt-oss-120b',
+      );
+      expect(
+        AiProviderStore.normalizeModelForUrl(
+          'https://api.groq.com/openai/v1',
+          'llama3-70b-8192',
+        ),
+        'openai/gpt-oss-120b',
+      );
+      expect(
+        AiProviderStore.normalizeModelForUrl(
+          'https://api.openai.com/v1',
+          'gpt-4.1-mini',
+        ),
+        'gpt-4.1-mini',
+      );
+    });
+
+    test('parseChatModelsList filters audio/guard models and prioritizes GPT-OSS', () {
+      final raw = jsonEncode({
+        'data': [
+          {'id': 'whisper-large-v3'},
+          {'id': 'meta-llama/llama-prompt-guard-2-86m'},
+          {'id': 'qwen/qwen3-32b'},
+          {'id': 'openai/gpt-oss-120b'},
+        ],
+      });
+      final models = parseChatModelsList(raw);
+      expect(models, ['openai/gpt-oss-120b', 'qwen/qwen3-32b']);
+    });
+
+    test('FreeProviderPreset catalog includes 9 free providers and zero-key Pollinations', () {
+      expect(FreeProviderPreset.catalog.length, 9);
+      final zeroKey = FreeProviderPreset.catalog.first;
+      expect(zeroKey.requiresKey, isFalse);
+      expect(zeroKey.baseUrl, contains('pollinations.ai'));
+
+      const cfg = AiProviderConfig(
+        id: 'p_free',
+        name: 'Pollinations Free',
+        baseUrl: 'https://text.pollinations.ai/openai',
+        model: 'openai',
+        apiKey: '',
+      );
+      expect(cfg.isKeylessProvider, isTrue);
+      expect(cfg.hasUsableCredentials, isTrue);
+      expect(cfg.effectiveToken, 'free');
     });
   });
 }
