@@ -6,6 +6,8 @@ void main() {
     expect(SlashCommandParser.parse('/HELP')?.command, UltronCommand.help);
     expect(SlashCommandParser.parse('/security')?.command, UltronCommand.security);
     expect(SlashCommandParser.parse('/history')?.command, UltronCommand.history);
+    expect(SlashCommandParser.parse('/memory')?.command, UltronCommand.memory);
+    expect(SlashCommandParser.parse('/memoria')?.command, UltronCommand.memory);
     expect(SlashCommandParser.parse('/settings')?.command, UltronCommand.settings);
   });
 

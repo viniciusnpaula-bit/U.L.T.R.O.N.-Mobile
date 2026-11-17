@@ -1,4 +1,4 @@
-enum UltronCommand { help, security, history, settings }
+enum UltronCommand { help, security, history, memory, settings }
 
 class CommandResult {
   const CommandResult(this.command, this.argument);
@@ -11,6 +11,8 @@ class SlashCommandParser {
     '/help': UltronCommand.help,
     '/security': UltronCommand.security,
     '/history': UltronCommand.history,
+    '/memory': UltronCommand.memory,
+    '/memoria': UltronCommand.memory,
     '/settings': UltronCommand.settings,
   };
 

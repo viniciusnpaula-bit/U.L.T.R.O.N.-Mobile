@@ -7,7 +7,10 @@ import '../core/security/auth_gate.dart';
 import 'audio_capture_service.dart';
 import 'audio_vad_buffer.dart';
 import 'stt_service.dart';
+import 'text_normalization.dart';
+import 'voice_corrections_service.dart';
 import 'voice_service.dart';
+import 'voice_shortcuts_service.dart';
 
 enum VoicePipelineMode { idle, pushToTalk, continuous }
 
@@ -56,46 +59,8 @@ class BargeInMatcher {
     'outron',
   ];
 
-  static const Map<String, String> _diacriticMap = <String, String>{
-    'á': 'a',
-    'à': 'a',
-    'â': 'a',
-    'ã': 'a',
-    'ä': 'a',
-    'é': 'e',
-    'è': 'e',
-    'ê': 'e',
-    'ë': 'e',
-    'í': 'i',
-    'ì': 'i',
-    'î': 'i',
-    'ï': 'i',
-    'ó': 'o',
-    'ò': 'o',
-    'ô': 'o',
-    'õ': 'o',
-    'ö': 'o',
-    'ú': 'u',
-    'ù': 'u',
-    'û': 'u',
-    'ü': 'u',
-    'ç': 'c',
-    'ñ': 'n',
-  };
-
-  static String normalize(String text) {
-    final lower = text.toLowerCase();
-    final buffer = StringBuffer();
-    for (var i = 0; i < lower.length; i++) {
-      final ch = lower[i];
-      buffer.write(_diacriticMap[ch] ?? ch);
-    }
-    return buffer
-        .toString()
-        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-  }
+  static String normalize(String text) =>
+      PtBrTextNormalizer.normalizePhrase(text);
 
   static bool isBargeInPhrase(
     String transcript, {
@@ -152,6 +117,10 @@ class VoicePipelineController extends ChangeNotifier {
     required GroqWhisperSttService stt,
     required VoiceService voiceService,
     VadSegmenter? vadSegmenter,
+    VoiceCorrectionsService? corrections,
+    VoiceShortcutsService? shortcuts,
+    Future<bool> Function(VoiceShortcut shortcut)? onConfirmShortcut,
+    FutureOr<void> Function(VoiceShortcut shortcut)? onExecuteShortcut,
     FutureOr<void> Function(String transcript)? onTranscript,
     DateTime Function()? now,
     this.sampleRate = 16000,
@@ -163,6 +132,10 @@ class VoicePipelineController extends ChangeNotifier {
         _stt = stt,
         _voiceService = voiceService,
         _vad = vadSegmenter ?? VadSegmenter(sampleRate: sampleRate),
+        _corrections = corrections,
+        _shortcuts = shortcuts,
+        _onConfirmShortcut = onConfirmShortcut,
+        _onExecuteShortcut = onExecuteShortcut,
         _onTranscript = onTranscript,
         _now = now ?? DateTime.now {
     _gate.addListener(_onGateChanged);
@@ -175,6 +148,10 @@ class VoicePipelineController extends ChangeNotifier {
   final GroqWhisperSttService _stt;
   final VoiceService _voiceService;
   final VadSegmenter _vad;
+  final VoiceCorrectionsService? _corrections;
+  final VoiceShortcutsService? _shortcuts;
+  final Future<bool> Function(VoiceShortcut shortcut)? _onConfirmShortcut;
+  final FutureOr<void> Function(VoiceShortcut shortcut)? _onExecuteShortcut;
   final FutureOr<void> Function(String transcript)? _onTranscript;
   final DateTime Function() _now;
   final int sampleRate;
@@ -361,14 +338,58 @@ class VoicePipelineController extends ChangeNotifier {
     }
   }
 
+  Future<String> _effectivePrompt() async {
+    if (sttPrompt.trim().isNotEmpty) return sttPrompt;
+    final corrections = _corrections;
+    if (corrections == null) return '';
+    try {
+      return await corrections.buildWhisperPrompt();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<void> _dispatchProcessedTranscript(String rawText) async {
+    var text = rawText.trim();
+    final corrections = _corrections;
+    if (corrections != null) {
+      try {
+        text = await corrections.apply(text);
+      } catch (_) {}
+    }
+
+    final shortcuts = _shortcuts;
+    if (shortcuts != null) {
+      VoiceShortcut? matched;
+      try {
+        matched = await shortcuts.match(text);
+      } catch (_) {
+        matched = null;
+      }
+      if (matched != null) {
+        final onExecute = _onExecuteShortcut;
+        if (onExecute == null) return;
+        await shortcuts.execute(
+          matched,
+          confirm: _onConfirmShortcut ?? (_) async => false,
+          run: (s) async => onExecute(s),
+        );
+        return;
+      }
+    }
+
+    await _onTranscript?.call(text);
+  }
+
   Future<void> _handleContinuousSegment(Uint8List segment) async {
     _isTranscribing = true;
     _notifySafely();
     try {
+      final prompt = await _effectivePrompt();
       final result = await _stt.transcribe(
         segment,
         sampleRate: sampleRate,
-        prompt: sttPrompt,
+        prompt: prompt,
       );
       if (_disposed ||
           _mode != VoicePipelineMode.continuous ||
@@ -396,12 +417,12 @@ class VoicePipelineController extends ChangeNotifier {
           _continuityUntil = _now().add(continuityWindow);
           return;
         }
-        await _onTranscript?.call(wakeCommand);
+        await _dispatchProcessedTranscript(wakeCommand);
         return;
       }
 
       if (isContinuityWindowActive || !requireWakeWordOutsideWindow) {
-        await _onTranscript?.call(text);
+        await _dispatchProcessedTranscript(text);
         return;
       }
 
@@ -411,7 +432,7 @@ class VoicePipelineController extends ChangeNotifier {
         _continuityUntil = _now().add(continuityWindow);
         return;
       }
-      await _onTranscript?.call(wakeCommand);
+      await _dispatchProcessedTranscript(wakeCommand);
     } finally {
       _isTranscribing = false;
       _notifySafely();
@@ -422,19 +443,24 @@ class VoicePipelineController extends ChangeNotifier {
     _isTranscribing = true;
     _notifySafely();
     try {
+      final prompt = await _effectivePrompt();
       final result = await _stt.transcribe(
         pcm,
         sampleRate: sampleRate,
-        prompt: sttPrompt,
+        prompt: prompt,
       );
       if (result.error != null) {
         _lastError = result.error;
         return null;
       }
       if (!result.hasText) return null;
-      final text = result.text!.trim();
-      await _onTranscript?.call(text);
-      return text;
+      final rawText = result.text!.trim();
+      final corrections = _corrections;
+      final corrected = corrections != null
+          ? await corrections.apply(rawText).catchError((_) => rawText)
+          : rawText;
+      await _dispatchProcessedTranscript(rawText);
+      return corrected;
     } finally {
       _isTranscribing = false;
       _notifySafely();

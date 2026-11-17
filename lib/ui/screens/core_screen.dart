@@ -13,11 +13,14 @@ import '../../services/app_update_service.dart';
 import '../../services/audio_capture_service.dart';
 import '../../services/slash_command_parser.dart';
 import '../../services/stt_service.dart';
+import '../../services/voice_corrections_service.dart';
 import '../../services/voice_pipeline_controller.dart';
 import '../../services/voice_service.dart';
+import '../../services/voice_shortcuts_service.dart';
 import '../widgets/core_orb.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
+import 'memory_settings_screen.dart';
 import 'update_screen.dart';
 
 export '../widgets/core_orb.dart' show CoreOrb, CorePainter, CoreStage;
@@ -67,6 +70,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       capture: widget.captureSource ?? MethodChannelAudioCaptureSource(),
       stt: widget.sttService ?? GroqWhisperSttService(),
       voiceService: voiceService,
+      corrections: VoiceCorrectionsService(),
+      shortcuts: VoiceShortcutsService(),
+      onConfirmShortcut: _confirmShortcut,
+      onExecuteShortcut: _executeShortcut,
       onTranscript: _handleVoiceTranscript,
     )..addListener(_onVoicePipelineChanged);
     unawaited(voiceService.initialize().catchError((_) {}));
@@ -85,6 +92,56 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   Future<void> _handleVoiceTranscript(String transcript) async {
     if (!mounted || sending) return;
     await _submitText(transcript);
+  }
+
+  Future<bool> _confirmShortcut(VoiceShortcut shortcut) async {
+    if (!mounted) return false;
+    final allowed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF160509),
+        title: const Text('Confirmar atalho de voz'),
+        content: Text(
+          'Executar "${shortcut.triggerPhrase}" (${shortcut.actionType})?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Recusar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Confirmar'),
+          ),
+        ],
+      ),
+    );
+    return allowed == true;
+  }
+
+  Future<void> _executeShortcut(VoiceShortcut shortcut) async {
+    if (!mounted) return;
+    switch (shortcut.actionType) {
+      case 'open_security':
+        await _showSecurity();
+        break;
+      case 'open_history':
+        await _runCommand(UltronCommand.history);
+        break;
+      case 'open_memory':
+        await _runCommand(UltronCommand.memory);
+        break;
+      case 'open_settings':
+        await _runCommand(UltronCommand.settings);
+        break;
+      case 'lock_app':
+        widget.gate.lock();
+        break;
+      default:
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Atalho acionado: ${shortcut.triggerPhrase}')),
+        );
+    }
   }
 
   /// Silent, best effort: only paints a dot on the update button.
@@ -203,6 +260,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             '/help     Exibe esta lista\n'
             '/security  Abre o painel de segurança\n'
             '/history   Abre o histórico local\n'
+            '/memory    Abre memória, correções e atalhos\n'
             '/settings  Configurações de IA\n\n'
             'Comandos são interpretados localmente.',
           )),
@@ -214,6 +272,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         break;
       case UltronCommand.history:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ConversationHistoryScreen()));
+        break;
+      case UltronCommand.memory:
+        await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MemorySettingsScreen()));
         break;
       case UltronCommand.settings:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AiSettingsScreen()));
@@ -354,6 +415,18 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           ),
                         ),
                         icon: const Icon(Icons.history, color: Color(0xFFE50914)),
+                      ),
+                      IconButton(
+                        tooltip: 'Memória & Voz',
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const MemorySettingsScreen(),
+                          ),
+                        ),
+                        icon: const Icon(
+                          Icons.psychology_alt_outlined,
+                          color: Color(0xFFE50914),
+                        ),
                       ),
                       Expanded(
                         child: TextField(
