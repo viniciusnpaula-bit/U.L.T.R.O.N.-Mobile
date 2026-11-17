@@ -186,6 +186,7 @@ class AudioCaptureHandler(
 
             audioRecord = record
             capturing = true
+            MainActivity.isForegroundCaptureActive = true
 
             try {
                 record.startRecording()
@@ -236,6 +237,7 @@ class AudioCaptureHandler(
 
     private fun stopCaptureLocked() {
         capturing = false
+        MainActivity.isForegroundCaptureActive = false
 
         val thread = readerThread
         readerThread = null

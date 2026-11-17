@@ -69,7 +69,7 @@ class UltronAudioService : Service() {
         private const val BATTERY_CHECK_INTERVAL_MS = 30_000L
 
         private const val INITIAL_NOISE_FLOOR = 300.0
-        private const val WAKE_HANDOFF_GUARD_MS = 2500L
+        private const val WAKE_HANDOFF_GUARD_MS = 4000L
 
         private const val SILENT_FRAMES_BEFORE_RESTART = 300 // 30 s de zeros = mic silenciado
         private const val MAX_RESTART_BACKOFF_MS = 30_000L
@@ -251,8 +251,8 @@ class UltronAudioService : Service() {
     private fun isSpeakerOrRecognizerBusy(audioManager: AudioManager?): Boolean {
         val now = System.currentTimeMillis()
         if (MainActivity.isForegroundRecognizerActive) return true
+        if (MainActivity.isForegroundCaptureActive) return true
         if (MainActivity.isUltronSpeakingGlobal || UltronTtsHelper.isSpeaking) return true
-        if (audioManager?.isMusicActive == true) return true
         if (now < wakeHandoffUntilMs) return true
         if (now - MainActivity.lastSpeechEndTimestampMs < POST_SPEECH_ECHO_GUARD_MS) return true
         if (now - UltronTtsHelper.lastSpeechEndTimestampMs < POST_SPEECH_ECHO_GUARD_MS) return true
@@ -410,8 +410,8 @@ class UltronAudioService : Service() {
             modelConfig = modelConfig,
             keywordsFile = "$MODEL_DIR/keywords.txt",
             maxActivePaths = 4,
-            keywordsScore = 1.5f,
-            keywordsThreshold = 0.25f,
+            keywordsScore = 2.0f,
+            keywordsThreshold = 0.12f,
             numTrailingBlanks = 1,
         )
         return KeywordSpotter(assetManager = assets, config = config)

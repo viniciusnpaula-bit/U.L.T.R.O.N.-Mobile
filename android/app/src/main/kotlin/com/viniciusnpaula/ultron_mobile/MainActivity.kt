@@ -60,9 +60,12 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         var isForegroundRecognizerActive: Boolean = false
 
         @Volatile
+        var isForegroundCaptureActive: Boolean = false
+
+        @Volatile
         var isActivityResumed: Boolean = false
 
-        private const val PENDING_WAKE_TTL_MS = 30_000L
+        private const val PENDING_WAKE_TTL_MS = 90_000L
 
         private var instance: MainActivity? = null
 
@@ -91,10 +94,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         }
     }
 
-    /** Entrega a wake word pendente ao Flutter; se o canal falhar, ela permanece pendente. */
+    /** Entrega a wake word pendente ao Flutter; só consome quando a Activity está em 1º plano. */
     private fun deliverPendingWakeWord() {
+        if (!isActivityResumed || isUltronSpeakingGlobal || isForegroundRecognizerActive) return
         val channel = deviceChannel ?: return
-        if (isUltronSpeakingGlobal || isForegroundRecognizerActive) return
         val phrase = consumePendingWakeWord() ?: return
         channel.invokeMethod("onWakeWordDetected", phrase, object : MethodChannel.Result {
             override fun success(result: Any?) {}
@@ -273,6 +276,17 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     override fun onResume() {
         super.onResume()
         isActivityResumed = true
+        // Se o sentinela estava habilitado pelo operador, garante retomada ao reabrir o app.
+        val sentinelPrefs = getSharedPreferences(UltronAudioService.PREFS_NAME, Context.MODE_PRIVATE)
+        if (sentinelPrefs.getBoolean(UltronAudioService.PREF_ENABLED, false) &&
+            !UltronAudioService.isRunning &&
+            !isForegroundCaptureActive &&
+            !isForegroundRecognizerActive &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            startSentinelService()
+        }
         // Entrega com pequeno atraso para o Dart já ter registrado o handler (cold start).
         window?.decorView?.postDelayed({ deliverPendingWakeWord() }, 600L)
         try {

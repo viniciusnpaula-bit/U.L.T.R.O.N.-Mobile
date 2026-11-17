@@ -126,6 +126,7 @@ class _CoreScreenState extends State<CoreScreen>
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
+  String? _lastShownPipelineError;
   List<MobileSkill> mobileSkills = const [];
   List<CapturedNotification> recentMessages = const [];
 
@@ -226,7 +227,20 @@ class _CoreScreenState extends State<CoreScreen>
   }
 
   void _onVoicePipelineChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final err = voicePipeline.lastError;
+    if (err != null && err != _lastShownPipelineError) {
+      _lastShownPipelineError = err;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(err, style: const TextStyle(fontSize: 11)),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } else if (err == null) {
+      _lastShownPipelineError = null;
+    }
+    setState(() {});
   }
 
   Future<void> _handleVoiceTranscript(String transcript) async {
@@ -274,17 +288,21 @@ class _CoreScreenState extends State<CoreScreen>
   }
 
   /// Processa uma ativação por "Ultron" (ao vivo ou pendente do segundo plano).
-  void _handleWakeWord(String phrase) {
-    if (!mounted || sending || listeningVoice || voiceService.isSpeaking) {
+  Future<void> _handleWakeWord(String phrase) async {
+    if (!mounted || sending || listeningVoice || !_isForegroundActive) {
       return;
+    }
+    if (voiceService.isSpeaking) {
+      await voiceService.stop();
     }
     HapticFeedback.heavyImpact();
     final inlineCmd = WakeWord.extractCommand(phrase);
     if (inlineCmd.length >= 2) {
       commandController.text = inlineCmd;
-      saveCommand();
+      await saveCommand();
       return;
     }
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
@@ -294,7 +312,7 @@ class _CoreScreenState extends State<CoreScreen>
         duration: Duration(seconds: 2),
       ),
     );
-    _startVoiceInput();
+    await _startVoiceInput();
   }
 
   Future<void> _consumePendingWakeWord() async {
@@ -1173,10 +1191,67 @@ class _CoreScreenState extends State<CoreScreen>
     return result ?? false;
   }
 
+  Future<bool> _setOfflineSentinelEnabled(bool next) async {
+    if (next && voicePipeline.isContinuousEnabled) {
+      await voicePipeline.stopContinuousListening();
+    }
+    final requested = await deviceService.setAudioSentinel(next);
+    var real = false;
+    if (next) {
+      final attempts = requested ? 16 : 12;
+      final step = Duration(milliseconds: requested ? 250 : 500);
+      for (var i = 0; i < attempts && !real; i++) {
+        real = await deviceService.isAudioSentinelRunning();
+        if (real) break;
+        await Future<void>.delayed(step);
+      }
+      if (real) {
+        real = await deviceService.isAudioSentinelRunning();
+      }
+    }
+    if (!mounted) return real;
+    setState(() => ecoVadSentinelRunning = real);
+    if (next && !real) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '⚠️ Sentinela não confirmou captura do microfone. Conceda permissão e veja o diagnóstico em CELULAR.',
+            style: TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+    } else if (next && real) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '🎙️ Palavra de ativação "Ultron" ativa (1º e 2º plano).',
+            style: TextStyle(fontSize: 11),
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+    return real;
+  }
+
   Future<void> _toggleContinuousListening() async {
     HapticFeedback.selectionClick();
+    if (ecoVadSentinelRunning) {
+      await _setOfflineSentinelEnabled(false);
+      return;
+    }
     if (voicePipeline.isContinuousEnabled) {
       await voicePipeline.stopContinuousListening();
+      return;
+    }
+    SttConfig? dedicatedStt;
+    try {
+      dedicatedStt = await providerStore.loadSttConfig();
+    } catch (_) {
+      dedicatedStt = null;
+    }
+    if (dedicatedStt == null || dedicatedStt.apiKey.trim().isEmpty) {
+      await _setOfflineSentinelEnabled(true);
       return;
     }
     final ok = await voicePipeline.startContinuousListening();
@@ -1880,38 +1955,45 @@ class _CoreScreenState extends State<CoreScreen>
                     ),
                   ),
                 ),
-                Tooltip(
-                  message: voicePipeline.isContinuousEnabled
-                      ? 'Desativar escuta contínua'
-                      : 'Ativar escuta contínua',
-                  child: InkWell(
-                    onTap: sending ? null : _toggleContinuousListening,
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      margin: const EdgeInsets.only(right: 5),
-                      decoration: BoxDecoration(
-                        color: voicePipeline.isContinuousEnabled
-                            ? _crimson.withValues(alpha: 0.25)
-                            : const Color(0xFF2E0305),
+                Builder(
+                  builder: (context) {
+                    final continuousActive =
+                        voicePipeline.isContinuousEnabled ||
+                            ecoVadSentinelRunning;
+                    return Tooltip(
+                      message: continuousActive
+                          ? 'Desativar escuta contínua ("Ultron")'
+                          : 'Ativar escuta contínua ("Ultron")',
+                      child: InkWell(
+                        onTap: sending ? null : _toggleContinuousListening,
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: voicePipeline.isContinuousEnabled
-                              ? _crimson
-                              : _crimson.withValues(alpha: 0.25),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          margin: const EdgeInsets.only(right: 5),
+                          decoration: BoxDecoration(
+                            color: continuousActive
+                                ? _crimson.withValues(alpha: 0.25)
+                                : const Color(0xFF2E0305),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: continuousActive
+                                  ? _crimson
+                                  : _crimson.withValues(alpha: 0.25),
+                            ),
+                          ),
+                          child: Icon(
+                            continuousActive
+                                ? Icons.hearing
+                                : Icons.hearing_disabled,
+                            size: 14,
+                            color: continuousActive
+                                ? _rose
+                                : const Color(0xFF993036),
+                          ),
                         ),
                       ),
-                      child: Icon(
-                        voicePipeline.isContinuousEnabled
-                            ? Icons.hearing
-                            : Icons.hearing_disabled,
-                        size: 14,
-                        color: voicePipeline.isContinuousEnabled
-                            ? _rose
-                            : const Color(0xFF993036),
-                      ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
                 GestureDetector(
                   onLongPressStart: sending
@@ -3163,34 +3245,9 @@ class _CoreScreenState extends State<CoreScreen>
                       children: [
                         Expanded(
                           child: FilledButton.icon(
-                            onPressed: () async {
-                              final next = !ecoVadSentinelRunning;
-                              final requested =
-                                  await deviceService.setAudioSentinel(next);
-                              // "ATIVO" só após captura real confirmada pelo serviço nativo.
-                              var real = false;
-                              if (next && requested) {
-                                for (var i = 0; i < 8 && !real; i++) {
-                                  await Future<void>.delayed(
-                                    const Duration(milliseconds: 500),
-                                  );
-                                  real = await deviceService
-                                      .isAudioSentinelRunning();
-                                }
-                              }
-                              if (!mounted) return;
-                              setState(() => ecoVadSentinelRunning = real);
-                              if (next && !real) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      '⚠️ Sentinela não confirmou captura do microfone. Veja o diagnóstico.',
-                                      style: TextStyle(fontSize: 11),
-                                    ),
-                                  ),
-                                );
-                              }
-                            },
+                            onPressed: () => _setOfflineSentinelEnabled(
+                              !ecoVadSentinelRunning,
+                            ),
                             style: FilledButton.styleFrom(
                               backgroundColor: ecoVadSentinelRunning
                                   ? const Color(0xFFE50914)
