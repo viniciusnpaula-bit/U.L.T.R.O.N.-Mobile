@@ -9,17 +9,21 @@ import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
 import '../../services/conversation_history.dart';
 import '../../services/ai_provider_service.dart';
+import '../../services/android_actions_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/audio_capture_service.dart';
+import '../../services/desktop_pairing_service.dart';
 import '../../services/slash_command_parser.dart';
 import '../../services/stt_service.dart';
 import '../../services/voice_corrections_service.dart';
 import '../../services/voice_pipeline_controller.dart';
 import '../../services/voice_service.dart';
 import '../../services/voice_shortcuts_service.dart';
+import '../widgets/action_confirmation_dialog.dart';
 import '../widgets/core_orb.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
+import 'desktop_pairing_screen.dart';
 import 'memory_settings_screen.dart';
 import 'update_screen.dart';
 
@@ -59,12 +63,15 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   late final VoiceService voiceService;
   final updateService = AppUpdateService();
   late final VoicePipelineController voicePipeline;
+  late final AndroidActionsService androidActions;
+  final desktopPairing = DesktopPairingService();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     voiceService = widget.voiceService ?? VoiceService();
+    androidActions = AndroidActionsService(gate: widget.gate);
     voicePipeline = VoicePipelineController(
       gate: widget.gate,
       capture: widget.captureSource ?? MethodChannelAudioCaptureSource(),
@@ -83,6 +90,19 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       );
     }
     _checkUpdate();
+    unawaited(_consumePendingTileAction());
+  }
+
+  Future<void> _consumePendingTileAction() async {
+    try {
+      final action = await androidActions.consumeTileActionIfAuthenticated();
+      if (!mounted) return;
+      if (action == TileLaunchAction.listenVoice) {
+        await voicePipeline.startPushToTalk();
+      }
+    } catch (_) {
+      // Desktop VM tests and non-Android hosts have no android_actions channel.
+    }
   }
 
   void _onVoicePipelineChanged() {
@@ -96,27 +116,15 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
 
   Future<bool> _confirmShortcut(VoiceShortcut shortcut) async {
     if (!mounted) return false;
-    final allowed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF160509),
-        title: const Text('Confirmar atalho de voz'),
-        content: Text(
-          'Executar "${shortcut.triggerPhrase}" (${shortcut.actionType})?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Recusar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Confirmar'),
-          ),
-        ],
+    return showActionConfirmationDialog(
+      context,
+      ActionConfirmationRequest(
+        title: 'Confirmar atalho de voz',
+        description:
+            'Executar "${shortcut.triggerPhrase}" (${shortcut.actionType})?',
+        actionLabel: 'Confirmar',
       ),
     );
-    return allowed == true;
   }
 
   Future<void> _executeShortcut(VoiceShortcut shortcut) async {
@@ -261,6 +269,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             '/security  Abre o painel de segurança\n'
             '/history   Abre o histórico local\n'
             '/memory    Abre memória, correções e atalhos\n'
+            '/desktop   Pareamento LAN e ações Android\n'
             '/settings  Configurações de IA\n\n'
             'Comandos são interpretados localmente.',
           )),
@@ -275,6 +284,16 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         break;
       case UltronCommand.memory:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const MemorySettingsScreen()));
+        break;
+      case UltronCommand.desktop:
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => DesktopPairingScreen(
+              pairingService: desktopPairing,
+              actionsService: androidActions,
+            ),
+          ),
+        );
         break;
       case UltronCommand.settings:
         await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AiSettingsScreen()));
@@ -425,6 +444,21 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                         ),
                         icon: const Icon(
                           Icons.psychology_alt_outlined,
+                          color: Color(0xFFE50914),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Desktop LAN & Ações Android',
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => DesktopPairingScreen(
+                              pairingService: desktopPairing,
+                              actionsService: androidActions,
+                            ),
+                          ),
+                        ),
+                        icon: const Icon(
+                          Icons.devices_other,
                           color: Color(0xFFE50914),
                         ),
                       ),

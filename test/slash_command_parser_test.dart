@@ -8,6 +8,7 @@ void main() {
     expect(SlashCommandParser.parse('/history')?.command, UltronCommand.history);
     expect(SlashCommandParser.parse('/memory')?.command, UltronCommand.memory);
     expect(SlashCommandParser.parse('/memoria')?.command, UltronCommand.memory);
+    expect(SlashCommandParser.parse('/desktop')?.command, UltronCommand.desktop);
     expect(SlashCommandParser.parse('/settings')?.command, UltronCommand.settings);
   });
 
