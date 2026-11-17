@@ -1,15 +1,32 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import 'tts_text_normalizer.dart';
+
 class VoiceService {
-  VoiceService({FlutterTts? tts}) : _tts = tts ?? FlutterTts();
+  VoiceService({FlutterTts? tts, this.onSpeakComplete})
+      : _tts = tts ?? FlutterTts();
+
   final FlutterTts _tts;
+  VoidCallback? onSpeakComplete;
   Future<void>? _initializing;
   bool _ready = false;
+  bool _isSpeaking = false;
+  int _speakToken = 0;
+
+  bool get isSpeaking => _isSpeaking;
 
   Future<void> initialize() async {
     if (_ready) return;
-    _initializing ??= _configure();
-    await _initializing;
+    final pending = _initializing ??= _configure();
+    try {
+      await pending;
+    } catch (_) {
+      if (identical(_initializing, pending)) {
+        _initializing = null;
+      }
+      rethrow;
+    }
   }
 
   Future<void> _configure() async {
@@ -22,14 +39,30 @@ class VoiceService {
   }
 
   Future<void> speak(String text) async {
-    final message = text.trim();
-    if (message.isEmpty) return;
+    final normalized = TtsTextNormalizer.normalize(text.trim());
+    if (normalized.isEmpty) return;
+    final token = ++_speakToken;
     await initialize();
-    await _tts.stop();
-    await _tts.speak(message);
+    if (token != _speakToken) return;
+    _isSpeaking = true;
+    try {
+      await _tts.stop();
+      if (token != _speakToken) return;
+      await _tts.speak(normalized);
+      if (token == _speakToken) {
+        _isSpeaking = false;
+        onSpeakComplete?.call();
+      }
+    } finally {
+      if (token == _speakToken) {
+        _isSpeaking = false;
+      }
+    }
   }
 
   Future<void> stop() async {
+    _speakToken += 1;
+    _isSpeaking = false;
     await _tts.stop();
   }
 }
