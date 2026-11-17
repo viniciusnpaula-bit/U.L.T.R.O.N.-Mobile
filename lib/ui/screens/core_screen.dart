@@ -65,10 +65,17 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   late final VoicePipelineController voicePipeline;
   late final AndroidActionsService androidActions;
   final desktopPairing = DesktopPairingService();
+  late AppLifecycleState _lifecycleState;
+
+  bool get _isForegroundActive =>
+      _lifecycleState == AppLifecycleState.resumed &&
+      widget.gate.isAuthenticated;
 
   @override
   void initState() {
     super.initState();
+    _lifecycleState =
+        WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed;
     WidgetsBinding.instance.addObserver(this);
     voiceService = widget.voiceService ?? VoiceService();
     androidActions = AndroidActionsService(gate: widget.gate);
@@ -83,8 +90,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       onExecuteShortcut: _executeShortcut,
       onTranscript: _handleVoiceTranscript,
     )..addListener(_onVoicePipelineChanged);
+    voicePipeline.handleLifecycleState(_lifecycleState);
     unawaited(voiceService.initialize().catchError((_) {}));
-    if (widget.announceOnline) {
+    if (widget.announceOnline && _isForegroundActive) {
       unawaited(
         voiceService.speak(widget.onlineAnnouncement).catchError((_) {}),
       );
@@ -93,15 +101,19 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     unawaited(_consumePendingTileAction());
   }
 
-  Future<void> _consumePendingTileAction() async {
+  Future<bool> _consumePendingTileAction() async {
     try {
       final action = await androidActions.consumeTileActionIfAuthenticated();
-      if (!mounted) return;
+      if (!mounted || !_isForegroundActive) return false;
       if (action == TileLaunchAction.listenVoice) {
+        await voiceService.stop();
         await voicePipeline.startPushToTalk();
+        return true;
       }
+      return false;
     } catch (_) {
       // Desktop VM tests and non-Android hosts have no android_actions channel.
+      return false;
     }
   }
 
@@ -167,9 +179,12 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycleState = state;
     voicePipeline.handleLifecycleState(state);
     if (state != AppLifecycleState.resumed) {
       voiceService.stop();
+    } else {
+      unawaited(_consumePendingTileAction());
     }
   }
 
@@ -247,7 +262,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Resposta recebida de ${reply.provider}. Consulte o histórico.')),
       );
-      unawaited(voiceService.speak(reply.text).catchError((_) {}));
+      if (_isForegroundActive) {
+        unawaited(voiceService.speak(reply.text).catchError((_) {}));
+      }
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -370,7 +387,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 Align(
                   alignment: stage == CoreStage.center
                       ? Alignment.center
-                      : const Alignment(0.82, -0.82),
+                      : const Alignment(0.88, -0.68),
                   child: GestureDetector(
                     onTap: () {
                       HapticFeedback.lightImpact();
@@ -398,70 +415,114 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   ),
                 ),
               Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Row(
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(left: 8, right: 4),
+                        child: Text(
+                          'U.L.T.R.O.N.',
+                          style: TextStyle(
+                            color: Color(0xFFE50914),
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.4,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: hasUpdate
+                                      ? 'Atualização disponível'
+                                      : 'Atualizar U.L.T.R.O.N.',
+                                  onPressed: () => Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                        builder: (_) => const UpdateScreen()),
+                                  ),
+                                  icon: Badge(
+                                    isLabelVisible: hasUpdate,
+                                    child: const Icon(Icons.system_update,
+                                        color: Color(0xFFE50914)),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Configurações de IA',
+                                  onPressed: () => Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => const AiSettingsScreen(),
+                                    ),
+                                  ),
+                                  icon: const Icon(Icons.settings,
+                                      color: Color(0xFFE50914)),
+                                ),
+                                IconButton(
+                                  tooltip: 'Histórico',
+                                  onPressed: () => Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          const ConversationHistoryScreen(),
+                                    ),
+                                  ),
+                                  icon: const Icon(Icons.history,
+                                      color: Color(0xFFE50914)),
+                                ),
+                                IconButton(
+                                  tooltip: 'Memória & Voz',
+                                  onPressed: () => Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          const MemorySettingsScreen(),
+                                    ),
+                                  ),
+                                  icon: const Icon(
+                                    Icons.psychology_alt_outlined,
+                                    color: Color(0xFFE50914),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Desktop LAN & Ações Android',
+                                  onPressed: () => Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => DesktopPairingScreen(
+                                        pairingService: desktopPairing,
+                                        actionsService: androidActions,
+                                      ),
+                                    ),
+                                  ),
+                                  icon: const Icon(
+                                    Icons.devices_other,
+                                    color: Color(0xFFE50914),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Alterar posição do núcleo',
+                                  onPressed: nextStage,
+                                  icon: const Icon(Icons.crop_free,
+                                      color: Color(0xFFE50914)),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Align(
                 alignment: Alignment.bottomCenter,
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
-                      IconButton(
-                        tooltip: hasUpdate
-                            ? 'Atualização disponível'
-                            : 'Atualizar U.L.T.R.O.N.',
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const UpdateScreen()),
-                        ),
-                        icon: Badge(
-                          isLabelVisible: hasUpdate,
-                          child: const Icon(Icons.system_update,
-                              color: Color(0xFFE50914)),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Configurações de IA',
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const AiSettingsScreen(),
-                          ),
-                        ),
-                        icon: const Icon(Icons.settings,
-                            color: Color(0xFFE50914)),
-                      ),
-                      IconButton(
-                        tooltip: 'Histórico',
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const ConversationHistoryScreen(),
-                          ),
-                        ),
-                        icon: const Icon(Icons.history, color: Color(0xFFE50914)),
-                      ),
-                      IconButton(
-                        tooltip: 'Memória & Voz',
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const MemorySettingsScreen(),
-                          ),
-                        ),
-                        icon: const Icon(
-                          Icons.psychology_alt_outlined,
-                          color: Color(0xFFE50914),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Desktop LAN & Ações Android',
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => DesktopPairingScreen(
-                              pairingService: desktopPairing,
-                              actionsService: androidActions,
-                            ),
-                          ),
-                        ),
-                        icon: const Icon(
-                          Icons.devices_other,
-                          color: Color(0xFFE50914),
-                        ),
-                      ),
                       Expanded(
                         child: TextField(
                           controller: commandController,
@@ -472,12 +533,6 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           ),
                           enabled: !sending,
                         ),
-                      ),
-                      IconButton(
-                        tooltip: 'Alterar posição do núcleo',
-                        onPressed: nextStage,
-                        icon: const Icon(Icons.crop_free,
-                            color: Color(0xFFE50914)),
                       ),
                       IconButton(
                         tooltip: voicePipeline.isContinuousEnabled

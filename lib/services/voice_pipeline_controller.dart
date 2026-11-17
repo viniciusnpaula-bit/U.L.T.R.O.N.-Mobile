@@ -171,6 +171,9 @@ class VoicePipelineController extends ChangeNotifier {
   String? _lastError;
   AudioEffectsReport? _lastEffectsReport;
   bool _disposed = false;
+  int _captureOpToken = 0;
+  int _sessionGeneration = 0;
+  bool _pttReleaseRequested = false;
 
   VoicePipelineMode get mode => _mode;
   bool get isCapturing => _mode != VoicePipelineMode.idle;
@@ -216,15 +219,20 @@ class VoicePipelineController extends ChangeNotifier {
       return false;
     }
 
+    _pttReleaseRequested = false;
     final permitted = await _ensurePermission();
-    if (!permitted || !_canCapture) {
+    if (!permitted) {
       _lastError = 'Permissão de microfone negada.';
       _notifySafely();
       return false;
     }
+    if (!_canCapture || _pttReleaseRequested) {
+      return false;
+    }
 
     await stopAll();
-    if (!_canCapture) return false;
+    if (!_canCapture || _pttReleaseRequested) return false;
+    final token = ++_captureOpToken;
 
     try {
       _pttBuffer.clear();
@@ -233,7 +241,22 @@ class VoicePipelineController extends ChangeNotifier {
           _pttBuffer.add(frame);
         }
       });
-      _lastEffectsReport = await _capture.start(sampleRate: sampleRate);
+      final report = await _capture.start(sampleRate: sampleRate);
+      if (_disposed ||
+          !_canCapture ||
+          token != _captureOpToken ||
+          _pttReleaseRequested) {
+        await _frameSub?.cancel();
+        _frameSub = null;
+        try {
+          await _capture.stop();
+        } catch (_) {}
+        _pttBuffer.clear();
+        _mode = VoicePipelineMode.idle;
+        _notifySafely();
+        return false;
+      }
+      _lastEffectsReport = report;
       _mode = VoicePipelineMode.pushToTalk;
       _lastError = null;
       _notifySafely();
@@ -247,7 +270,12 @@ class VoicePipelineController extends ChangeNotifier {
   }
 
   Future<String?> stopPushToTalk() async {
-    if (_mode != VoicePipelineMode.pushToTalk) return null;
+    if (_mode != VoicePipelineMode.pushToTalk) {
+      _pttReleaseRequested = true;
+      return null;
+    }
+    _mode = VoicePipelineMode.idle;
+    _captureOpToken++;
     await _frameSub?.cancel();
     _frameSub = null;
     try {
@@ -255,7 +283,6 @@ class VoicePipelineController extends ChangeNotifier {
     } catch (_) {}
 
     final pcm = _pttBuffer.takeBytes();
-    _mode = VoicePipelineMode.idle;
     _notifySafely();
 
     if (!_canCapture || pcm.isEmpty) return null;
@@ -271,14 +298,18 @@ class VoicePipelineController extends ChangeNotifier {
     if (_mode == VoicePipelineMode.continuous) return true;
 
     final permitted = await _ensurePermission();
-    if (!permitted || !_canCapture) {
+    if (!permitted) {
       _lastError = 'Permissão de microfone negada.';
       _notifySafely();
+      return false;
+    }
+    if (!_canCapture) {
       return false;
     }
 
     await stopAll();
     if (!_canCapture) return false;
+    final token = ++_captureOpToken;
 
     try {
       _vad.reset();
@@ -289,7 +320,19 @@ class VoicePipelineController extends ChangeNotifier {
               .catchError((_) {});
         }
       });
-      _lastEffectsReport = await _capture.start(sampleRate: sampleRate);
+      final report = await _capture.start(sampleRate: sampleRate);
+      if (_disposed || !_canCapture || token != _captureOpToken) {
+        await _frameSub?.cancel();
+        _frameSub = null;
+        try {
+          await _capture.stop();
+        } catch (_) {}
+        _vad.reset();
+        _mode = VoicePipelineMode.idle;
+        _notifySafely();
+        return false;
+      }
+      _lastEffectsReport = report;
       _mode = VoicePipelineMode.continuous;
       _lastError = null;
       _notifySafely();
@@ -314,6 +357,9 @@ class VoicePipelineController extends ChangeNotifier {
 
   Future<void> stopAll() async {
     final wasActive = _mode != VoicePipelineMode.idle;
+    _captureOpToken++;
+    _sessionGeneration++;
+    _pttReleaseRequested = false;
     _mode = VoicePipelineMode.idle;
     _continuityUntil = null;
     _pttBuffer.clear();
@@ -349,10 +395,13 @@ class VoicePipelineController extends ChangeNotifier {
     }
   }
 
-  Future<void> _dispatchProcessedTranscript(String rawText) async {
+  Future<void> _dispatchProcessedTranscript(
+    String rawText, {
+    bool applyCorrections = true,
+  }) async {
     var text = rawText.trim();
     final corrections = _corrections;
-    if (corrections != null) {
+    if (applyCorrections && corrections != null) {
       try {
         text = await corrections.apply(text);
       } catch (_) {}
@@ -382,6 +431,7 @@ class VoicePipelineController extends ChangeNotifier {
   }
 
   Future<void> _handleContinuousSegment(Uint8List segment) async {
+    final sessionGen = _sessionGeneration;
     _isTranscribing = true;
     _notifySafely();
     try {
@@ -392,6 +442,7 @@ class VoicePipelineController extends ChangeNotifier {
         prompt: prompt,
       );
       if (_disposed ||
+          sessionGen != _sessionGeneration ||
           _mode != VoicePipelineMode.continuous ||
           !_canCapture) {
         return;
@@ -459,7 +510,7 @@ class VoicePipelineController extends ChangeNotifier {
       final corrected = corrections != null
           ? await corrections.apply(rawText).catchError((_) => rawText)
           : rawText;
-      await _dispatchProcessedTranscript(rawText);
+      await _dispatchProcessedTranscript(corrected, applyCorrections: false);
       return corrected;
     } finally {
       _isTranscribing = false;

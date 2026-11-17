@@ -4,11 +4,11 @@ import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity() {
+class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val ACTIONS_CHANNEL = "com.viniciusnpaula.ultron_mobile/android_actions"
     }
@@ -29,7 +29,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun captureTileIntent(intent: Intent?) {
-        if (intent?.action != UltronTileService.ACTION_TILE_LAUNCH) return
+        if (intent?.action != UltronTileService.ACTION_TILE_LAUNCH) {
+            pendingTileAction = null
+            return
+        }
         val action = intent.getStringExtra(UltronTileService.EXTRA_TILE_ACTION)
         if (!action.isNullOrBlank()) {
             pendingTileAction = action
@@ -94,6 +97,11 @@ class MainActivity : FlutterActivity() {
             return
         }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    }
+
+    override fun onStop() {
+        audioCaptureHandler?.stopCapture()
+        super.onStop()
     }
 
     override fun onDestroy() {

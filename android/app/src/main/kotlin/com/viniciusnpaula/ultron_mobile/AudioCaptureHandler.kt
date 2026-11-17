@@ -270,6 +270,7 @@ class AudioCaptureHandler(
 
     fun release() {
         stopCapture()
+        pendingPermissionResult = null
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         eventSink = null

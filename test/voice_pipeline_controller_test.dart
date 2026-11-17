@@ -29,6 +29,7 @@ class _FakeAudioCaptureSource implements AudioCaptureSource {
   int startCalls = 0;
   int stopCalls = 0;
   bool isRunning = false;
+  Completer<void>? startGate;
 
   @override
   Stream<Uint8List> get frames => _controller.stream;
@@ -42,6 +43,9 @@ class _FakeAudioCaptureSource implements AudioCaptureSource {
   @override
   Future<AudioEffectsReport> start({int sampleRate = 16000}) async {
     startCalls += 1;
+    if (startGate != null) {
+      await startGate!.future;
+    }
     isRunning = true;
     return AudioEffectsReport(
       aecEnabled: true,
@@ -381,5 +385,70 @@ void main() {
     capture.emitFrame(_pcmFrame(amplitude: 0));
     await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(transcripts, ['Qual a próxima reunião?']);
+  });
+
+  test('aborts in-flight start when gate locks or lifecycle pauses before start resolves', () async {
+    final gate = await _unlockedGate();
+    final capture = _FakeAudioCaptureSource()..startGate = Completer<void>();
+    final stt = GroqWhisperSttService(
+      config: const SttConfig(endpointUrl: 'http://127.0.0.1:1', apiKey: 'k'),
+    );
+    final voice = VoiceService(tts: _FakeTts());
+    final controller = VoicePipelineController(
+      gate: gate,
+      capture: capture,
+      stt: stt,
+      voiceService: voice,
+    );
+    addTearDown(() async {
+      controller.dispose();
+      await capture.close();
+    });
+
+    final startFuture = controller.startContinuousListening();
+    await Future<void>.delayed(Duration.zero);
+    expect(capture.startCalls, 1);
+
+    // Pause lifecycle while capture.start() is still awaiting native AudioRecord.
+    controller.handleLifecycleState(AppLifecycleState.paused);
+    capture.startGate!.complete();
+
+    expect(await startFuture, isFalse);
+    expect(controller.mode, VoicePipelineMode.idle);
+    expect(controller.isCapturing, isFalse);
+    expect(capture.isRunning, isFalse);
+  });
+
+  test('cancels in-flight Push-to-Talk start when stopPushToTalk fires early', () async {
+    final gate = await _unlockedGate();
+    final capture = _FakeAudioCaptureSource()..startGate = Completer<void>();
+    final stt = GroqWhisperSttService(
+      config: const SttConfig(endpointUrl: 'http://127.0.0.1:1', apiKey: 'k'),
+    );
+    final voice = VoiceService(tts: _FakeTts());
+    final controller = VoicePipelineController(
+      gate: gate,
+      capture: capture,
+      stt: stt,
+      voiceService: voice,
+    );
+    addTearDown(() async {
+      controller.dispose();
+      await capture.close();
+    });
+
+    final startFuture = controller.startPushToTalk();
+    await Future<void>.delayed(Duration.zero);
+    expect(capture.startCalls, 1);
+
+    // User releases PTT finger before native start completes.
+    final stopResult = await controller.stopPushToTalk();
+    expect(stopResult, isNull);
+
+    capture.startGate!.complete();
+    expect(await startFuture, isFalse);
+    expect(controller.mode, VoicePipelineMode.idle);
+    expect(controller.isCapturing, isFalse);
+    expect(capture.isRunning, isFalse);
   });
 }

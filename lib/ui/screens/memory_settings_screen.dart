@@ -100,8 +100,15 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
     wrongCtrl.dispose();
     correctCtrl.dispose();
     if (confirmed != true || wrong.isEmpty || correct.isEmpty) return;
-    await _corrections.add(wrong, correct);
-    await _reload();
+    try {
+      await _corrections.add(wrong, correct);
+      await _reload();
+    } on ArgumentError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${e.message ?? e}')),
+      );
+    }
   }
 
   @override
