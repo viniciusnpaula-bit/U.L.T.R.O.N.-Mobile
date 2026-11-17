@@ -20,6 +20,7 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -30,6 +31,7 @@ import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -387,6 +389,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 val updated = adjustMediaVolume(direction)
                 result.success(updated)
             }
+            "mediaControl" -> {
+                val action = call.argument<String>("action") ?: "play_pause"
+                result.success(dispatchMediaControl(action))
+            }
             "vibrate" -> {
                 val durationMs = (call.argument<Int>("durationMs") ?: 180).coerceIn(20, 3000)
                 triggerVibration(durationMs.toLong())
@@ -651,6 +657,23 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
         return ((cur.toDouble() / max) * 100.0).roundToInt()
+    }
+
+    private fun dispatchMediaControl(action: String): Boolean {
+        val keyCode = when (action.trim().lowercase()) {
+            "play" -> KeyEvent.KEYCODE_MEDIA_PLAY
+            "pause" -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            "play_pause", "toggle" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+            "next" -> KeyEvent.KEYCODE_MEDIA_NEXT
+            "previous", "prev" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            "stop" -> KeyEvent.KEYCODE_MEDIA_STOP
+            else -> return false
+        }
+        val audio = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        val eventTime = SystemClock.uptimeMillis()
+        audio.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0))
+        audio.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0))
+        return true
     }
 
     private fun triggerVibration(durationMs: Long) {

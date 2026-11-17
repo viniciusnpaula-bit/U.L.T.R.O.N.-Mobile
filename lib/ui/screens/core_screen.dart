@@ -503,7 +503,8 @@ class _CoreScreenState extends State<CoreScreen>
     }
     final dump = recentMessages
         .take(10)
-        .map((m) => '[${m.timeFormatted}] ${m.appLabel} - ${m.sender}: ${m.text}')
+        .map((m) =>
+            '[${m.timeFormatted}] ${m.appLabel} - ${m.sender}: ${m.text}')
         .join('\n');
     commandController.text =
         'Faça um Resumo Tático inteligente das minhas mensagens recentes (separe o que é urgente de ruído e sugira respostas rápidas):\n$dump';
@@ -577,7 +578,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Erro ao responder: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Erro ao responder: $e',
+              style: const TextStyle(fontSize: 11)),
         ),
       );
     }
@@ -613,7 +615,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Falha no envio: $e', style: const TextStyle(fontSize: 11)),
+          content:
+              Text('Falha no envio: $e', style: const TextStyle(fontSize: 11)),
         ),
       );
     }
@@ -630,7 +633,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Falha na lanterna: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Falha na lanterna: $e',
+              style: const TextStyle(fontSize: 11)),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -665,10 +669,10 @@ class _CoreScreenState extends State<CoreScreen>
   }
 
   void _syncTickerWithState({AppLifecycleState? lifecycle}) {
-    final shouldRun = (lifecycle == null ||
-            lifecycle == AppLifecycleState.resumed) &&
-        panel == _ActivePanel.main &&
-        stage != CoreStage.hidden;
+    final shouldRun =
+        (lifecycle == null || lifecycle == AppLifecycleState.resumed) &&
+            panel == _ActivePanel.main &&
+            stage != CoreStage.hidden;
     if (shouldRun && !active) {
       ticker.start();
       active = true;
@@ -798,7 +802,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Erro ao salvar no Vault: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Erro ao salvar no Vault: $e',
+              style: const TextStyle(fontSize: 11)),
         ),
       );
     }
@@ -837,7 +842,8 @@ class _CoreScreenState extends State<CoreScreen>
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Erro ao salvar no Inbox: $e', style: const TextStyle(fontSize: 11)),
+          content: Text('Erro ao salvar no Inbox: $e',
+              style: const TextStyle(fontSize: 11)),
         ),
       );
     }
@@ -1315,7 +1321,8 @@ class _CoreScreenState extends State<CoreScreen>
           timestamp: timeStr,
         ));
         try {
-          final providers = (await providerStore.load()).where((p) => p.enabled).toList();
+          final providers =
+              (await providerStore.load()).where((p) => p.enabled).toList();
           if (providers.isEmpty) {
             _appendFeed(_FeedEntry(
               isUser: false,
@@ -1330,7 +1337,8 @@ class _CoreScreenState extends State<CoreScreen>
             _appendFeed(_FeedEntry(
               isUser: false,
               senderLabel: 'Auto-Discovery (/models)',
-              text: 'Modelos disponíveis em ${activeP.name} (${activeP.baseUrl}):\n$modelsList',
+              text:
+                  'Modelos disponíveis em ${activeP.name} (${activeP.baseUrl}):\n$modelsList',
               timestamp: timeStr,
             ));
           }
@@ -1344,7 +1352,8 @@ class _CoreScreenState extends State<CoreScreen>
         }
         break;
       case UltronCommand.messages:
-        final res = await deviceService.tryExecuteNaturalCommand('ler mensagens');
+        final res =
+            await deviceService.tryExecuteNaturalCommand('ler mensagens');
         await _refreshDeviceStatus();
         if (res != null) {
           _appendFeed(_FeedEntry(
@@ -1363,11 +1372,13 @@ class _CoreScreenState extends State<CoreScreen>
           _appendFeed(_FeedEntry(
             isUser: false,
             senderLabel: 'Sentinela de Mensagens',
-            text: 'Uso: /reply <texto da resposta> ou "responder para Nome: <texto>"',
+            text:
+                'Uso: /reply <texto da resposta> ou "responder para Nome: <texto>"',
             timestamp: timeStr,
           ));
         } else {
-          final res = await deviceService.tryExecuteNaturalCommand('responder: $argument');
+          final res = await deviceService
+              .tryExecuteNaturalCommand('responder: $argument');
           if (res != null) {
             _appendFeed(_FeedEntry(
               isUser: false,
@@ -1398,7 +1409,8 @@ class _CoreScreenState extends State<CoreScreen>
           ));
           return;
         }
-        final msg = await deviceService.triggerPcKillSwitch(reason: 'slash_killswitch');
+        final msg =
+            await deviceService.triggerPcKillSwitch(reason: 'slash_killswitch');
         _appendFeed(_FeedEntry(
           isUser: false,
           senderLabel: 'Kill Switch',
@@ -1510,135 +1522,135 @@ class _CoreScreenState extends State<CoreScreen>
       return _buildCamouflageScreen();
     }
     return Scaffold(
-        backgroundColor: const Color(0xFF0A0002),
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            child: Column(
-              children: [
-                // Global Operator Selector Bar
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xCC0A0002),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _border),
-                  ),
-                  child: Row(
-                    children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: const BoxDecoration(
-                              color: _crimson,
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(color: _crimson, blurRadius: 6),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          const Text(
-                            'U.L.T.R.O.N. 2.0',
-                            style: TextStyle(
-                              color: _crimson,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 1.1,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _TopNavPill(
-                                label: 'NÚCLEO',
-                                selected: panel == _ActivePanel.main,
-                                onTap: () => _setPanel(_ActivePanel.main),
-                              ),
-                              const SizedBox(width: 4),
-                              _TopNavPill(
-                                label: 'CELULAR',
-                                selected: panel == _ActivePanel.device,
-                                onTap: () {
-                                  _refreshDeviceStatus();
-                                  _setPanel(_ActivePanel.device);
-                                },
-                              ),
-                              const SizedBox(width: 4),
-                              _TopNavPill(
-                                label: 'PROVEDORES',
-                                selected: panel == _ActivePanel.providers,
-                                onTap: () => _setPanel(_ActivePanel.providers),
-                              ),
-                              const SizedBox(width: 4),
-                              _TopNavPill(
-                                label: 'MEMÓRIA',
-                                selected: false,
-                                onTap: () => _runCommand(UltronCommand.memory),
-                              ),
-                              const SizedBox(width: 4),
-                              _TopNavPill(
-                                label: 'DESKTOP',
-                                selected: false,
-                                onTap: () => _runCommand(UltronCommand.desktop),
-                              ),
-                              const SizedBox(width: 4),
-                              _TopNavPill(
-                                label: 'HISTÓRICO',
-                                selected: false,
-                                onTap: _openHistory,
-                              ),
-                              const SizedBox(width: 4),
-                              InkWell(
-                                onTap: _toggleAudio,
-                                borderRadius: BorderRadius.circular(6),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(4),
-                                  child: Icon(
-                                    isAudioOn
-                                        ? Icons.volume_up
-                                        : Icons.volume_off,
-                                    size: 15,
-                                    color: isAudioOn
-                                        ? _crimson
-                                        : const Color(0xFFA89698),
-                                  ),
-                                ),
-                              ),
+      backgroundColor: const Color(0xFF0A0002),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Column(
+            children: [
+              // Global Operator Selector Bar
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xCC0A0002),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: Row(
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: _crimson,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(color: _crimson, blurRadius: 6),
                             ],
                           ),
                         ),
+                        const SizedBox(width: 6),
+                        const Text(
+                          'U.L.T.R.O.N. 2.0',
+                          style: TextStyle(
+                            color: _crimson,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _TopNavPill(
+                              label: 'NÚCLEO',
+                              selected: panel == _ActivePanel.main,
+                              onTap: () => _setPanel(_ActivePanel.main),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'CELULAR',
+                              selected: panel == _ActivePanel.device,
+                              onTap: () {
+                                _refreshDeviceStatus();
+                                _setPanel(_ActivePanel.device);
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'PROVEDORES',
+                              selected: panel == _ActivePanel.providers,
+                              onTap: () => _setPanel(_ActivePanel.providers),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'MEMÓRIA',
+                              selected: false,
+                              onTap: () => _runCommand(UltronCommand.memory),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'DESKTOP',
+                              selected: false,
+                              onTap: () => _runCommand(UltronCommand.desktop),
+                            ),
+                            const SizedBox(width: 4),
+                            _TopNavPill(
+                              label: 'HISTÓRICO',
+                              selected: false,
+                              onTap: _openHistory,
+                            ),
+                            const SizedBox(width: 4),
+                            InkWell(
+                              onTap: _toggleAudio,
+                              borderRadius: BorderRadius.circular(6),
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(
+                                  isAudioOn
+                                      ? Icons.volume_up
+                                      : Icons.volume_off,
+                                  size: 15,
+                                  color: isAudioOn
+                                      ? _crimson
+                                      : const Color(0xFFA89698),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
+              ),
+              const SizedBox(height: 8),
 
-                // Main Screen Content (Main / Device / Security / Help / Providers)
-                Expanded(
-                  child: switch (panel) {
-                    _ActivePanel.main => _buildMainPanel(),
-                    _ActivePanel.device => _buildDevicePanel(),
-                    _ActivePanel.security => _buildSecurityPanel(),
-                    _ActivePanel.help => _buildHelpPanel(),
-                    _ActivePanel.providers => _buildProvidersPanel(),
-                  },
-                ),
-              ],
-            ),
+              // Main Screen Content (Main / Device / Security / Help / Providers)
+              Expanded(
+                child: switch (panel) {
+                  _ActivePanel.main => _buildMainPanel(),
+                  _ActivePanel.device => _buildDevicePanel(),
+                  _ActivePanel.security => _buildSecurityPanel(),
+                  _ActivePanel.help => _buildHelpPanel(),
+                  _ActivePanel.providers => _buildProvidersPanel(),
+                },
+              ),
+            ],
           ),
         ),
-      );
+      ),
+    );
   }
 
   Widget _buildMainPanel() => Column(
@@ -1859,9 +1871,10 @@ class _CoreScreenState extends State<CoreScreen>
                                   ? 'Consultando provedor ativo…'
                                   : 'Comando ou toque/segure 🎤...',
                       hintStyle: TextStyle(
-                        color: (listeningVoice || voicePipeline.isPushToTalkActive)
-                            ? _crimson
-                            : const Color(0xFF635355),
+                        color:
+                            (listeningVoice || voicePipeline.isPushToTalkActive)
+                                ? _crimson
+                                : const Color(0xFF635355),
                         fontSize: 11,
                       ),
                     ),
@@ -1924,12 +1937,14 @@ class _CoreScreenState extends State<CoreScreen>
                       padding: const EdgeInsets.all(6),
                       margin: const EdgeInsets.only(right: 5),
                       decoration: BoxDecoration(
-                        color: (listeningVoice || voicePipeline.isPushToTalkActive)
-                            ? _crimson.withValues(alpha: 0.25)
-                            : const Color(0xFF2E0305),
+                        color:
+                            (listeningVoice || voicePipeline.isPushToTalkActive)
+                                ? _crimson.withValues(alpha: 0.25)
+                                : const Color(0xFF2E0305),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                          color: (listeningVoice || voicePipeline.isPushToTalkActive)
+                          color: (listeningVoice ||
+                                  voicePipeline.isPushToTalkActive)
                               ? _crimson
                               : _crimson.withValues(alpha: 0.35),
                         ),
@@ -1939,9 +1954,10 @@ class _CoreScreenState extends State<CoreScreen>
                             ? Icons.graphic_eq
                             : Icons.mic,
                         size: 14,
-                        color: (listeningVoice || voicePipeline.isPushToTalkActive)
-                            ? _rose
-                            : _crimson,
+                        color:
+                            (listeningVoice || voicePipeline.isPushToTalkActive)
+                                ? _rose
+                                : _crimson,
                       ),
                     ),
                   ),
@@ -2466,9 +2482,8 @@ class _CoreScreenState extends State<CoreScreen>
         : hasPinConfigured!
             ? 'Configurado (PBKDF2-SHA256)'
             : 'Não configurado';
-    final duressLabel = hasDuressPinConfigured
-        ? 'Ativo (Modo Camuflado)'
-        : 'Não configurado';
+    final duressLabel =
+        hasDuressPinConfigured ? 'Ativo (Modo Camuflado)' : 'Não configurado';
     return Column(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -2925,9 +2940,8 @@ class _CoreScreenState extends State<CoreScreen>
         ? '${s.ramUsedMb} / ${s.ramTotalMb} MB (${s.ramFreeMb} MB livres)'
         : 'Consultando…';
     final volText = s != null ? '${s.volumePercent}% (${s.ringerMode})' : '…';
-    final modelText = s != null
-        ? '${s.deviceModel} • ${s.androidVersion}'
-        : 'Android Node';
+    final modelText =
+        s != null ? '${s.deviceModel} • ${s.androidVersion}' : 'Android Node';
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -3128,7 +3142,8 @@ class _CoreScreenState extends State<CoreScreen>
                     const SizedBox(height: 4),
                     _SecurityRow(
                       label: 'Modo Foco Noturno:',
-                      value: nightFocusMode ? 'ATIVO (Sussurro TTS)' : 'INATIVO',
+                      value:
+                          nightFocusMode ? 'ATIVO (Sussurro TTS)' : 'INATIVO',
                       valueColor: nightFocusMode
                           ? const Color(0xFFFFA0A0)
                           : const Color(0xFFA89698),
@@ -3655,7 +3670,8 @@ class _CoreScreenState extends State<CoreScreen>
                         InkWell(
                           onTap: () async {
                             final messenger = ScaffoldMessenger.of(context);
-                            final opened = await deviceService.openObsidianVault();
+                            final opened =
+                                await deviceService.openObsidianVault();
                             if (!mounted) return;
                             messenger.showSnackBar(
                               SnackBar(
@@ -3670,7 +3686,8 @@ class _CoreScreenState extends State<CoreScreen>
                           },
                           borderRadius: BorderRadius.circular(4),
                           child: const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                            padding: EdgeInsets.symmetric(
+                                horizontal: 4, vertical: 2),
                             child: Row(
                               children: [
                                 Icon(Icons.open_in_new, size: 11, color: _rose),
@@ -3871,6 +3888,33 @@ class _CoreScreenState extends State<CoreScreen>
                             await deviceService.adjustVolume('up');
                             await _refreshDeviceStatus();
                           },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        _StageChip(
+                          label: 'ANTERIOR',
+                          icon: Icons.skip_previous,
+                          onTap: () => deviceService.controlMedia('previous'),
+                        ),
+                        _StageChip(
+                          label: 'PLAY/PAUSE',
+                          icon: Icons.play_arrow,
+                          onTap: () => deviceService.controlMedia('play_pause'),
+                        ),
+                        _StageChip(
+                          label: 'PARAR',
+                          icon: Icons.stop,
+                          onTap: () => deviceService.controlMedia('stop'),
+                        ),
+                        _StageChip(
+                          label: 'PRÓXIMA',
+                          icon: Icons.skip_next,
+                          onTap: () => deviceService.controlMedia('next'),
                         ),
                       ],
                     ),
@@ -4399,8 +4443,7 @@ class _CoreScreenState extends State<CoreScreen>
                 ),
                 _HelpSyntaxItem(
                   cmd: 'volume 80 | aumentar volume | silenciar',
-                  desc:
-                      'Controla o volume de mídia do Android de 0% a 100%.',
+                  desc: 'Controla o volume de mídia do Android de 0% a 100%.',
                   highlight: false,
                 ),
                 _HelpSyntaxItem(
@@ -4480,7 +4523,8 @@ class _TopNavPill extends StatelessWidget {
           child: Text(
             label,
             style: TextStyle(
-              color: selected ? const Color(0xFFF0E6E7) : const Color(0xFFA89698),
+              color:
+                  selected ? const Color(0xFFF0E6E7) : const Color(0xFFA89698),
               fontSize: 10,
               fontWeight: selected ? FontWeight.bold : FontWeight.normal,
             ),
