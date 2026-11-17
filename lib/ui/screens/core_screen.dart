@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../../models/chat_message.dart';
@@ -16,11 +15,12 @@ import '../../services/slash_command_parser.dart';
 import '../../services/stt_service.dart';
 import '../../services/voice_pipeline_controller.dart';
 import '../../services/voice_service.dart';
+import '../widgets/core_orb.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
 import 'update_screen.dart';
 
-enum CoreStage { center, corner, hidden }
+export '../widgets/core_orb.dart' show CoreOrb, CorePainter, CoreStage;
 
 class CoreScreen extends StatefulWidget {
   const CoreScreen({
@@ -48,13 +48,9 @@ class CoreScreen extends StatefulWidget {
   State<CoreScreen> createState() => _CoreScreenState();
 }
 
-class _CoreScreenState extends State<CoreScreen>
-    with TickerProviderStateMixin, WidgetsBindingObserver {
-  late final Ticker ticker;
+class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   final commandController = TextEditingController();
-  final coreTime = ValueNotifier<double>(0);
   CoreStage stage = CoreStage.center;
-  bool active = false;
   bool sending = false;
   bool hasUpdate = false;
   late final VoiceService voiceService;
@@ -73,13 +69,6 @@ class _CoreScreenState extends State<CoreScreen>
       voiceService: voiceService,
       onTranscript: _handleVoiceTranscript,
     )..addListener(_onVoicePipelineChanged);
-    // Only the core repaints at 60fps; rebuilding the whole screen would repaint
-    // the text field and buttons on every frame.
-    ticker = createTicker((duration) {
-      coreTime.value = duration.inMicroseconds / 1000000;
-    });
-    ticker.start();
-    active = true;
     unawaited(voiceService.initialize().catchError((_) {}));
     if (widget.announceOnline) {
       unawaited(
@@ -114,16 +103,7 @@ class _CoreScreenState extends State<CoreScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     voicePipeline.handleLifecycleState(state);
-    if (state == AppLifecycleState.resumed) {
-      if (!active) {
-        active = true;
-        if (stage != CoreStage.hidden && !ticker.isActive) {
-          ticker.start();
-        }
-      }
-    } else if (active) {
-      if (ticker.isActive) ticker.stop();
-      active = false;
+    if (state != AppLifecycleState.resumed) {
       voiceService.stop();
     }
   }
@@ -133,8 +113,6 @@ class _CoreScreenState extends State<CoreScreen>
     WidgetsBinding.instance.removeObserver(this);
     voicePipeline.removeListener(_onVoicePipelineChanged);
     voicePipeline.dispose();
-    ticker.dispose();
-    coreTime.dispose();
     voiceService.stop();
     commandController.dispose();
     super.dispose();
@@ -142,11 +120,6 @@ class _CoreScreenState extends State<CoreScreen>
 
   void nextStage() => setState(() {
         stage = CoreStage.values[(stage.index + 1) % CoreStage.values.length];
-        if (stage == CoreStage.hidden) {
-          if (ticker.isActive) ticker.stop();
-        } else if (active && !ticker.isActive) {
-          ticker.start();
-        }
       });
 
   Future<void> saveCommand() async {
@@ -330,10 +303,16 @@ class _CoreScreenState extends State<CoreScreen>
                     child: SizedBox(
                       width: stage == CoreStage.center ? 280 : 90,
                       height: stage == CoreStage.center ? 280 : 90,
-                      child: ValueListenableBuilder<double>(
-                        valueListenable: coreTime,
-                        builder: (context, time, child) =>
-                            CustomPaint(painter: CorePainter(time)),
+                      child: CoreOrb(
+                        stage: stage,
+                        shaderProgram: widget.shaderProgram,
+                        energy: voiceService.isSpeaking
+                            ? 0.9
+                            : voicePipeline.isCapturing
+                                ? 0.7
+                                : sending
+                                    ? 0.55
+                                    : 0.2,
                       ),
                     ),
                   ),
@@ -441,30 +420,4 @@ class _CoreScreenState extends State<CoreScreen>
           ),
         ),
       );
-}
-
-class CorePainter extends CustomPainter {
-  CorePainter(this.time);
-  final double time;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFFE50914)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.3;
-    final center = size.center(Offset.zero);
-    for (var i = 0; i < 3; i++) {
-      canvas.drawCircle(center, size.shortestSide * (0.22 + i * 0.12), paint);
-    }
-    canvas.drawCircle(
-      center,
-      size.shortestSide * 0.07,
-      Paint()..color = const Color(0xFFFF1A24),
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CorePainter oldDelegate) =>
-      oldDelegate.time != time;
 }
