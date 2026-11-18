@@ -4,3 +4,12 @@
 -keepclasseswithmembernames,includedescriptorclasses class com.k2fsa.sherpa.onnx.** {
     native <methods>;
 }
+
+# Preserve SQLCipher and sqflite_sqlcipher native JNI bindings in R8 release builds.
+-keep class net.sqlcipher.** { *; }
+-keep class net.zetetic.** { *; }
+-keep class com.davidmartos96.sqflite_sqlcipher.** { *; }
+-keep class io.flutter.plugins.pathprovider.** { *; }
+-keepclasseswithmembernames,includedescriptorclasses class net.zetetic.** {
+    native <methods>;
+}
