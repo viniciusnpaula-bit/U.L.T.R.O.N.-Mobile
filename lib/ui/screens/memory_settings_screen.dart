@@ -152,7 +152,7 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
                           color: Color(0xFFE50914),
                         ),
                         title: Text(
-                          'Voz: ${_voiceService.activeVoiceName ?? "Padrão do aparelho"}',
+                          'Voz: ${_voiceService.activeVoiceLabel}',
                         ),
                         subtitle:
                             Text('Timbre: ${_voiceService.profile.label}'),

@@ -628,6 +628,15 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 UltronTtsHelper.configure(voiceName, pitch, rate)
                 result.success(true)
             }
+            "playTtsAudioBytes" -> {
+                val bytes = call.argument<ByteArray>("bytes")
+                val volume = (call.argument<Double>("volume") ?: 1.0).toFloat()
+                if (bytes == null || bytes.isEmpty()) {
+                    result.success(false)
+                } else {
+                    UltronTtsHelper.playAudioBytes(this, bytes, volume, result)
+                }
+            }
             else -> result.notImplemented()
         }
     }

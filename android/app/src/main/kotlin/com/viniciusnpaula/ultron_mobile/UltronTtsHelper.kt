@@ -8,6 +8,8 @@ import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import io.flutter.plugin.common.MethodChannel
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -35,6 +37,8 @@ object UltronTtsHelper {
     private val idleShutdownRunnable = Runnable { shutdownTtsOnly() }
 
     private var player: MediaPlayer? = null
+    private var pendingAudioResult: MethodChannel.Result? = null
+    private var pendingAudioFile: File? = null
     private var offlineTts: TextToSpeech? = null
     private var ttsReady: Boolean = false
     private var preferredVoiceName: String? = null
@@ -78,6 +82,105 @@ object UltronTtsHelper {
         lastSpeechEndTimestampMs = now
         MainActivity.isUltronSpeakingGlobal = false
         MainActivity.lastSpeechEndTimestampMs = now
+    }
+
+    private fun cleanupPendingAudio(completed: Boolean) {
+        val pending = pendingAudioResult
+        pendingAudioResult = null
+        val file = pendingAudioFile
+        pendingAudioFile = null
+        try {
+            file?.delete()
+        } catch (_: Exception) {
+        }
+        try {
+            pending?.success(completed)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun failPendingAudio(code: String, message: String) {
+        val pending = pendingAudioResult
+        pendingAudioResult = null
+        val file = pendingAudioFile
+        pendingAudioFile = null
+        try {
+            file?.delete()
+        } catch (_: Exception) {
+        }
+        try {
+            pending?.error(code, message, null)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Reproduz bytes de áudio TTS (ex.: Fish Audio MP3) respeitando o bloqueio anti-eco. */
+    fun playAudioBytes(
+        context: Context,
+        bytes: ByteArray,
+        volume: Float,
+        result: MethodChannel.Result
+    ) {
+        val task = Runnable {
+            if (MainActivity.isForegroundRecognizerActive || bytes.isEmpty()) {
+                try {
+                    result.success(false)
+                } catch (_: Exception) {
+                }
+                return@Runnable
+            }
+            releasePlayer()
+            var tempFile: File? = null
+            try {
+                tempFile = File.createTempFile("ultron_fish_tts_", ".mp3", context.cacheDir)
+                tempFile.writeBytes(bytes)
+                pendingAudioResult = result
+                pendingAudioFile = tempFile
+                markSpeechStarted()
+
+                val safeVol = volume.coerceIn(0.05f, 1.0f)
+                val mp = MediaPlayer()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    mp.setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                }
+                mp.setVolume(safeVol, safeVol)
+                mp.setDataSource(tempFile.absolutePath)
+                mp.setOnCompletionListener {
+                    releasePlayer(completed = true)
+                    markSpeechEnded()
+                }
+                mp.setOnErrorListener { _, what, extra ->
+                    releasePlayer(completed = false, errorCode = "fish_audio_playback", errorMessage = "Erro MediaPlayer ($what/$extra)")
+                    markSpeechEnded()
+                    true
+                }
+                mp.prepare()
+                mp.start()
+                player = mp
+            } catch (e: Exception) {
+                try {
+                    tempFile?.delete()
+                } catch (_: Exception) {
+                }
+                pendingAudioFile = null
+                pendingAudioResult = null
+                markSpeechEnded()
+                try {
+                    result.error("fish_audio_playback", e.message ?: "Falha ao reproduzir áudio", null)
+                } catch (_: Exception) {
+                }
+            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            task.run()
+        } else {
+            mainHandler.post(task)
+        }
     }
 
     fun playFishVoiceAsset(context: Context, onComplete: (() -> Unit)? = null): Boolean {
@@ -216,7 +319,11 @@ object UltronTtsHelper {
         markSpeechEnded()
     }
 
-    fun releasePlayer() {
+    fun releasePlayer(
+        completed: Boolean = false,
+        errorCode: String? = null,
+        errorMessage: String? = null
+    ) {
         try {
             player?.stop()
         } catch (_: Exception) {
@@ -226,6 +333,11 @@ object UltronTtsHelper {
         } catch (_: Exception) {
         }
         player = null
+        if (errorCode != null) {
+            failPendingAudio(errorCode, errorMessage ?: "Falha ao reproduzir áudio")
+        } else {
+            cleanupPendingAudio(completed)
+        }
     }
 
     private fun shutdownTtsOnly() {
