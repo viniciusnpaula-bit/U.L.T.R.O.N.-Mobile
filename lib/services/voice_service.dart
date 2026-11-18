@@ -4,8 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
+import 'fish_audio_tts_service.dart';
 import 'speech_text.dart';
 import 'tts_text_normalizer.dart';
+
+export 'fish_audio_tts_service.dart';
 
 /// Perfis de timbre da voz do U.L.T.R.O.N.
 enum VoiceProfile {
@@ -51,11 +54,16 @@ class VoiceService {
     FlutterTts? tts,
     MethodChannel? deviceChannel,
     FlutterSecureStorage? storage,
+    FishAudioTtsService? fishService,
     this.onSpeakComplete,
   })  : _tts = tts ?? FlutterTts(),
         _deviceChannel = deviceChannel ??
             const MethodChannel('com.viniciusnpaula.ultron_mobile/device'),
-        _storage = storage ?? const FlutterSecureStorage();
+        _storage = storage ?? const FlutterSecureStorage(),
+        _fishService = fishService ??
+            FishAudioTtsService(
+              storage: storage ?? const FlutterSecureStorage(),
+            );
 
   static const _voiceKey = 'ultron.tts.voice.v1';
   static const _profileKey = 'ultron.tts.profile.v1';
@@ -63,11 +71,13 @@ class VoiceService {
   final FlutterTts _tts;
   final MethodChannel _deviceChannel;
   final FlutterSecureStorage _storage;
+  final FishAudioTtsService _fishService;
   VoidCallback? onSpeakComplete;
   Future<void>? _initializing;
   bool _ready = false;
   bool _profileExplicitlySet = false;
   bool _voiceExplicitlySet = false;
+  bool _fishExplicitlySet = false;
   int _generation = 0;
 
   bool enabled = true;
@@ -75,6 +85,14 @@ class VoiceService {
   bool isSpeaking = false;
   VoiceProfile profile = VoiceProfile.grave;
   String? activeVoiceName;
+  String? lastFishError;
+
+  FishAudioConfig get fishConfig => _fishService.config;
+  bool get isFishAudioActive => _fishService.config.isActive;
+
+  String get activeVoiceLabel => isFishAudioActive
+      ? 'Fish Audio (${fishConfig.language} • ${fishConfig.model})'
+      : (activeVoiceName ?? 'Padrão do sistema');
 
   void _syncNativeTtsConfig() {
     try {
@@ -123,6 +141,11 @@ class VoiceService {
             orElse: () => VoiceProfile.grave,
           );
         }
+      } catch (_) {}
+    }
+    if (!_fishExplicitlySet && !_fishService.hasInitialConfig) {
+      try {
+        await _fishService.loadConfig();
       } catch (_) {}
     }
     if (!_voiceExplicitlySet) {
@@ -239,6 +262,14 @@ class VoiceService {
     } catch (_) {}
   }
 
+  Future<void> setFishConfig(FishAudioConfig config) async {
+    _fishExplicitlySet = true;
+    await _fishService.saveConfig(config);
+    lastFishError = null;
+    await initialize();
+    await stop();
+  }
+
   Future<void> setWhisperMode(bool whisper) async {
     whisperMode = whisper;
     await initialize();
@@ -268,6 +299,17 @@ class VoiceService {
     try {
       for (final chunk in chunks) {
         if (generation != _generation) break;
+        if (_fishService.config.isActive) {
+          final outcome = await _speakChunkWithFishAudio(chunk, generation);
+          if (generation != _generation ||
+              outcome == _FishPlayOutcome.interrupted) {
+            break;
+          }
+          if (outcome == _FishPlayOutcome.played) {
+            continue;
+          }
+        }
+        if (generation != _generation) break;
         await _tts.speak(chunk);
       }
       completedNaturally = generation == _generation;
@@ -278,6 +320,39 @@ class VoiceService {
           onSpeakComplete?.call();
         }
       }
+    }
+  }
+
+  Future<_FishPlayOutcome> _speakChunkWithFishAudio(
+    String chunk,
+    int generation,
+  ) async {
+    try {
+      final bytes = await _fishService.synthesize(chunk);
+      if (generation != _generation) {
+        return _FishPlayOutcome.interrupted;
+      }
+      final played = await _deviceChannel.invokeMethod<bool>(
+        'playTtsAudioBytes',
+        {
+          'bytes': bytes,
+          'volume': whisperMode ? 0.28 : 1.0,
+        },
+      );
+      if (generation != _generation || played != true) {
+        return _FishPlayOutcome.interrupted;
+      }
+      lastFishError = null;
+      return _FishPlayOutcome.played;
+    } on MissingPluginException {
+      lastFishError = 'Reprodução nativa indisponível; usando voz offline.';
+      return _FishPlayOutcome.fallback;
+    } on PlatformException catch (e) {
+      lastFishError = e.message ?? e.code;
+      return _FishPlayOutcome.fallback;
+    } catch (e) {
+      lastFishError = e.toString();
+      return _FishPlayOutcome.fallback;
     }
   }
 
@@ -293,3 +368,5 @@ class VoiceService {
     }
   }
 }
+
+enum _FishPlayOutcome { played, interrupted, fallback }

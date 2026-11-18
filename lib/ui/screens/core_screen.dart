@@ -3441,7 +3441,7 @@ class _CoreScreenState extends State<CoreScreen>
                         ),
                         icon: const Icon(Icons.record_voice_over, size: 14),
                         label: Text(
-                          'TROCAR VOZ NO APARELHO (${voiceService.activeVoiceName ?? "Padrão"})',
+                          'TROCAR VOZ NO APARELHO (${voiceService.activeVoiceLabel})',
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             fontSize: 9.5,
