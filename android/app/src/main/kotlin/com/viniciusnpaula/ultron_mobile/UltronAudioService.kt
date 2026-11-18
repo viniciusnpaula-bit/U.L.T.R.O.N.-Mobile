@@ -19,7 +19,6 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.speech.SpeechRecognizer
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.k2fsa.sherpa.onnx.FeatureConfig
@@ -142,7 +141,7 @@ class UltronAudioService : Service() {
                 "micPermission" to hasMic,
                 "ignoringBatteryOptimizations" to ignoringBattery,
                 "bootAutostart" to prefs.getBoolean(PREF_BOOT_AUTOSTART, false),
-                "recognitionAvailable" to SpeechRecognizer.isRecognitionAvailable(context),
+                "recognitionAvailable" to hasMic,
                 "lastTrigger" to lastTriggerTimestamp,
                 "voiceTriggers" to Stats.voiceTriggers,
                 "detections" to Stats.detections,

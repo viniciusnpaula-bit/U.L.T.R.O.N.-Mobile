@@ -1,7 +1,6 @@
 package com.viniciusnpaula.ultron_mobile
 
 import android.Manifest
-import android.app.Activity
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
@@ -28,9 +27,6 @@ import android.provider.AlarmClock
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -45,7 +41,6 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     companion object {
         private const val CHANNEL = "com.viniciusnpaula.ultron_mobile/device"
         private const val ACTIONS_CHANNEL = "com.viniciusnpaula.ultron_mobile/android_actions"
-        private const val SPEECH_REQUEST_CODE = 9042
 
         @Volatile
         var isFaceDownGlobal: Boolean = false
@@ -203,9 +198,6 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
     private var isFaceDown: Boolean = false
-    private var pendingSpeechResult: MethodChannel.Result? = null
-    private var inlineRecognizer: SpeechRecognizer? = null
-    private var lastPartialSpeech: String = ""
 
     private val torchCallback = object : CameraManager.TorchCallback() {
         override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
@@ -325,25 +317,6 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-    @Suppress("DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == SPEECH_REQUEST_CODE) {
-            isForegroundRecognizerActive = false
-            lastSpeechEndTimestampMs = System.currentTimeMillis()
-            val callback = pendingSpeechResult
-            pendingSpeechResult = null
-            if (callback == null) return
-            if (resultCode == Activity.RESULT_OK && data != null) {
-                val matches = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                val spoken = matches?.firstOrNull()?.trim() ?: ""
-                callback.success(spoken)
-            } else {
-                callback.success("")
-            }
-        }
-    }
-
     override fun onStop() {
         audioCaptureHandler?.stopCapture()
         // Ao sair de cena, volta ao comportamento normal da tela de bloqueio.
@@ -358,7 +331,6 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         actionsChannel = null
         audioCaptureHandler?.release()
         audioCaptureHandler = null
-        destroyInlineRecognizer()
         try {
             sensorManager?.unregisterListener(this)
             cameraManager?.unregisterTorchCallback(torchCallback)
@@ -478,12 +450,14 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 result.success(true)
             }
             "listenVoice" -> {
-                val prompt = call.argument<String>("prompt") ?: "U.L.T.R.O.N. escutando (fale seu comando)..."
-                val locale = call.argument<String>("locale") ?: "pt-BR"
-                startVoiceCapture(locale, prompt, result)
+                result.error(
+                    "google_stt_blocked",
+                    "Reconhecimento Google desativado por regra do app. Use o microfone nativo AudioRecord.",
+                    null
+                )
             }
             "stopListeningVoice" -> {
-                stopInlineRecognizerEarly()
+                audioCaptureHandler?.stopCapture()
                 result.success(true)
             }
             "setUltronSpeaking" -> {
@@ -1051,180 +1025,5 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         }
         startActivity(intent)
         return "App de SMS aberto para $label com a mensagem: \"$cleanText\"."
-    }
-
-    private fun startVoiceCapture(locale: String, prompt: String, result: MethodChannel.Result) {
-        // Interrompe imediatamente qualquer fala/TTS do Ultron antes de abrir o microfone
-        UltronTtsHelper.stopAll()
-        isUltronSpeakingGlobal = false
-        isForegroundRecognizerActive = true
-        destroyInlineRecognizer()
-        pendingSpeechResult?.success("")
-        pendingSpeechResult = result
-        lastPartialSpeech = ""
-
-        val hasMicPerm = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (!hasMicPerm) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.RECORD_AUDIO),
-                9045
-            )
-            launchSystemSpeechDialog(locale, prompt)
-            return
-        }
-
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            launchSystemSpeechDialog(locale, prompt)
-            return
-        }
-
-        try {
-            val sr = SpeechRecognizer.createSpeechRecognizer(this)
-            inlineRecognizer = sr
-            var speechStarted = false
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                )
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, locale)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-                putExtra(
-                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                    1800L
-                )
-                putExtra(
-                    RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                    1400L
-                )
-            }
-
-            sr.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {
-                    deviceChannel?.invokeMethod("onSpeechRms", 0.15)
-                }
-
-                override fun onBeginningOfSpeech() {
-                    speechStarted = true
-                }
-
-                override fun onRmsChanged(rmsdB: Float) {
-                    val normalized = ((rmsdB + 2.0f) / 12.0f).coerceIn(0.0f, 1.0f).toDouble()
-                    deviceChannel?.invokeMethod("onSpeechRms", normalized)
-                }
-
-                override fun onBufferReceived(buffer: ByteArray?) {}
-
-                override fun onEndOfSpeech() {
-                    deviceChannel?.invokeMethod("onSpeechRms", 0.0)
-                }
-
-                override fun onPartialResults(partialResults: Bundle?) {
-                    val partials =
-                        partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val best = partials?.firstOrNull()?.trim() ?: ""
-                    if (best.isNotEmpty()) {
-                        lastPartialSpeech = best
-                        deviceChannel?.invokeMethod("onSpeechPartial", best)
-                    }
-                }
-
-                override fun onResults(results: Bundle?) {
-                    val matches =
-                        results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val best = matches?.firstOrNull()?.trim().orEmpty().ifEmpty { lastPartialSpeech }
-                    finishInlineSpeech(best)
-                }
-
-                override fun onError(error: Int) {
-                    // Se falhou na inicialização do motor antes de começar a falar, usa o diálogo nativo de fallback
-                    if (!speechStarted && lastPartialSpeech.isEmpty() &&
-                        (error == SpeechRecognizer.ERROR_CLIENT ||
-                            error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
-                            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY)
-                    ) {
-                        destroyInlineRecognizer()
-                        launchSystemSpeechDialog(locale, prompt)
-                        return
-                    }
-                    // Se o usuário já havia falado algo capturado nos parciais, aproveita o texto parcial!
-                    finishInlineSpeech(lastPartialSpeech)
-                }
-
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-
-            sr.startListening(intent)
-        } catch (_: Exception) {
-            destroyInlineRecognizer()
-            launchSystemSpeechDialog(locale, prompt)
-        }
-    }
-
-    private fun finishInlineSpeech(spoken: String) {
-        deviceChannel?.invokeMethod("onSpeechRms", 0.0)
-        destroyInlineRecognizer()
-        isForegroundRecognizerActive = false
-        lastSpeechEndTimestampMs = System.currentTimeMillis()
-        val cb = pendingSpeechResult
-        pendingSpeechResult = null
-        cb?.success(spoken.trim())
-    }
-
-    private fun stopInlineRecognizerEarly() {
-        val sr = inlineRecognizer
-        if (sr != null) {
-            try {
-                sr.stopListening()
-            } catch (_: Exception) {
-                finishInlineSpeech(lastPartialSpeech)
-            }
-        }
-    }
-
-    private fun destroyInlineRecognizer() {
-        try {
-            inlineRecognizer?.cancel()
-        } catch (_: Exception) {
-        }
-        try {
-            inlineRecognizer?.destroy()
-        } catch (_: Exception) {
-        }
-        inlineRecognizer = null
-    }
-
-    private fun launchSystemSpeechDialog(locale: String, prompt: String) {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, locale)
-            putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        }
-        try {
-            @Suppress("DEPRECATION")
-            startActivityForResult(intent, SPEECH_REQUEST_CODE)
-        } catch (e: Exception) {
-            isForegroundRecognizerActive = false
-            val cb = pendingSpeechResult
-            pendingSpeechResult = null
-            cb?.error(
-                "SPEECH_UNAVAILABLE",
-                "Reconhecimento de voz não disponível neste dispositivo (${e.message}).",
-                null
-            )
-        }
     }
 }

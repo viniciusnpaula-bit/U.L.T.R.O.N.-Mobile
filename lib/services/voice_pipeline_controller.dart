@@ -12,7 +12,7 @@ import 'voice_corrections_service.dart';
 import 'voice_service.dart';
 import 'voice_shortcuts_service.dart';
 
-enum VoicePipelineMode { idle, pushToTalk, continuous }
+enum VoicePipelineMode { idle, pushToTalk, singleTurn, continuous }
 
 /// Matches selective barge-in stop/wake phrases with accent normalization.
 class BargeInMatcher {
@@ -122,6 +122,7 @@ class VoicePipelineController extends ChangeNotifier {
     Future<bool> Function(VoiceShortcut shortcut)? onConfirmShortcut,
     FutureOr<void> Function(VoiceShortcut shortcut)? onExecuteShortcut,
     FutureOr<void> Function(String transcript)? onTranscript,
+    ValueChanged<double>? onRmsChanged,
     DateTime Function()? now,
     this.sampleRate = 16000,
     this.continuityWindow = const Duration(seconds: 8),
@@ -137,6 +138,7 @@ class VoicePipelineController extends ChangeNotifier {
         _onConfirmShortcut = onConfirmShortcut,
         _onExecuteShortcut = onExecuteShortcut,
         _onTranscript = onTranscript,
+        _onRmsChanged = onRmsChanged,
         _now = now ?? DateTime.now {
     _gate.addListener(_onGateChanged);
     _previousSpeakComplete = _voiceService.onSpeakComplete;
@@ -153,6 +155,7 @@ class VoicePipelineController extends ChangeNotifier {
   final Future<bool> Function(VoiceShortcut shortcut)? _onConfirmShortcut;
   final FutureOr<void> Function(VoiceShortcut shortcut)? _onExecuteShortcut;
   final FutureOr<void> Function(String transcript)? _onTranscript;
+  final ValueChanged<double>? _onRmsChanged;
   final DateTime Function() _now;
   final int sampleRate;
   final Duration continuityWindow;
@@ -174,11 +177,13 @@ class VoicePipelineController extends ChangeNotifier {
   int _captureOpToken = 0;
   int _sessionGeneration = 0;
   bool _pttReleaseRequested = false;
+  int _singleTurnBufferedBytes = 0;
 
   VoicePipelineMode get mode => _mode;
   bool get isCapturing => _mode != VoicePipelineMode.idle;
   bool get isContinuousEnabled => _mode == VoicePipelineMode.continuous;
   bool get isPushToTalkActive => _mode == VoicePipelineMode.pushToTalk;
+  bool get isSingleTurnActive => _mode == VoicePipelineMode.singleTurn;
   bool get isTranscribing => _isTranscribing;
   String? get lastError => _lastError;
   AudioEffectsReport? get lastEffectsReport => _lastEffectsReport;
@@ -214,7 +219,8 @@ class VoicePipelineController extends ChangeNotifier {
 
   Future<bool> startPushToTalk() async {
     if (!_canCapture) {
-      _lastError = 'Captura bloqueada sem sessão autenticada em primeiro plano.';
+      _lastError =
+          'Captura bloqueada sem sessão autenticada em primeiro plano.';
       _notifySafely();
       return false;
     }
@@ -239,6 +245,7 @@ class VoicePipelineController extends ChangeNotifier {
       _frameSub = _capture.frames.listen((frame) {
         if (_mode == VoicePipelineMode.pushToTalk && _canCapture) {
           _pttBuffer.add(frame);
+          _emitRms(frame);
         }
       });
       final report = await _capture.start(sampleRate: sampleRate);
@@ -283,10 +290,131 @@ class VoicePipelineController extends ChangeNotifier {
     } catch (_) {}
 
     final pcm = _pttBuffer.takeBytes();
+    _onRmsChanged?.call(0.0);
     _notifySafely();
 
     if (!_canCapture || pcm.isEmpty) return null;
     return _transcribeAndDispatch(pcm);
+  }
+
+  /// Captura um comando de voz único pelo microfone nativo (`AudioRecord`),
+  /// finalizando automaticamente no silêncio (VAD) ou ao chamar
+  /// [stopSingleTurnListening]. Nunca aciona reconhecimento do Google.
+  Future<bool> startSingleTurnListening() async {
+    if (!_canCapture) {
+      _lastError =
+          'Captura bloqueada sem sessão autenticada em primeiro plano.';
+      _notifySafely();
+      return false;
+    }
+    if (_mode == VoicePipelineMode.singleTurn) return true;
+
+    final permitted = await _ensurePermission();
+    if (!permitted) {
+      _lastError = 'Permissão de microfone negada.';
+      _notifySafely();
+      return false;
+    }
+    if (!_canCapture) return false;
+
+    await stopAll();
+    if (!_canCapture) return false;
+    final token = ++_captureOpToken;
+
+    try {
+      _pttBuffer.clear();
+      _singleTurnBufferedBytes = 0;
+      _vad.reset();
+      _frameSub = _capture.frames.listen((frame) {
+        if (_mode == VoicePipelineMode.singleTurn &&
+            _canCapture &&
+            token == _captureOpToken) {
+          _pttBuffer.add(frame);
+          _singleTurnBufferedBytes += frame.length;
+          _emitRms(frame);
+          _frameQueue = _frameQueue
+              .then((_) => _processSingleTurnFrame(frame, token))
+              .catchError((_) {});
+        }
+      });
+      final report = await _capture.start(sampleRate: sampleRate);
+      if (_disposed || !_canCapture || token != _captureOpToken) {
+        await _frameSub?.cancel();
+        _frameSub = null;
+        try {
+          await _capture.stop();
+        } catch (_) {}
+        _pttBuffer.clear();
+        _singleTurnBufferedBytes = 0;
+        _vad.reset();
+        _mode = VoicePipelineMode.idle;
+        _onRmsChanged?.call(0.0);
+        _notifySafely();
+        return false;
+      }
+      _lastEffectsReport = report;
+      _mode = VoicePipelineMode.singleTurn;
+      _lastError = null;
+      _notifySafely();
+      return true;
+    } catch (e) {
+      await stopAll();
+      _lastError = '$e';
+      _notifySafely();
+      return false;
+    }
+  }
+
+  Future<String?> stopSingleTurnListening() async {
+    if (_mode != VoicePipelineMode.singleTurn) return null;
+    final pcm = await _drainSingleTurnCapture();
+    if (!_canCapture || pcm.isEmpty) return null;
+    return _transcribeAndDispatch(pcm);
+  }
+
+  Future<Uint8List> _drainSingleTurnCapture() async {
+    _mode = VoicePipelineMode.idle;
+    _captureOpToken++;
+    _vad.reset();
+    await _frameSub?.cancel();
+    _frameSub = null;
+    try {
+      await _capture.stop();
+    } catch (_) {}
+    final pcm = _pttBuffer.takeBytes();
+    _singleTurnBufferedBytes = 0;
+    _onRmsChanged?.call(0.0);
+    _notifySafely();
+    return pcm;
+  }
+
+  Future<void> _processSingleTurnFrame(Uint8List frame, int token) async {
+    if (_mode != VoicePipelineMode.singleTurn ||
+        !_canCapture ||
+        token != _captureOpToken) {
+      return;
+    }
+    await for (final segment in _vad.processFrame(frame)) {
+      if (_mode != VoicePipelineMode.singleTurn ||
+          !_canCapture ||
+          token != _captureOpToken) {
+        break;
+      }
+      await _drainSingleTurnCapture();
+      if (_canCapture && segment.isNotEmpty) {
+        await _transcribeAndDispatch(segment);
+      }
+      return;
+    }
+    final maxBytes = sampleRate * 2 * 25;
+    if (_mode == VoicePipelineMode.singleTurn &&
+        token == _captureOpToken &&
+        _singleTurnBufferedBytes >= maxBytes) {
+      final pcm = await _drainSingleTurnCapture();
+      if (_canCapture && pcm.isNotEmpty) {
+        await _transcribeAndDispatch(pcm);
+      }
+    }
   }
 
   Future<bool> startContinuousListening() async {
@@ -315,6 +443,7 @@ class VoicePipelineController extends ChangeNotifier {
       _vad.reset();
       _frameSub = _capture.frames.listen((frame) {
         if (_mode == VoicePipelineMode.continuous && _canCapture) {
+          _emitRms(frame);
           _frameQueue = _frameQueue
               .then((_) => _processContinuousFrame(frame))
               .catchError((_) {});
@@ -363,7 +492,9 @@ class VoicePipelineController extends ChangeNotifier {
     _mode = VoicePipelineMode.idle;
     _continuityUntil = null;
     _pttBuffer.clear();
+    _singleTurnBufferedBytes = 0;
     _vad.reset();
+    _onRmsChanged?.call(0.0);
 
     await _frameSub?.cancel();
     _frameSub = null;
@@ -516,6 +647,13 @@ class VoicePipelineController extends ChangeNotifier {
       _isTranscribing = false;
       _notifySafely();
     }
+  }
+
+  void _emitRms(Uint8List frame) {
+    final cb = _onRmsChanged;
+    if (cb == null || frame.isEmpty) return;
+    final normalized = (PcmEnergy.rmsInt16(frame) / 2500.0).clamp(0.0, 1.0);
+    cb(normalized);
   }
 
   void _notifySafely() {

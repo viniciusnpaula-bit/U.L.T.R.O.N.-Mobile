@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -160,6 +159,10 @@ class _CoreScreenState extends State<CoreScreen>
       onConfirmShortcut: _confirmShortcut,
       onExecuteShortcut: _executeShortcut,
       onTranscript: _handleVoiceTranscript,
+      onRmsChanged: (rms) {
+        if (!mounted) return;
+        setState(() => speechRms = rms);
+      },
     )..addListener(_onVoicePipelineChanged);
     voicePipeline.handleLifecycleState(_lifecycleState);
     ticker = createTicker((duration) {
@@ -229,19 +232,29 @@ class _CoreScreenState extends State<CoreScreen>
 
   void _onVoicePipelineChanged() {
     if (!mounted) return;
+    final capturing =
+        voicePipeline.isSingleTurnActive || voicePipeline.isPushToTalkActive;
     final err = voicePipeline.lastError;
     if (err != null && err != _lastShownPipelineError) {
       _lastShownPipelineError = err;
+      final friendly = err == 'sem_chave_stt'
+          ? 'Configure uma chave STT (Groq gratuito ou Whisper compatível) em Config IA para transcrever o microfone do celular.'
+          : err;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(err, style: const TextStyle(fontSize: 11)),
+          content: Text(friendly, style: const TextStyle(fontSize: 11)),
           duration: const Duration(seconds: 3),
         ),
       );
     } else if (err == null) {
       _lastShownPipelineError = null;
     }
-    setState(() {});
+    setState(() {
+      listeningVoice = capturing;
+      if (!capturing) {
+        speechRms = 0.0;
+      }
+    });
   }
 
   Future<void> _handleVoiceTranscript(String transcript) async {
@@ -898,43 +911,46 @@ class _CoreScreenState extends State<CoreScreen>
 
   Future<void> _startVoiceInput() async {
     if (sending) return;
-    if (listeningVoice) {
+    if (voicePipeline.isSingleTurnActive) {
       HapticFeedback.selectionClick();
-      await deviceService.stopListeningVoice();
+      await voicePipeline.stopSingleTurnListening();
+      return;
+    }
+    if (voicePipeline.isPushToTalkActive) {
+      HapticFeedback.selectionClick();
+      await voicePipeline.stopPushToTalk();
       return;
     }
     HapticFeedback.mediumImpact();
     await voiceService.stop();
     // Aguarda 280ms após cortar o TTS para dissipar qualquer eco do alto-falante antes de abrir o microfone
     await Future<void>.delayed(const Duration(milliseconds: 280));
-    if (!mounted || sending || listeningVoice) return;
-    setState(() {
-      listeningVoice = true;
-      speechRms = 0.1;
-    });
-    try {
-      final spoken = await deviceService.listenVoice(
-        prompt: 'Fale seu comando para o U.L.T.R.O.N...',
+    if (!mounted || sending || voicePipeline.isCapturing) return;
+
+    final sttCfg = widget.sttService == null
+        ? await providerStore.resolveSttConfig()
+        : null;
+    if (!mounted) return;
+    if (sttCfg != null && sttCfg.apiKey.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Microfone nativo pronto, mas falta chave STT (Groq gratuito ou Whisper em Config IA). Google Voz desativado.',
+            style: TextStyle(fontSize: 11),
+          ),
+          duration: Duration(seconds: 4),
+        ),
       );
-      if (!mounted) return;
-      setState(() {
-        listeningVoice = false;
-        speechRms = 0.0;
-      });
-      if (spoken.isNotEmpty) {
-        commandController.text = spoken;
-        await saveCommand();
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        listeningVoice = false;
-        speechRms = 0.0;
-      });
+      return;
+    }
+
+    final ok = await voicePipeline.startSingleTurnListening();
+    if (!mounted) return;
+    if (!ok && voicePipeline.lastError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Reconhecimento de voz indisponível: $e',
+            'Microfone nativo indisponível: ${voicePipeline.lastError}',
             style: const TextStyle(fontSize: 11),
           ),
           duration: const Duration(seconds: 3),
@@ -2100,31 +2116,19 @@ class _CoreScreenState extends State<CoreScreen>
                 child: SizedBox(
                   width: 210,
                   height: 210,
-                  child: widget.shaderProgram != null
-                      ? CoreOrb(
-                          stage: stage,
-                          shaderProgram: widget.shaderProgram,
-                          energy: voiceService.isSpeaking
-                              ? 0.9
-                              : (listeningVoice || voicePipeline.isCapturing)
-                                  ? 0.7
-                                  : sending
-                                      ? 0.55
-                                      : 0.2,
-                        )
-                      : ValueListenableBuilder<double>(
-                          valueListenable: coreTime,
-                          builder: (context, time, child) => CustomPaint(
-                            painter: CorePainter(
-                              time,
-                              intensity: nightFocusMode
-                                  ? 0.35
-                                  : listeningVoice
-                                      ? (1.35 + speechRms * 1.25)
-                                      : (sending ? 2.2 : 1.0),
-                            ),
-                          ),
-                        ),
+                  child: CoreOrb(
+                    stage: stage,
+                    shaderProgram: widget.shaderProgram,
+                    energy: nightFocusMode
+                        ? 0.12
+                        : voiceService.isSpeaking
+                            ? 0.95
+                            : (listeningVoice || voicePipeline.isCapturing)
+                                ? (0.55 + speechRms * 0.65).clamp(0.4, 1.2)
+                                : sending
+                                    ? 0.65
+                                    : 0.22,
+                  ),
                 ),
               ),
               Text(
@@ -2472,11 +2476,10 @@ class _CoreScreenState extends State<CoreScreen>
                 child: SizedBox(
                   width: 76,
                   height: 76,
-                  child: ValueListenableBuilder<double>(
-                    valueListenable: coreTime,
-                    builder: (context, time, child) => CustomPaint(
-                      painter: CorePainter(time, intensity: 0.9),
-                    ),
+                  child: CoreOrb(
+                    stage: stage,
+                    shaderProgram: widget.shaderProgram,
+                    energy: voiceService.isSpeaking ? 0.85 : 0.28,
                   ),
                 ),
               ),
@@ -4848,154 +4851,6 @@ class _HelpSyntaxItem extends StatelessWidget {
           ],
         ),
       );
-}
-
-/// 4-layer Orbital Crimson Core ported from `UltronCoreCanvas` in `ultron_mobile_interface.tsx`.
-class CorePainter extends CustomPainter {
-  CorePainter(this.time, {this.intensity = 1.0});
-
-  final double time;
-  final double intensity;
-
-  static const _auraGradient = RadialGradient(
-    colors: [
-      Color(0x5975020F),
-      Color(0x2E51080D),
-      Color(0x142B0307),
-      Color(0x0019171B),
-    ],
-    stops: [0.0, 0.35, 0.70, 1.0],
-  );
-
-  static const _hotspotGradient = RadialGradient(
-    colors: [
-      Color(0xFFF0E6E7),
-      Color(0xFFFFA0A0),
-      Color(0xFFE50914),
-      Color(0x0075020F),
-    ],
-    stops: [0.0, 0.28, 0.70, 1.0],
-  );
-
-  static final _ring1Paint = Paint()
-    ..color = const Color(0xBF75020F)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1.8;
-
-  static final _nodePaint = Paint()..color = const Color(0xFFFFA0A0);
-
-  static final _ring2Paint = Paint()
-    ..color = const Color(0x8051080D)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1.3;
-
-  static final _majorTickPaint = Paint()..color = const Color(0xFFE50914);
-  static final _minorTickPaint = Paint()..color = const Color(0x5951080D);
-
-  static final _hexPaint = Paint()
-    ..color = const Color(0xBF75020F)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1.4;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.shortestSide;
-    final center = size.center(Offset.zero);
-
-    final angle1 = time * 0.96 * intensity;
-    final angle2 = -time * 1.32 * intensity;
-    final pulse = time * 2.4 * intensity;
-
-    final dynamicPulse = 1.0 + sin(pulse) * 0.07;
-    final baseR = (w * 0.23) * dynamicPulse;
-
-    // 1. Deep Crimson Radial Aura
-    final auraRadius = baseR * 1.95;
-    final auraRect = Rect.fromCircle(center: center, radius: auraRadius);
-    final auraPaint = Paint()..shader = _auraGradient.createShader(auraRect);
-    canvas.drawCircle(center, auraRadius, auraPaint);
-
-    canvas.save();
-    canvas.translate(center.dx, center.dy);
-
-    // 2A. Primary Elliptical Orbital Ring + 4 Orbital Nodes
-    canvas.save();
-    canvas.rotate(0.38 + angle1);
-    final ring1Rect = Rect.fromCenter(
-      center: Offset.zero,
-      width: baseR * 1.55 * 2,
-      height: baseR * 0.82 * 2,
-    );
-    canvas.drawOval(ring1Rect, _ring1Paint);
-
-    for (var i = 0; i < 4; i++) {
-      final th = i * pi / 2;
-      final px = cos(th) * baseR * 1.55;
-      final py = sin(th) * baseR * 0.82;
-      canvas.drawCircle(Offset(px, py), 2.5, _nodePaint);
-    }
-    canvas.restore();
-
-    // 2B. Secondary Counter-Rotating Ring + 16 Ticks
-    canvas.save();
-    canvas.rotate(-0.45 + angle2);
-    final ring2Rect = Rect.fromCenter(
-      center: Offset.zero,
-      width: baseR * 1.15 * 2,
-      height: baseR * 1.48 * 2,
-    );
-    canvas.drawOval(ring2Rect, _ring2Paint);
-
-    const ticks = 16;
-    for (var t = 0; t < ticks; t++) {
-      final theta = (t / ticks) * pi * 2;
-      final tx = cos(theta) * baseR * 1.15;
-      final ty = sin(theta) * baseR * 1.48;
-      final isMajor = t % 4 == 0;
-      canvas.drawCircle(
-        Offset(tx, ty),
-        isMajor ? 2.0 : 1.0,
-        isMajor ? _majorTickPaint : _minorTickPaint,
-      );
-    }
-    canvas.restore();
-
-    // 3. Hexagonal Wireframe Structure
-    canvas.save();
-    canvas.rotate(-angle1 * 0.7);
-    final hexPath = Path();
-    const poly = 6;
-    final rSub = baseR * 0.65;
-    for (var p = 0; p <= poly; p++) {
-      final pa = (p / poly) * pi * 2;
-      final rx = cos(pa) * rSub;
-      final ry = sin(pa) * rSub;
-      if (p == 0) {
-        hexPath.moveTo(rx, ry);
-      } else {
-        hexPath.lineTo(rx, ry);
-      }
-    }
-    hexPath.close();
-    canvas.drawPath(hexPath, _hexPaint);
-    canvas.restore();
-
-    // 4. Central Hyper-Bright Singularity Hotspot
-    final hotspotRadius = baseR * 0.38;
-    final hotspotRect = Rect.fromCircle(
-      center: Offset.zero,
-      radius: hotspotRadius,
-    );
-    final hotspotPaint = Paint()
-      ..shader = _hotspotGradient.createShader(hotspotRect);
-    canvas.drawCircle(Offset.zero, hotspotRadius, hotspotPaint);
-
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant CorePainter oldDelegate) =>
-      oldDelegate.time != time || oldDelegate.intensity != intensity;
 }
 
 class _CircularTelemetryGauge extends StatelessWidget {

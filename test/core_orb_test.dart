@@ -5,8 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ultron_mobile/ui/widgets/core_orb.dart';
 
 void main() {
-  testWidgets('CoreOrb loads compiled crimson FragmentProgram and renders without throwing', (tester) async {
-    final program = await FragmentProgram.fromAsset('shaders/crimson_core.frag');
+  testWidgets(
+      'CoreOrb loads compiled crimson FragmentProgram and renders without throwing',
+      (tester) async {
+    final program =
+        await FragmentProgram.fromAsset('shaders/crimson_core.frag');
 
     await tester.pumpWidget(
       MaterialApp(
@@ -29,7 +32,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('CoreOrb renders fallback CorePainter safely when shaderProgram is null', (tester) async {
+  testWidgets(
+      'CoreOrb renders fallback CorePainter safely when shaderProgram is null',
+      (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
@@ -48,7 +53,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('CoreOrb pauses Ticker when stage is hidden or app lifecycle is paused', (tester) async {
+  testWidgets(
+      'CoreOrb pauses Ticker when stage is hidden or app lifecycle is paused',
+      (tester) async {
     final tickerStates = <bool>[];
 
     await tester.pumpWidget(
