@@ -122,7 +122,7 @@ class _CoreScreenState extends State<CoreScreen>
   VoiceProfile selectedVoiceProfile = VoiceProfile.grave;
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
-  String installedVersion = 'v1.4.1';
+  String installedVersion = 'v1.4.2';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
