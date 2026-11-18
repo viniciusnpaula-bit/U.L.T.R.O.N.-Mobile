@@ -96,6 +96,10 @@ class UltronAudioService : Service() {
         var userPaused: Boolean = false
             private set
 
+        @Volatile
+        var isRecorderOpen: Boolean = false
+            private set
+
         /** O que a UI pode afirmar: serviço vivo, capturando de verdade e não pausado. */
         fun isListeningForReal(): Boolean = isRunning && modelLoaded && captureHealthy && !userPaused
 
@@ -121,6 +125,13 @@ class UltronAudioService : Service() {
             val hasMic = ContextCompat.checkSelfPermission(
                 context, Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            val hasMicHardware = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                (am?.getDevices(AudioManager.GET_DEVICES_INPUTS)?.isNotEmpty() == true) ||
+                    context.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
+            } else {
+                context.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
+            }
             val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
             val ignoringBattery = pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -141,7 +152,7 @@ class UltronAudioService : Service() {
                 "micPermission" to hasMic,
                 "ignoringBatteryOptimizations" to ignoringBattery,
                 "bootAutostart" to prefs.getBoolean(PREF_BOOT_AUTOSTART, false),
-                "recognitionAvailable" to hasMic,
+                "recognitionAvailable" to (hasMic && hasMicHardware),
                 "lastTrigger" to lastTriggerTimestamp,
                 "voiceTriggers" to Stats.voiceTriggers,
                 "detections" to Stats.detections,
@@ -422,28 +433,53 @@ class UltronAudioService : Service() {
         )
         if (minBuf <= 0) throw IllegalStateException("getMinBufferSize=$minBuf")
         val frameBytes = (SAMPLE_RATE_HZ * WINDOW_MS / 1000) * 2
-        val rec = AudioRecord(
+        val bufSize = minBuf.coerceAtLeast(frameBytes * 2)
+        val candidates = listOf(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            SAMPLE_RATE_HZ,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBuf.coerceAtLeast(frameBytes * 2)
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.DEFAULT,
         )
-        if (rec.state != AudioRecord.STATE_INITIALIZED) {
-            rec.release()
-            throw IllegalStateException("AudioRecord não inicializou (microfone ocupado?)")
+        var lastReason = "nenhum source inicializou"
+        for (source in candidates) {
+            val rec = try {
+                AudioRecord(
+                    source,
+                    SAMPLE_RATE_HZ,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufSize
+                )
+            } catch (e: Exception) {
+                lastReason = "${e.javaClass.simpleName}: ${e.message}"
+                continue
+            }
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                lastReason = "source=$source state=${rec.state}"
+                safely("AudioRecord.release") { rec.release() }
+                continue
+            }
+            try {
+                rec.startRecording()
+            } catch (e: Exception) {
+                lastReason = "source=$source startRecording: ${e.message}"
+                safely("AudioRecord.release") { rec.release() }
+                continue
+            }
+            if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                lastReason = "source=$source recordingState=${rec.recordingState}"
+                safely("AudioRecord.release") { rec.release() }
+                continue
+            }
+            isRecorderOpen = true
+            return rec
         }
-        rec.startRecording()
-        if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-            rec.release()
-            throw IllegalStateException("AudioRecord não entrou em gravação")
-        }
-        return rec
+        throw IllegalStateException("AudioRecord não inicializou ($lastReason)")
     }
 
     private fun releaseRecorder(recorder: AudioRecord?) {
         safely("AudioRecord.stop") { recorder?.stop() }
         safely("AudioRecord.release") { recorder?.release() }
+        isRecorderOpen = false
     }
 
     /**
