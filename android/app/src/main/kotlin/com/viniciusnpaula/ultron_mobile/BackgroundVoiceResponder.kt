@@ -328,10 +328,42 @@ object BackgroundVoiceResponder {
         return km?.isDeviceLocked == true
     }
 
+    private fun stripConversationalFillers(text: String): String {
+        var current = text.trim()
+            .trimEnd('.', '!', '?', ',', ';', ':')
+            .trim()
+        val leadingPatterns = listOf(
+            Regex("""^(?:(?:ei|oi|ol[aá]|ok|e\s*a[ií]|fala)\s+)?ultron[,\s]+""", RegexOption.IGNORE_CASE),
+            Regex("""^(?:por\s+favor|pfv|por\s+gentileza)[,\s]+""", RegexOption.IGNORE_CASE),
+            Regex("""^(?:voc[eê]|vc)\s+(?:pode|poderia|consegue)\s+""", RegexOption.IGNORE_CASE),
+            Regex("""^(?:pode|poderia|consegue|tem\s+como|faz\s+o\s+favor\s+de|quero\s+que(?:\s+voc[eê]|\s+vc)?)\s+""", RegexOption.IGNORE_CASE),
+        )
+        val trailingPattern = Regex(
+            """(?:\s+(?:para\s+mim|pra\s+mim|por\s+favor|por\s+gentileza|pfv|aqui|a[ií]|agora|r[aá]pido|logo|se\s+puder|se\s+conseguir|por\s+obs[eé]quio|ok|t[aá]|viu|ultron))+$""",
+            RegexOption.IGNORE_CASE,
+        )
+        var prev: String
+        do {
+            prev = current
+            for (p in leadingPatterns) {
+                current = p.replace(current, "").trim()
+            }
+            current = trailingPattern.replace(current, "").trim()
+        } while (current != prev && current.isNotEmpty())
+        return current
+    }
+
     private fun tryLocalAction(context: Context, rawTranscript: String): BackgroundTurnResult? {
-        val trimmed = rawTranscript.trim()
-        val clean = trimmed.trimEnd('.', '!', '?', ',', ';', ':').trim()
+        val clean = stripConversationalFillers(rawTranscript)
+        if (clean.isEmpty()) return null
         val lower = clean.lowercase(Locale("pt", "BR"))
+
+        // Frases compostas / multi-intenção ("abra o whatsapp e veja...", "liga a lanterna depois...")
+        // vão direto para a IA interpretar o pedido completo com todas as ações juntas.
+        val hasMultiClause = Regex(
+            """\b(?:e\s+(?:tamb[eé]m|depois|j[aá]|me|liga|desliga|abre|abra|aumenta|diminui|abaixa|pausa|toca|coloca|bota|manda|envia|v[eê]|veja|leia)|ent[aã]o|mas\s|antes\s+de|depois\s+de)\b""",
+        ).containsMatchIn(lower)
+        if (hasMultiClause) return null
 
         fun actionTurn(speak: String, log: String): BackgroundTurnResult = BackgroundTurnResult(
             speakText = speak,
@@ -480,15 +512,16 @@ object BackgroundVoiceResponder {
             }
         }
 
-        // 10. Abrir aplicativos e configurações
-        Regex("""^(?:abrir|iniciar|abre|abra)\s+(?:o\s+|a\s+|app\s+|aplicativo\s+)?(.+)$""").find(lower)?.let { m ->
-            val target = m.groupValues[1].trim()
-            if (target.isNotEmpty() && target != "palco" && target != "documento") {
-                return try {
+        // 10. Abrir aplicativos e configurações (se não achar app literal, deixa a IA entender o contexto)
+        Regex("""^(?:abrir|iniciar|abre|abra|executar)\s+(.+)$""").find(lower)?.let { m ->
+            val target = DeviceHardwareHelper.sanitizeAppQuery(m.groupValues[1])
+            val wordCount = target.split(Regex("""\s+""")).count { it.isNotBlank() }
+            if (target.isNotEmpty() && wordCount <= 3 && target != "palco" && target != "documento") {
+                try {
                     val opened = DeviceHardwareHelper.launchInstalledApp(context, target)
-                    actionTurn("Abrindo $opened.", "📱 App aberto: $opened")
-                } catch (e: Throwable) {
-                    actionTurn("Não encontrei o aplicativo $target.", "⚠️ Abrir $target: ${e.message}")
+                    return actionTurn("Abrindo $opened.", "📱 App aberto: $opened")
+                } catch (_: Throwable) {
+                    // Cai para a IA responder ou escolher a melhor ação com base no contexto.
                 }
             }
         }
@@ -507,18 +540,25 @@ object BackgroundVoiceResponder {
             val torch = if (status["torchOn"] == true) "LIGADA" else "DESLIGADA"
             val vol = status["volumePercent"] as? Int ?: 0
             val locked = isDeviceLocked(context)
+            val appsSample = DeviceHardwareHelper.listInstalledAppSample(context, 30)
+            val appsHint = if (appsSample.isNotEmpty()) {
+                " | Apps instalados: ${appsSample.joinToString(", ")}"
+            } else {
+                ""
+            }
 
             val systemPrompt = "Você é o U.L.T.R.O.N., assistente pessoal tático Android em português do Brasil, respondendo em 2º plano (mãos-livres). " +
+                "Entenda linguagem natural, pedidos indiretos, gírias, ordens compostas e o contexto das mensagens anteriores da conversa. " +
                 "Responda de forma natural em no máximo 2 ou 3 frases diretas, sem markdown ou emojis. " +
-                "TELEMETRIA: Bateria $bat% ($charging) | Lanterna $torch | Volume $vol% | Tela ${if (locked) "BLOQUEADA" else "DESBLOQUEADA"}. " +
-                "Se o operador pedir uma ação no aparelho, inclua uma ou mais tags exatas no final da resposta: " +
+                "TELEMETRIA: Bateria $bat% ($charging) | Lanterna $torch | Volume $vol% | Tela ${if (locked) "BLOQUEADA" else "DESBLOQUEADA"}$appsHint. " +
+                "Sempre que o operador pedir ou sugerir uma ação (mesmo de forma indireta, ex: 'tá escuro' -> ligar lanterna), inclua as tags exatas no final: " +
                 "[ACTION:TORCH_ON], [ACTION:TORCH_OFF], [ACTION:TORCH_TOGGLE], " +
                 "[ACTION:VOLUME_SET:N], [ACTION:VOLUME_UP], [ACTION:VOLUME_DOWN], [ACTION:VOLUME_MUTE], " +
                 "[ACTION:MEDIA_PLAY], [ACTION:MEDIA_PAUSE], [ACTION:MEDIA_PLAY_PAUSE], [ACTION:MEDIA_NEXT], [ACTION:MEDIA_PREVIOUS], [ACTION:MEDIA_STOP], " +
                 "[ACTION:OPEN_CAMERA], [ACTION:OPEN_APP:nome], [ACTION:OPEN_SETTINGS:wifi|bluetooth|display|sound|general], " +
                 "[ACTION:ALARM:HH:MM:Motivo], [ACTION:TIMER:SEGUNDOS:Motivo], [ACTION:VIBRATE], [ACTION:SEARCH:termo], " +
-                "[ACTION:NOTE:texto], [ACTION:INBOX:texto]. " +
-                "Ações sensíveis (enviar WhatsApp/SMS, ler notificações com tela bloqueada, desligar PC) exigem abrir o U.L.T.R.O.N."
+                "[ACTION:NOTE:texto], [ACTION:INBOX:texto], [ACTION:READ_MESSAGES], [ACTION:REPLY_MESSAGE:contato:texto]. " +
+                "Ações sensíveis (ler/responder notificações, enviar WhatsApp/SMS, desligar PC) exigem tela desbloqueada."
 
             val messages = JSONArray().apply {
                 put(JSONObject().apply {
@@ -544,7 +584,7 @@ object BackgroundVoiceResponder {
             val payload = JSONObject().apply {
                 put("model", cfg.aiModel.ifBlank { "openai" })
                 put("temperature", 0.4)
-                put("max_tokens", 260)
+                put("max_tokens", 320)
                 put("messages", messages)
             }.toString()
 
@@ -704,6 +744,18 @@ object BackgroundVoiceResponder {
                                 if (msgs.isEmpty()) "📭 Sem novas mensagens"
                                 else "📨 ${msgs.size} mensagens recentes"
                             )
+                        }
+                    }
+                    "REPLY_MESSAGE" -> {
+                        if (locked) {
+                            logs.add("🔒 Desbloqueie para responder mensagens")
+                        } else {
+                            val target = if (arg1.equals("ultimo", true) || arg1.equals("último", true)) "" else arg1
+                            val body = parts.drop(2).joinToString(":").trim()
+                            if (body.isNotEmpty()) {
+                                val res = UltronNotificationService.replyToMessage(context, target, body)
+                                logs.add("↩️ $res")
+                            }
                         }
                     }
                 }

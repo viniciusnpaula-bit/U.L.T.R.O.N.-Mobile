@@ -181,8 +181,48 @@ object DeviceHardwareHelper {
         return true
     }
 
+    private val trailingCourtesyRegex = Regex(
+        """(?:\s+(?:para\s+mim|pra\s+mim|por\s+favor|por\s+gentileza|pfv|aqui|a[ií]|agora|r[aá]pido|logo|se\s+puder|se\s+conseguir|por\s+obs[eé]quio|ok|t[aá]|viu|ultron))+$""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private val leadingArticleRegex = Regex(
+        """^(?:o|a|os|as|um|uma|app|aplicativo)\s+""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    fun sanitizeAppQuery(rawQuery: String): String {
+        var cleaned = rawQuery.trim()
+            .trimEnd('.', '!', '?', ',', ';', ':')
+            .trim()
+        var prev: String
+        do {
+            prev = cleaned
+            cleaned = trailingCourtesyRegex.replace(cleaned, "").trim()
+            cleaned = leadingArticleRegex.replace(cleaned, "").trim()
+        } while (cleaned != prev && cleaned.isNotEmpty())
+        return cleaned
+    }
+
+    fun listInstalledAppSample(context: Context, limit: Int = 30): List<String> {
+        return try {
+            val pm = context.packageManager
+            val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            }
+            pm.queryIntentActivities(mainIntent, 0)
+                .mapNotNull { it.loadLabel(pm)?.toString()?.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .sorted()
+                .take(limit)
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
     fun launchInstalledApp(context: Context, rawQuery: String): String {
-        val query = rawQuery.trim().lowercase()
+        val query = sanitizeAppQuery(rawQuery).lowercase()
         if (query.isEmpty()) throw IllegalArgumentException("Informe o nome do aplicativo.")
 
         when (query) {

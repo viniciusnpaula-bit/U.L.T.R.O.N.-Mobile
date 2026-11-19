@@ -401,4 +401,28 @@ void main() {
     expect(turns.first.assistantText, contains('[Hardware: 🔦 Lanterna: ON]'));
     expect(turns.first.senderLabel, 'Hardware Bridge (2º plano)');
   });
+
+  test(
+      'tryExecuteNaturalCommand strips courtesy suffixes and delegates multi-clause or non-app phrases to AI',
+      () async {
+    final service = DeviceControlService(channel: channel);
+
+    // Strips courtesy phrasing around single-app command: "abra o whatsapp pra mim" -> openApp("whatsapp")
+    final politeOpen =
+        await service.tryExecuteNaturalCommand('abra o whatsapp pra mim.');
+    expect(politeOpen?.handled, isTrue);
+    expect(calls.last.method, 'openApp');
+    expect(calls.last.arguments, {'target': 'whatsapp'});
+
+    final politeLead = await service.tryExecuteNaturalCommand(
+        'Ei Ultron, por favor você pode abrir o youtube aí agora?');
+    expect(politeLead?.handled, isTrue);
+    expect(calls.last.method, 'openApp');
+    expect(calls.last.arguments, {'target': 'youtube'});
+
+    // Multi-clause order delegates to AI instead of misparsing as literal app name
+    final multiClause = await service.tryExecuteNaturalCommand(
+        'abra o whatsapp pra mim e veja minhas mensagens');
+    expect(multiClause, isNull);
+  });
 }

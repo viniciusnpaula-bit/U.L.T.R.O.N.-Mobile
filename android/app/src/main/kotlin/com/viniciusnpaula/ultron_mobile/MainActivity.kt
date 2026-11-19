@@ -586,6 +586,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     whisperMode = call.argument<Boolean>("whisperMode") ?: false,
                 )
                 BackgroundVoiceConfigStore.save(this, cfg)
+                val historyRaw = call.argument<List<Map<String, Any?>>>("recentHistory")
+                if (historyRaw != null) {
+                    BackgroundChatStore.seedForegroundContext(this, historyRaw)
+                }
                 result.success(true)
             }
             "consumePendingBackgroundTurns" -> {

@@ -85,6 +85,37 @@ object BackgroundChatStore {
         }
     }
 
+    /**
+     * Sincroniza os últimos turnos do chat aberto para que perguntas feitas depois
+     * em segundo plano entendam o contexto da conversa recente.
+     */
+    fun seedForegroundContext(context: Context, rawPairs: List<Map<String, Any?>>) {
+        if (rawPairs.isEmpty()) return
+        synchronized(lock) {
+            val arr = JSONArray()
+            for (item in rawPairs.takeLast(MAX_CONTEXT_TURNS)) {
+                val u = (item["userText"] as? String)?.trim().orEmpty()
+                val a = (item["assistantText"] as? String)?.trim().orEmpty()
+                if (u.isNotEmpty() && a.isNotEmpty()) {
+                    arr.put(
+                        JSONObject().apply {
+                            put("userText", u)
+                            put("assistantText", a)
+                            put("senderLabel", "U.L.T.R.O.N.")
+                            put("userTimestampMs", 0L)
+                            put("replyTimestampMs", 0L)
+                        },
+                    )
+                }
+            }
+            val encRecent = BackgroundVoiceConfigStore.encryptString(arr.toString()) ?: return
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_CONTEXT, encRecent)
+                .apply()
+        }
+    }
+
     private fun loadArray(encoded: String?): JSONArray {
         if (encoded.isNullOrBlank()) return JSONArray()
         val raw = BackgroundVoiceConfigStore.decryptString(encoded) ?: return JSONArray()

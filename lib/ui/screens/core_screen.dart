@@ -537,6 +537,18 @@ class _CoreScreenState extends State<CoreScreen>
               priority: 0,
             );
       final fish = voiceService.fishConfig;
+      final recentPairs = <Map<String, String>>[];
+      for (var i = 0; i + 1 < feed.length; i++) {
+        if (feed[i].isUser && !feed[i + 1].isUser) {
+          recentPairs.add(<String, String>{
+            'userText': feed[i].text,
+            'assistantText': feed[i + 1].text,
+          });
+        }
+      }
+      final trimmedPairs = recentPairs.length > 6
+          ? recentPairs.sublist(recentPairs.length - 6)
+          : recentPairs;
       await deviceService.syncBackgroundVoiceConfig(
         sttUrl: sttCfg.endpointUrl,
         sttKey: sttCfg.apiKey,
@@ -551,6 +563,7 @@ class _CoreScreenState extends State<CoreScreen>
         fishLanguage: fish.language,
         fishModel: fish.model,
         whisperMode: nightFocusMode,
+        recentHistory: trimmedPairs.isEmpty ? null : trimmedPairs,
       );
     } catch (_) {}
   }
@@ -1277,6 +1290,7 @@ class _CoreScreenState extends State<CoreScreen>
           timestamp: _formatTime(replyNow),
         ),
       );
+      unawaited(_syncBackgroundVoiceConfig());
       if (_isForegroundActive) {
         await voiceService.speak(actionExec.cleanText);
       }

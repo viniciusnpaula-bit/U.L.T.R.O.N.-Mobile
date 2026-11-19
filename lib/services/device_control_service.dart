@@ -756,6 +756,7 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     required String fishLanguage,
     required String fishModel,
     required bool whisperMode,
+    List<Map<String, String>>? recentHistory,
   }) async {
     try {
       await _channel.invokeMethod<bool>('syncBackgroundVoiceConfig', {
@@ -772,6 +773,7 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         'fishLanguage': fishLanguage,
         'fishModel': fishModel,
         'whisperMode': whisperMode,
+        if (recentHistory != null) 'recentHistory': recentHistory,
       });
     } catch (_) {}
   }
@@ -795,11 +797,55 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     }
   }
 
+  static final RegExp _trailingCourtesyRegex = RegExp(
+    r'(?:\s+(?:para\s+mim|pra\s+mim|por\s+favor|por\s+gentileza|pfv|aqui|a[ií]|agora|r[aá]pido|logo|se\s+puder|se\s+conseguir|por\s+obs[eé]quio|ok|t[aá]|viu|ultron))+$',
+    caseSensitive: false,
+  );
+
+  static String _stripCourtesyPhrasing(String input) {
+    var current = input.trim().replaceFirst(RegExp(r'[.!?,;:]+$'), '').trim();
+    final leading = <RegExp>[
+      RegExp(
+        r'^(?:(?:ei|oi|ol[aá]|ok|e\s*a[ií]|fala)\s+)?ultron[,\s]+',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'^(?:por\s+favor|pfv|por\s+gentileza)[,\s]+',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'^(?:voc[eê]|vc)\s+(?:pode|poderia|consegue)\s+',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'^(?:pode|poderia|consegue|tem\s+como|faz\s+o\s+favor\s+de|quero\s+que(?:\s+voc[eê]|\s+vc)?)\s+',
+        caseSensitive: false,
+      ),
+    ];
+    String prev;
+    do {
+      prev = current;
+      for (final p in leading) {
+        current = current.replaceFirst(p, '').trim();
+      }
+      current = current.replaceFirst(_trailingCourtesyRegex, '').trim();
+    } while (current != prev && current.isNotEmpty);
+    return current;
+  }
+
   /// Parses direct natural-language hardware commands so they execute immediately
   /// with zero latency and even without internet/API keys.
   Future<DeviceActionResult?> tryExecuteNaturalCommand(String rawInput) async {
-    final text = rawInput.trim();
+    final text = _stripCourtesyPhrasing(rawInput);
+    if (text.isEmpty) return null;
     final lower = text.toLowerCase();
+
+    // Frases compostas / multi-intenção seguem para a IA executar todas as ações com contexto.
+    if (RegExp(
+      r'\b(?:e\s+(?:tamb[eé]m|depois|j[aá]|me|liga|desliga|abre|abra|aumenta|diminui|abaixa|pausa|toca|coloca|bota|manda|envia|v[eê]|veja|leia)|ent[aã]o|mas\s|antes\s+de|depois\s+de)\b',
+    ).hasMatch(lower)) {
+      return null;
+    }
 
     try {
       // 1. Flashlight / Torch
@@ -1297,21 +1343,36 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         }
       }
 
-      // 23. Open any installed app ("abrir whatsapp", "abrir youtube", etc.)
+      // 23. Open any installed app ("abrir whatsapp", "abra o youtube pra mim", etc.)
       final openMatch = RegExp(
-        r'^(?:abrir|iniciar|executar)\s+(?:o\s+|a\s+|app\s+|aplicativo\s+)?(.+)$',
+        r'^(?:abrir|iniciar|executar|abre|abra)\s+(?:o\s+|a\s+|app\s+|aplicativo\s+)?(.+)$',
       ).firstMatch(lower);
       if (openMatch != null) {
-        final appTarget = openMatch.group(1)!.trim();
-        if (appTarget.isNotEmpty &&
-            appTarget != 'palco' &&
-            appTarget != 'documento') {
-          final opened = await openApp(appTarget);
-          return DeviceActionResult(
-            handled: true,
-            message: '📱 Aplicativo iniciado: $opened.',
-            speakText: 'Abrindo $opened.',
-          );
+        final rawTarget = openMatch
+            .group(1)!
+            .replaceFirst(_trailingCourtesyRegex, '')
+            .replaceFirst(
+              RegExp(r'^(?:o|a|um|uma|app|aplicativo)\s+'),
+              '',
+            )
+            .trim();
+        final words =
+            rawTarget.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+        if (rawTarget.isNotEmpty &&
+            words <= 3 &&
+            rawTarget != 'palco' &&
+            rawTarget != 'documento') {
+          try {
+            final opened = await openApp(rawTarget);
+            return DeviceActionResult(
+              handled: true,
+              message: '📱 Aplicativo iniciado: $opened.',
+              speakText: 'Abrindo $opened.',
+            );
+          } catch (_) {
+            // Não encontrou aplicativo literal: cai para a IA interpretar o contexto da frase.
+            return null;
+          }
         }
       }
     } catch (e) {
