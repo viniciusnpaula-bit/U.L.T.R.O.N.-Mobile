@@ -61,14 +61,14 @@ class UltronAudioService : Service() {
         private const val SAMPLE_RATE_HZ = 16000
         private const val WINDOW_MS = 100
 
-        private const val SLEEP_SPEAKER_GUARD_MS = 400L
-        private const val SLEEP_PAUSED_STATE_MS = 1500L
+        private const val SLEEP_SPEAKER_GUARD_MS = 120L
+        private const val SLEEP_PAUSED_STATE_MS = 1200L
         private const val SLEEP_LOW_BATTERY_MS = 10000L
-        private const val POST_SPEECH_ECHO_GUARD_MS = 1100L
+        private const val POST_SPEECH_ECHO_GUARD_MS = 550L
         private const val BATTERY_CHECK_INTERVAL_MS = 30_000L
 
         private const val INITIAL_NOISE_FLOOR = 300.0
-        private const val WAKE_HANDOFF_GUARD_MS = 4000L
+        private const val WAKE_HANDOFF_GUARD_MS = 1500L
 
         private const val SILENT_FRAMES_BEFORE_RESTART = 300 // 30 s de zeros = mic silenciado
         private const val MAX_RESTART_BACKOFF_MS = 30_000L

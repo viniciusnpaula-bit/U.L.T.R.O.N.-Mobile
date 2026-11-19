@@ -13,6 +13,7 @@ import '../../services/ai_provider_service.dart';
 import '../../services/android_actions_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/audio_capture_service.dart';
+import '../../services/audio_vad_buffer.dart';
 import '../../services/conversation_history.dart';
 import '../../services/desktop_pairing_service.dart';
 import '../../services/device_control_service.dart';
@@ -154,6 +155,10 @@ class _CoreScreenState extends State<CoreScreen>
       capture: widget.captureSource ?? MethodChannelAudioCaptureSource(),
       stt: widget.sttService ?? GroqWhisperSttService(),
       voiceService: voiceService,
+      vadSegmenter: VadSegmenter(
+        sampleRate: 16000,
+        silenceHangover: const Duration(milliseconds: 500),
+      ),
       corrections: VoiceCorrectionsService(),
       shortcuts: VoiceShortcutsService(),
       onConfirmShortcut: _confirmShortcut,
@@ -963,9 +968,12 @@ class _CoreScreenState extends State<CoreScreen>
       return;
     }
     HapticFeedback.mediumImpact();
+    final wasSpeaking = voiceService.isSpeaking;
     await voiceService.stop();
-    // Aguarda 280ms após cortar o TTS para dissipar qualquer eco do alto-falante antes de abrir o microfone
-    await Future<void>.delayed(const Duration(milliseconds: 280));
+    if (wasSpeaking) {
+      // Aguarda dissipar eco do alto-falante somente se o TTS estava falando.
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+    }
     if (!mounted || sending || voicePipeline.isCapturing) return;
 
     final sttCfg = widget.sttService == null

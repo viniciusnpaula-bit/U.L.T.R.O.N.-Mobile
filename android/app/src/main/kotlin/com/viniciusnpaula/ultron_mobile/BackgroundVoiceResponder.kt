@@ -32,8 +32,8 @@ object BackgroundVoiceResponder {
     private const val SAMPLE_RATE_HZ = 16000
     private const val CHUNK_SAMPLES = 1600 // 100 ms
     private const val CHUNK_BYTES = CHUNK_SAMPLES * 2
-    private const val MAX_WAIT_SPEECH_CHUNKS = 38 // 3.8 s esperando começar a falar
-    private const val SILENCE_END_CHUNKS = 10 // 1.0 s de silêncio encerra comando
+    private const val MAX_WAIT_SPEECH_CHUNKS = 75 // 7.5 s esperando começar a falar
+    private const val SILENCE_END_CHUNKS = 7 // 0.7 s de silêncio encerra comando
     private const val MAX_SPEECH_CHUNKS = 100 // 10 s máx. por turno
     private const val PRE_SPEECH_CHUNKS = 4 // 400 ms pré-fala
 
@@ -87,8 +87,8 @@ object BackgroundVoiceResponder {
         var tg: ToneGenerator? = null
         try {
             tg = ToneGenerator(AudioManager.STREAM_MUSIC, 65)
-            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 130)
-            Thread.sleep(190)
+            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 80)
+            Thread.sleep(95)
         } catch (_: Throwable) {
         } finally {
             try {
@@ -171,15 +171,15 @@ object BackgroundVoiceResponder {
 
                 if (!speechStarted) {
                     waitChunks++
-                    if (waitChunks <= 2) {
-                        noiseFloor = max(200.0, (noiseFloor + rms) * 0.5)
+                    if (waitChunks == 1 && rms < 450.0) {
+                        noiseFloor = max(180.0, rms)
                     }
                     preRing.addLast(chunk)
                     while (preRing.size > PRE_SPEECH_CHUNKS) {
                         preRing.removeFirst()
                     }
-                    val threshold = max(250.0, noiseFloor * 2.2)
-                    if (rms >= threshold && waitChunks > 1) {
+                    val threshold = max(240.0, noiseFloor * 2.1)
+                    if (rms >= threshold) {
                         speechStarted = true
                         for (pre in preRing) {
                             out.write(pre)

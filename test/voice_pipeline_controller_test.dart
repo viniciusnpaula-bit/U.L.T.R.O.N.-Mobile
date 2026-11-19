@@ -305,6 +305,43 @@ void main() {
     expect(transcripts, ['Que horas são']);
   });
 
+  test(
+      'single-turn mode auto-stops after singleTurnIdleTimeout when no speech arrives',
+      () async {
+    final gate = await _unlockedGate();
+    final capture = _FakeAudioCaptureSource();
+    final stt = GroqWhisperSttService(
+      config: const SttConfig(
+        endpointUrl: 'http://127.0.0.1:1/transcriptions',
+        apiKey: 'gsk_test',
+      ),
+    );
+    final voice = VoiceService(tts: _FakeTts());
+    final modeChanges = <VoicePipelineMode>[];
+    final controller = VoicePipelineController(
+      gate: gate,
+      capture: capture,
+      stt: stt,
+      voiceService: voice,
+      singleTurnIdleTimeout: const Duration(milliseconds: 60),
+    );
+    controller.addListener(() => modeChanges.add(controller.mode));
+    addTearDown(() async {
+      controller.dispose();
+      await capture.close();
+    });
+
+    expect(await controller.startSingleTurnListening(), isTrue);
+    expect(controller.isSingleTurnActive, isTrue);
+
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+
+    expect(controller.isSingleTurnActive, isFalse);
+    expect(controller.mode, VoicePipelineMode.idle);
+    expect(capture.isRunning, isFalse);
+    expect(modeChanges, [VoicePipelineMode.singleTurn, VoicePipelineMode.idle]);
+  });
+
   test('continuous mode enforces selective barge-in while TTS is speaking',
       () async {
     final gate = await _unlockedGate();

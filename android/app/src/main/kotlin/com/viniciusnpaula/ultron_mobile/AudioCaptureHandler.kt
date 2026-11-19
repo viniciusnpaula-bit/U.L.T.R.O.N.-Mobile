@@ -134,13 +134,13 @@ class AudioCaptureHandler(
         Thread({
             // Aguarda o sentinela em segundo plano liberar o microfone antes de abrir em 1º plano.
             var waitedMs = 0
-            while (UltronAudioService.isRecorderOpen && waitedMs < 400 && captureToken == token) {
+            while (UltronAudioService.isRecorderOpen && waitedMs < 350 && captureToken == token) {
                 try {
-                    Thread.sleep(25)
+                    Thread.sleep(10)
                 } catch (_: InterruptedException) {
                     break
                 }
-                waitedMs += 25
+                waitedMs += 10
             }
 
             if (captureToken != token) {

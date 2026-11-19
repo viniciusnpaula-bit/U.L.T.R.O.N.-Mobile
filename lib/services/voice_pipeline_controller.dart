@@ -126,6 +126,7 @@ class VoicePipelineController extends ChangeNotifier {
     DateTime Function()? now,
     this.sampleRate = 16000,
     this.continuityWindow = const Duration(seconds: 8),
+    this.singleTurnIdleTimeout = const Duration(milliseconds: 7500),
     this.requireWakeWordOutsideWindow = true,
     this.sttPrompt = '',
   })  : _gate = gate,
@@ -159,6 +160,7 @@ class VoicePipelineController extends ChangeNotifier {
   final DateTime Function() _now;
   final int sampleRate;
   final Duration continuityWindow;
+  final Duration singleTurnIdleTimeout;
   final bool requireWakeWordOutsideWindow;
   String sttPrompt;
 
@@ -178,6 +180,7 @@ class VoicePipelineController extends ChangeNotifier {
   int _sessionGeneration = 0;
   bool _pttReleaseRequested = false;
   int _singleTurnBufferedBytes = 0;
+  Timer? _singleTurnIdleTimer;
 
   VoicePipelineMode get mode => _mode;
   bool get isCapturing => _mode != VoicePipelineMode.idle;
@@ -355,6 +358,17 @@ class VoicePipelineController extends ChangeNotifier {
       _lastEffectsReport = report;
       _mode = VoicePipelineMode.singleTurn;
       _lastError = null;
+      _singleTurnIdleTimer?.cancel();
+      if (singleTurnIdleTimeout > Duration.zero) {
+        _singleTurnIdleTimer = Timer(singleTurnIdleTimeout, () {
+          if (!_disposed &&
+              _mode == VoicePipelineMode.singleTurn &&
+              token == _captureOpToken &&
+              !_vad.isInSpeech) {
+            unawaited(stopAll());
+          }
+        });
+      }
       _notifySafely();
       return true;
     } catch (e) {
@@ -373,6 +387,8 @@ class VoicePipelineController extends ChangeNotifier {
   }
 
   Future<Uint8List> _drainSingleTurnCapture() async {
+    _singleTurnIdleTimer?.cancel();
+    _singleTurnIdleTimer = null;
     _mode = VoicePipelineMode.idle;
     _captureOpToken++;
     _vad.reset();
@@ -405,6 +421,10 @@ class VoicePipelineController extends ChangeNotifier {
         await _transcribeAndDispatch(segment);
       }
       return;
+    }
+    if (_vad.isInSpeech && _singleTurnIdleTimer != null) {
+      _singleTurnIdleTimer?.cancel();
+      _singleTurnIdleTimer = null;
     }
     final maxBytes = sampleRate * 2 * 25;
     if (_mode == VoicePipelineMode.singleTurn &&
@@ -486,6 +506,8 @@ class VoicePipelineController extends ChangeNotifier {
 
   Future<void> stopAll() async {
     final wasActive = _mode != VoicePipelineMode.idle;
+    _singleTurnIdleTimer?.cancel();
+    _singleTurnIdleTimer = null;
     _captureOpToken++;
     _sessionGeneration++;
     _pttReleaseRequested = false;
@@ -665,6 +687,8 @@ class VoicePipelineController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _singleTurnIdleTimer?.cancel();
+    _singleTurnIdleTimer = null;
     _gate.removeListener(_onGateChanged);
     if (_voiceService.onSpeakComplete == _onVoiceSpeakComplete) {
       _voiceService.onSpeakComplete = _previousSpeakComplete;
