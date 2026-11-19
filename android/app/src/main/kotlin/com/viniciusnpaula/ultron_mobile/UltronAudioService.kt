@@ -15,6 +15,8 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
@@ -175,6 +177,8 @@ class UltronAudioService : Service() {
     private val workerActive = AtomicBoolean(false)
     private var vadThread: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+    private var gainControl: AutomaticGainControl? = null
     @Volatile
     private var keywordSpotter: KeywordSpotter? = null
 
@@ -419,9 +423,9 @@ class UltronAudioService : Service() {
             featConfig = FeatureConfig(sampleRate = SAMPLE_RATE_HZ, featureDim = 80),
             modelConfig = modelConfig,
             keywordsFile = "$MODEL_DIR/keywords.txt",
-            maxActivePaths = 4,
+            maxActivePaths = 8,
             keywordsScore = 2.0f,
-            keywordsThreshold = 0.12f,
+            keywordsThreshold = 0.08f,
             numTrailingBlanks = 1,
         )
         return KeywordSpotter(assetManager = assets, config = config)
@@ -434,9 +438,11 @@ class UltronAudioService : Service() {
         if (minBuf <= 0) throw IllegalStateException("getMinBufferSize=$minBuf")
         val frameBytes = (SAMPLE_RATE_HZ * WINDOW_MS / 1000) * 2
         val bufSize = minBuf.coerceAtLeast(frameBytes * 2)
+        // MIC prioriza sensibilidade real de hardware para tons variados/distância;
+        // VOICE_RECOGNITION e DEFAULT ficam como fallbacks.
         val candidates = listOf(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             MediaRecorder.AudioSource.DEFAULT,
         )
         var lastReason = "nenhum source inicializou"
@@ -470,6 +476,17 @@ class UltronAudioService : Service() {
                 safely("AudioRecord.release") { rec.release() }
                 continue
             }
+            val sessionId = rec.audioSessionId
+            safely("NoiseSuppressor.create") {
+                if (NoiseSuppressor.isAvailable()) {
+                    noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
+                }
+            }
+            safely("AutomaticGainControl.create") {
+                if (AutomaticGainControl.isAvailable()) {
+                    gainControl = AutomaticGainControl.create(sessionId)?.apply { enabled = true }
+                }
+            }
             isRecorderOpen = true
             return rec
         }
@@ -477,6 +494,10 @@ class UltronAudioService : Service() {
     }
 
     private fun releaseRecorder(recorder: AudioRecord?) {
+        safely("NoiseSuppressor.release") { noiseSuppressor?.release() }
+        noiseSuppressor = null
+        safely("AutomaticGainControl.release") { gainControl?.release() }
+        gainControl = null
         safely("AudioRecord.stop") { recorder?.stop() }
         safely("AudioRecord.release") { recorder?.release() }
         isRecorderOpen = false

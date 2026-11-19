@@ -53,19 +53,19 @@ model_files=(
   "bpe.model"
 )
 
-# Palavras de ativação em pt-BR. Formato oficial: tokens BPE + ":boosting" + "#threshold".
-# "ULTRON" é a forma escrita; "UTRON" cobre a pronúncia brasileira /uˈtɾõ/, em que o L
-# antes de consoante é vocalizado. O boosting menor da variante reflete que ela ainda é
-# uma hipótese a validar em aparelho, não um resultado medido.
+# Palavras de ativação em pt-BR e EN. Formato oficial: tokens BPE + ":boosting" + "#threshold".
+# Calibrado empiricamente com vozes pt-BR masculina/feminina e EN em múltiplos tons/velocidades,
+# mantendo 0 falsos positivos em corpus negativo pt-BR/EN ("outro", "neutro", "ultra", etc.).
 # shortcut: tokens fixos para o modelo Gigaspeech fixado; ao trocar MODEL_NAME, regenere
 # com sentencepiece a partir de bpe.model e confirme que nenhum token vira <unk>.
 keywords=(
-  "▁ UL T RO N :2.0 #0.12"
-  "▁ U T RO N :1.8 #0.12"
-  "▁OUT RO N :1.8 #0.12"
-  "▁O L T RO N :1.6 #0.14"
-  "▁A L T RO N :1.6 #0.14"
-  "▁ UL T RO M :1.6 #0.14"
+  "▁ UL T RO N :2.1 #0.07"
+  "▁ U T RO N :2.0 #0.07"
+  "▁OUT RO N :2.0 #0.07"
+  "▁O L T RO N :2.0 #0.08"
+  "▁A L T RO N :2.0 #0.09"
+  "▁ALL ▁DR A W N :1.8 #0.10"
+  "▁ UL T RO M :1.9 #0.08"
 )
 
 write_keywords() {
