@@ -359,6 +359,13 @@ class _CoreScreenState extends State<CoreScreen>
           ),
         ),
         actions: [
+          if (!diag.overlayPermission)
+            TextButton(
+              onPressed: () async {
+                await deviceService.requestOverlayPermission();
+              },
+              child: const Text('SOBREPOR APPS'),
+            ),
           TextButton(
             onPressed: () async {
               await deviceService.requestIgnoreBatteryOptimizations();
@@ -1392,15 +1399,34 @@ class _CoreScreenState extends State<CoreScreen>
         ),
       );
     } else if (next && real) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            '🎙️ Palavra de ativação "Ultron" ativa (1º e 2º plano).',
-            style: TextStyle(fontSize: 11),
+      final canOverlay = await deviceService.canDrawOverlays();
+      if (!mounted) return real;
+      if (!canOverlay) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              '🎙️ Sentinela ativa. Ative "Aparecer sobre outros apps" para abrir WhatsApp/apps em 2º plano.',
+              style: TextStyle(fontSize: 11),
+            ),
+            duration: const Duration(seconds: 6),
+            action: SnackBarAction(
+              label: 'ATIVAR',
+              onPressed: () =>
+                  unawaited(deviceService.requestOverlayPermission()),
+            ),
           ),
-          duration: Duration(seconds: 2),
-        ),
-      );
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '🎙️ Palavra de ativação "Ultron" ativa (1º e 2º plano).',
+              style: TextStyle(fontSize: 11),
+            ),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
     }
     return real;
   }

@@ -152,6 +152,7 @@ class UltronAudioService : Service() {
                         ) == PackageManager.PERMISSION_GRANTED
                     ),
                 "micPermission" to hasMic,
+                "overlayPermission" to DeviceHardwareHelper.canLaunchActivitiesFromBackground(context),
                 "ignoringBatteryOptimizations" to ignoringBattery,
                 "bootAutostart" to prefs.getBoolean(PREF_BOOT_AUTOSTART, false),
                 "recognitionAvailable" to (hasMic && hasMicHardware),

@@ -595,6 +595,26 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             "consumePendingBackgroundTurns" -> {
                 result.success(BackgroundChatStore.consumePendingTurns(this))
             }
+            "canDrawOverlays" -> {
+                result.success(DeviceHardwareHelper.canLaunchActivitiesFromBackground(this))
+            }
+            "requestOverlayPermission" -> {
+                if (DeviceHardwareHelper.canLaunchActivitiesFromBackground(this)) {
+                    result.success(true)
+                } else {
+                    try {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:$packageName"),
+                            ),
+                        )
+                    } catch (_: Exception) {
+                        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                    }
+                    result.success(false)
+                }
+            }
             else -> result.notImplemented()
         }
     }

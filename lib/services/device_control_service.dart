@@ -142,6 +142,7 @@ class WakeWordDiagnostics {
     this.sdk = 0,
     this.notificationsPermission = false,
     this.micPermission = false,
+    this.overlayPermission = false,
     this.ignoringBatteryOptimizations = false,
     this.bootAutostart = false,
     this.recognitionAvailable = false,
@@ -176,6 +177,7 @@ class WakeWordDiagnostics {
       sdk: i('sdk'),
       notificationsPermission: b('notificationsPermission'),
       micPermission: b('micPermission'),
+      overlayPermission: b('overlayPermission'),
       ignoringBatteryOptimizations: b('ignoringBatteryOptimizations'),
       bootAutostart: b('bootAutostart'),
       recognitionAvailable: b('recognitionAvailable'),
@@ -212,6 +214,7 @@ class WakeWordDiagnostics {
   final int sdk;
   final bool notificationsPermission;
   final bool micPermission;
+  final bool overlayPermission;
   final bool ignoringBatteryOptimizations;
   final bool bootAutostart;
   final bool recognitionAvailable;
@@ -244,6 +247,7 @@ class WakeWordDiagnostics {
         'Captura real: ${capturing ? "CONFIRMADA" : "NÃO confirmada"} · Serviço: ${running ? "vivo" : "parado"}${paused ? " · PAUSADO" : ""}${economyMode ? " · economia" : ""}',
         'Android API $sdk · Notificações: ${notificationsPermission ? "permitidas" : "NEGADAS"}',
         'Microfone: ${micPermission ? "permitido" : "NEGADO"} · Reconhecedor de comando: ${recognitionAvailable ? "disponível" : "INDISPONÍVEL"}',
+        'Sobrepor apps (abrir em 2º plano): ${overlayPermission ? "permitido" : "DESATIVADO"}',
         'Bateria: ${ignoringBatteryOptimizations ? "isento" : "sujeito a economia"} · Boot: ${bootAutostart ? "opt-in" : "off"}',
         'Ativações KWS: $detections · Última palavra: ${lastPhrase.isEmpty ? "nenhuma" : lastPhrase}',
         'Falhas KWS/captura: $kwsErrors · Religamentos: $captureRestarts · Mic silenciado: $micSilencedEvents',
@@ -731,6 +735,24 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     final res =
         await _channel.invokeMethod<bool>('requestIgnoreBatteryOptimizations');
     return res ?? false;
+  }
+
+  Future<bool> canDrawOverlays() async {
+    try {
+      final res = await _channel.invokeMethod<bool>('canDrawOverlays');
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> requestOverlayPermission() async {
+    try {
+      final res = await _channel.invokeMethod<bool>('requestOverlayPermission');
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<String> speakOfflineFishVoice(String text) async {

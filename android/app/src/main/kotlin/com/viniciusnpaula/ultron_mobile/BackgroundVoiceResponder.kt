@@ -518,8 +518,15 @@ object BackgroundVoiceResponder {
             val wordCount = target.split(Regex("""\s+""")).count { it.isNotBlank() }
             if (target.isNotEmpty() && wordCount <= 3 && target != "palco" && target != "documento") {
                 try {
-                    val opened = DeviceHardwareHelper.launchInstalledApp(context, target)
-                    return actionTurn("Abrindo $opened.", "📱 App aberto: $opened")
+                    val launch = DeviceHardwareHelper.launchInstalledAppWithStatus(context, target)
+                    return if (launch.openedImmediately) {
+                        actionTurn("Abrindo ${launch.label}.", "📱 App aberto: ${launch.label}")
+                    } else {
+                        actionTurn(
+                            "Permissão Aparecer sobre outros apps necessária para abrir ${launch.label} em segundo plano. Deixei o atalho na notificação.",
+                            "🔒 Permissão 'Aparecer sobre outros apps' pendente para abrir ${launch.label}",
+                        )
+                    }
                 } catch (_: Throwable) {
                     // Cai para a IA responder ou escolher a melhor ação com base no contexto.
                 }
@@ -687,17 +694,20 @@ object BackgroundVoiceResponder {
                         logs.add("⏹️ Mídia parada")
                     }
                     "OPEN_CAMERA" -> {
-                        DeviceHardwareHelper.launchInstalledApp(context, "camera")
-                        logs.add("📷 Câmera aberta")
+                        val res = DeviceHardwareHelper.launchInstalledAppWithStatus(context, "camera")
+                        logs.add(if (res.openedImmediately) "📷 Câmera aberta" else "🔒 Atalho Câmera na notificação (sem permissão sobrepor apps)")
                     }
                     "OPEN_APP" -> if (arg1.isNotEmpty()) {
-                        val opened = DeviceHardwareHelper.launchInstalledApp(context, arg1)
-                        logs.add("📱 App aberto: $opened")
+                        val res = DeviceHardwareHelper.launchInstalledAppWithStatus(context, arg1)
+                        logs.add(
+                            if (res.openedImmediately) "📱 App aberto: ${res.label}"
+                            else "🔒 Atalho ${res.label} na notificação (ative Aparecer sobre outros apps)"
+                        )
                     }
                     "OPEN_SETTINGS" -> {
                         val target = arg1.ifEmpty { "general" }
-                        DeviceHardwareHelper.openSettingsPanel(context, target)
-                        logs.add("⚙️ Configurações abertas ($target)")
+                        val ok = DeviceHardwareHelper.openSettingsPanel(context, target)
+                        logs.add(if (ok) "⚙️ Configurações abertas ($target)" else "🔒 Atalho Configurações na notificação")
                     }
                     "ALARM" -> {
                         val h = (arg1.toIntOrNull() ?: 7).coerceIn(0, 23)

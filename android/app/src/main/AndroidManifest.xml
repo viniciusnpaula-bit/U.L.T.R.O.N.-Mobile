@@ -17,6 +17,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- v1.2.1 Wake Word Reliability: abrir sobre a tela de bloqueio, religar após reboot (opt-in) e isenção de economia de bateria. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>

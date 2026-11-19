@@ -1,8 +1,12 @@
 package com.viniciusnpaula.ultron_mobile
 
+import android.app.Activity
 import android.app.ActivityManager
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import androidx.core.app.NotificationCompat
 import android.content.IntentFilter
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -148,6 +152,55 @@ object DeviceHardwareHelper {
         }
     }
 
+    private const val BAL_NOTIFICATION_ID = 2051
+    private const val WAKE_CHANNEL_ID = "ultron_wake_alert_channel"
+
+    data class AppLaunchResult(
+        val label: String,
+        val openedImmediately: Boolean,
+    )
+
+    fun canLaunchActivitiesFromBackground(context: Context): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || Settings.canDrawOverlays(context)
+    }
+
+    private fun startActivitySafely(
+        context: Context,
+        intent: Intent,
+        fallbackLabel: String,
+    ): Boolean {
+        val canDirectLaunch = context is Activity ||
+            MainActivity.isActivityResumed ||
+            canLaunchActivitiesFromBackground(context)
+        if (canDirectLaunch) {
+            context.startActivity(intent)
+            return true
+        }
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            val pending = PendingIntent.getActivity(
+                context,
+                41,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            nm?.notify(
+                BAL_NOTIFICATION_ID,
+                NotificationCompat.Builder(context, WAKE_CHANNEL_ID)
+                    .setContentTitle("U.L.T.R.O.N.: toque para abrir $fallbackLabel")
+                    .setContentText("Ative 'Aparecer sobre outros apps' para abrir direto em 2º plano.")
+                    .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true)
+                    .setTimeoutAfter(25_000L)
+                    .setContentIntent(pending)
+                    .build(),
+            )
+        } catch (_: Throwable) {
+        }
+        return false
+    }
+
     fun openSettingsPanel(context: Context, target: String): Boolean {
         val action = when (target.lowercase()) {
             "wifi" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -177,8 +230,7 @@ object DeviceHardwareHelper {
         val intent = Intent(action).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
-        return true
+        return startActivitySafely(context, intent, "Configurações")
     }
 
     private val trailingCourtesyRegex = Regex(
@@ -222,6 +274,10 @@ object DeviceHardwareHelper {
     }
 
     fun launchInstalledApp(context: Context, rawQuery: String): String {
+        return launchInstalledAppWithStatus(context, rawQuery).label
+    }
+
+    fun launchInstalledAppWithStatus(context: Context, rawQuery: String): AppLaunchResult {
         val query = sanitizeAppQuery(rawQuery).lowercase()
         if (query.isEmpty()) throw IllegalArgumentException("Informe o nome do aplicativo.")
 
@@ -230,41 +286,37 @@ object DeviceHardwareHelper {
                 val intent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                context.startActivity(intent)
-                return "Câmera"
+                return AppLaunchResult("Câmera", startActivitySafely(context, intent, "Câmera"))
             }
             "configuracoes", "configurações", "ajustes", "settings" -> {
-                openSettingsPanel(context, "general")
-                return "Configurações"
+                val ok = openSettingsPanel(context, "general")
+                return AppLaunchResult("Configurações", ok)
             }
             "wifi", "wi-fi" -> {
-                openSettingsPanel(context, "wifi")
-                return "Painel Wi-Fi"
+                val ok = openSettingsPanel(context, "wifi")
+                return AppLaunchResult("Painel Wi-Fi", ok)
             }
             "bluetooth" -> {
-                openSettingsPanel(context, "bluetooth")
-                return "Bluetooth"
+                val ok = openSettingsPanel(context, "bluetooth")
+                return AppLaunchResult("Bluetooth", ok)
             }
             "telefone", "discador", "chamada" -> {
                 val intent = Intent(Intent.ACTION_DIAL).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                context.startActivity(intent)
-                return "Telefone"
+                return AppLaunchResult("Telefone", startActivitySafely(context, intent, "Telefone"))
             }
             "relogio", "relógio", "alarme", "despertador" -> {
                 val intent = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                context.startActivity(intent)
-                return "Relógio / Alarmes"
+                return AppLaunchResult("Relógio / Alarmes", startActivitySafely(context, intent, "Relógio / Alarmes"))
             }
             "navegador", "browser", "internet" -> {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com")).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                context.startActivity(intent)
-                return "Navegador"
+                return AppLaunchResult("Navegador", startActivitySafely(context, intent, "Navegador"))
             }
         }
 
@@ -294,8 +346,8 @@ object DeviceHardwareHelper {
             val launch = pm.getLaunchIntentForPackage(pkg)
             if (launch != null) {
                 launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(launch)
-                return query.replaceFirstChar { it.uppercase() }
+                val label = query.replaceFirstChar { it.uppercase() }
+                return AppLaunchResult(label, startActivitySafely(context, launch, label))
             }
         }
 
@@ -310,8 +362,7 @@ object DeviceHardwareHelper {
                 val launch = pm.getLaunchIntentForPackage(pkg)
                 if (launch != null) {
                     launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(launch)
-                    return label
+                    return AppLaunchResult(label, startActivitySafely(context, launch, label))
                 }
             }
         }
@@ -319,7 +370,7 @@ object DeviceHardwareHelper {
         throw IllegalStateException("Aplicativo '$rawQuery' não encontrado no dispositivo.")
     }
 
-    fun setAlarm(context: Context, hour: Int, minute: Int, message: String, skipUi: Boolean = false) {
+    fun setAlarm(context: Context, hour: Int, minute: Int, message: String, skipUi: Boolean = false): Boolean {
         val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
             putExtra(AlarmClock.EXTRA_HOUR, hour.coerceIn(0, 23))
             putExtra(AlarmClock.EXTRA_MINUTES, minute.coerceIn(0, 59))
@@ -327,32 +378,32 @@ object DeviceHardwareHelper {
             putExtra(AlarmClock.EXTRA_SKIP_UI, skipUi)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        return startActivitySafely(context, intent, "Alarme ${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}")
     }
 
-    fun setTimer(context: Context, seconds: Int, message: String, skipUi: Boolean = false) {
+    fun setTimer(context: Context, seconds: Int, message: String, skipUi: Boolean = false): Boolean {
         val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
             putExtra(AlarmClock.EXTRA_LENGTH, seconds.coerceAtLeast(1))
             putExtra(AlarmClock.EXTRA_MESSAGE, message.ifBlank { "U.L.T.R.O.N. Timer" })
             putExtra(AlarmClock.EXTRA_SKIP_UI, skipUi)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        return startActivitySafely(context, intent, "Timer (${seconds}s)")
     }
 
-    fun openUrl(context: Context, rawUrl: String) {
+    fun openUrl(context: Context, rawUrl: String): Boolean {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(rawUrl)).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        return startActivitySafely(context, intent, "Link")
     }
 
-    fun dialNumber(context: Context, rawNumber: String) {
+    fun dialNumber(context: Context, rawNumber: String): Boolean {
         val number = rawNumber.replace(Regex("[^0-9+*#]"), "")
         val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number")).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+        return startActivitySafely(context, intent, "Telefone $number")
     }
 
     fun appendObsidianEntry(context: Context, subfolder: String, prefix: String, text: String): String? {
