@@ -55,6 +55,17 @@ void main() {
           return 'Operador, agora são exatamente 23:35.';
         case 'setAudioSentinel':
           return args['enabled'] as bool? ?? false;
+        case 'consumePendingBackgroundTurns':
+          return [
+            {
+              'userText': 'ligar lanterna',
+              'assistantText':
+                  'Lanterna ligada.\n\n[Hardware: 🔦 Lanterna: ON]',
+              'senderLabel': 'Hardware Bridge (2º plano)',
+              'userTimestampMs': 1700000001000,
+              'replyTimestampMs': 1700000002000,
+            },
+          ];
         default:
           return true;
       }
@@ -364,5 +375,30 @@ void main() {
     expect(args['sttKey'], 'gsk_123');
     expect(args['fishRefId'], 'ultron_ref');
     expect(args['fishModel'], 's2.1-pro-free');
+  });
+
+  test(
+      'consumePendingBackgroundTurns parses background chat turns and handles onBackgroundTurnAvailable',
+      () async {
+    final service = DeviceControlService(channel: channel);
+    var notified = false;
+    service.setNativeEventHandlers(
+      onBackgroundTurn: () => notified = true,
+    );
+
+    final codec = const StandardMethodCodec();
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+      channel.name,
+      codec.encodeMethodCall(const MethodCall('onBackgroundTurnAvailable')),
+      (_) {},
+    );
+    expect(notified, isTrue);
+
+    final turns = await service.consumePendingBackgroundTurns();
+    expect(turns.length, 1);
+    expect(turns.first.userText, 'ligar lanterna');
+    expect(turns.first.assistantText, contains('[Hardware: 🔦 Lanterna: ON]'));
+    expect(turns.first.senderLabel, 'Hardware Bridge (2º plano)');
   });
 }

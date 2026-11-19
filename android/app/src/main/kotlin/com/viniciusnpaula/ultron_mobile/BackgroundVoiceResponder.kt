@@ -1,13 +1,13 @@
 package com.viniciusnpaula.ultron_mobile
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.ToneGenerator
-import android.os.SystemClock
-import android.view.KeyEvent
+import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -25,8 +25,8 @@ import kotlin.math.sqrt
 /**
  * Executa um turno completo de voz em 2º plano quando o usuário chama "Ultron"
  * com o app fechado/minimizado ou tela bloqueada:
- * microfone nativo AudioRecord -> STT não-Google (Groq/Whisper) -> ação segura ou IA ->
- * Fish Audio API (ou TTS offline Android), sem precisar abrir a interface.
+ * microfone nativo AudioRecord -> STT não-Google (Groq/Whisper) -> ações locais ou IA + [ACTION:...] ->
+ * grava no histórico criptografado -> Fish Audio API (ou TTS offline Android).
  */
 object BackgroundVoiceResponder {
     private const val SAMPLE_RATE_HZ = 16000
@@ -36,6 +36,12 @@ object BackgroundVoiceResponder {
     private const val SILENCE_END_CHUNKS = 7 // 0.7 s de silêncio encerra comando
     private const val MAX_SPEECH_CHUNKS = 100 // 10 s máx. por turno
     private const val PRE_SPEECH_CHUNKS = 4 // 400 ms pré-fala
+
+    private data class BackgroundTurnResult(
+        val speakText: String,
+        val displayText: String,
+        val senderLabel: String,
+    )
 
     fun runBackgroundTurn(
         context: Context,
@@ -66,16 +72,38 @@ object BackgroundVoiceResponder {
             return
         }
 
-        val localReply = tryLocalSafeAction(context, transcript)
-        val reply = if (localReply != null) {
-            localReply
-        } else {
+        val userTs = System.currentTimeMillis()
+        val result = tryLocalAction(context, transcript) ?: run {
             onStatusUpdate("Consultando U.L.T.R.O.N…")
-            queryAi(cfg, transcript)
-                ?: "Não consegui consultar o provedor de inteligência artificial agora, operador."
+            val rawReply = queryAi(context, cfg, transcript)
+            if (rawReply.isNullOrBlank()) {
+                val fallback = "Não consegui consultar o provedor de inteligência artificial agora, operador."
+                BackgroundTurnResult(
+                    speakText = fallback,
+                    displayText = fallback,
+                    senderLabel = "U.L.T.R.O.N. (2º plano)",
+                )
+            } else {
+                executeAiActionTags(context, rawReply, cfg.aiModel)
+            }
         }
 
-        val cleanSpeech = sanitizeForSpeech(reply)
+        val cleanSpeech = sanitizeForSpeech(result.speakText)
+        val replyTs = System.currentTimeMillis()
+        if (result.displayText.isNotBlank()) {
+            BackgroundChatStore.enqueueTurn(
+                context,
+                BackgroundChatTurn(
+                    userText = transcript,
+                    assistantText = result.displayText,
+                    senderLabel = result.senderLabel,
+                    userTimestampMs = userTs,
+                    replyTimestampMs = replyTs,
+                ),
+            )
+            MainActivity.notifyBackgroundTurn()
+        }
+
         if (cleanSpeech.isEmpty()) return
 
         onReplyNotification(transcript, cleanSpeech)
@@ -295,71 +323,229 @@ object BackgroundVoiceResponder {
         }
     }
 
-    private fun tryLocalSafeAction(context: Context, transcript: String): String? {
-        val lower = transcript.lowercase(Locale("pt", "BR"))
+    private fun isDeviceLocked(context: Context): Boolean {
+        val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+        return km?.isDeviceLocked == true
+    }
+
+    private fun tryLocalAction(context: Context, rawTranscript: String): BackgroundTurnResult? {
+        val trimmed = rawTranscript.trim()
+        val clean = trimmed.trimEnd('.', '!', '?', ',', ';', ':').trim()
+        val lower = clean.lowercase(Locale("pt", "BR"))
+
+        fun actionTurn(speak: String, log: String): BackgroundTurnResult = BackgroundTurnResult(
+            speakText = speak,
+            displayText = "$speak\n\n[Hardware: $log]",
+            senderLabel = "Hardware Bridge (2º plano)",
+        )
+
+        // 1. Horas / Data
         if (lower.contains("que horas") || lower.contains("horário") || lower.contains("hora atual")) {
             val now = SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date())
-            return "Operador, agora são $now."
+            val speak = "Operador, agora são $now."
+            return BackgroundTurnResult(speak, speak, "U.L.T.R.O.N. (2º plano)")
         }
         if (lower.contains("que dia") || lower.contains("qual a data") || lower.contains("data de hoje")) {
             val today = SimpleDateFormat("dd 'de' MMMM", Locale("pt", "BR")).format(Date())
-            return "Hoje é dia $today, operador."
+            val speak = "Hoje é dia $today, operador."
+            return BackgroundTurnResult(speak, speak, "U.L.T.R.O.N. (2º plano)")
         }
-        val mediaKey = when {
-            lower.contains("pausar") || lower.contains("pause") || lower.contains("parar música") ->
-                KeyEvent.KEYCODE_MEDIA_PAUSE
-            lower.contains("tocar") || lower.contains("continuar música") || lower.contains("play") ->
-                KeyEvent.KEYCODE_MEDIA_PLAY
-            lower.contains("próxima") || lower.contains("pular música") ->
-                KeyEvent.KEYCODE_MEDIA_NEXT
-            lower.contains("anterior") || lower.contains("voltar música") ->
-                KeyEvent.KEYCODE_MEDIA_PREVIOUS
-            else -> null
-        }
-        if (mediaKey != null) {
-            try {
-                val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                val t = SystemClock.uptimeMillis()
-                am.dispatchMediaKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_DOWN, mediaKey, 0))
-                am.dispatchMediaKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_UP, mediaKey, 0))
-                return "Controle de mídia executado, operador."
-            } catch (_: Throwable) {
+
+        // 2. Lanterna
+        if (Regex("""\b(ligar|acender|ativar|liga|acende|ativa)\b.*\b(lanterna|flash|luz)\b|\b(lanterna|flash)\s+(on|ligar|acesa)\b""").containsMatchIn(lower)) {
+            return try {
+                val on = DeviceHardwareHelper.setTorch(context, true)
+                actionTurn("Lanterna ligada.", "🔦 Lanterna: ${if (on) "ON" else "OFF"}")
+            } catch (e: Throwable) {
+                actionTurn("Não consegui ligar a lanterna.", "⚠️ Lanterna: ${e.message}")
             }
         }
+        if (Regex("""\b(desligar|apagar|desativar|desliga|apaga|desativa)\b.*\b(lanterna|flash|luz)\b|\b(lanterna|flash)\s+(off|desligar|apagada)\b""").containsMatchIn(lower)) {
+            return try {
+                val on = DeviceHardwareHelper.setTorch(context, false)
+                actionTurn("Lanterna desligada.", "🔦 Lanterna: ${if (on) "ON" else "OFF"}")
+            } catch (e: Throwable) {
+                actionTurn("Não consegui desligar a lanterna.", "⚠️ Lanterna: ${e.message}")
+            }
+        }
+        if (lower == "lanterna" || lower == "alternar lanterna" || lower == "flash") {
+            return try {
+                val on = DeviceHardwareHelper.toggleTorch(context)
+                actionTurn(if (on) "Lanterna ligada." else "Lanterna desligada.", "🔦 Lanterna: ${if (on) "ON" else "OFF"}")
+            } catch (e: Throwable) {
+                actionTurn("Não consegui alternar a lanterna.", "⚠️ Lanterna: ${e.message}")
+            }
+        }
+
+        // 3. Volume
+        Regex("""\bvolume\s*(?:em|para|no|na|a)?\s*(\d{1,3})\s*%?""").find(lower)?.let { m ->
+            val target = (m.groupValues[1].toIntOrNull() ?: 50).coerceIn(0, 100)
+            val updated = DeviceHardwareHelper.setMediaVolumePercent(context, target, showUi = true)
+            return actionTurn("Volume em $updated por cento.", "🔊 Volume: $updated%")
+        }
+        if (Regex("""\b(aumentar|subir|aumenta|sobe|mais)\s+(?:o\s+)?volume\b""").containsMatchIn(lower)) {
+            val updated = DeviceHardwareHelper.adjustMediaVolume(context, "up", showUi = true)
+            return actionTurn("Volume aumentado para $updated por cento.", "🔊 Volume: $updated%")
+        }
+        if (Regex("""\b(diminuir|abaixar|baixar|reduzir|diminui|abaixa|baixa|menos)\s+(?:o\s+)?volume\b""").containsMatchIn(lower)) {
+            val updated = DeviceHardwareHelper.adjustMediaVolume(context, "down", showUi = true)
+            return actionTurn("Volume reduzido para $updated por cento.", "🔉 Volume: $updated%")
+        }
+        if (Regex("""\b(silenciar|mutar|mudo|deixar no mudo|tirar o som)\b""").containsMatchIn(lower)) {
+            DeviceHardwareHelper.adjustMediaVolume(context, "mute", showUi = true)
+            return actionTurn("Áudio silenciado.", "🔇 Áudio silenciado")
+        }
+        if (Regex("""\b(desmutar|ativar o som|ligar o som|tirar do mudo)\b""").containsMatchIn(lower)) {
+            val updated = DeviceHardwareHelper.adjustMediaVolume(context, "unmute", showUi = true)
+            return actionTurn("Som reativado em $updated por cento.", "🔊 Volume: $updated%")
+        }
+
+        // 4. Controle de Mídia
+        val mediaAction = when {
+            Regex("""\b(pr[oó]xima|avan[cç]ar|pular)\s+(?:a\s+)?(?:m[uú]sica|faixa|v[ií]deo|m[ií]dia)\b|^(?:pr[oó]xima|pular)$""").containsMatchIn(lower) ->
+                Triple("next", "Próxima faixa.", "⏭️ Próxima faixa")
+            Regex("""\b(?:m[uú]sica|faixa|v[ií]deo)\s+anterior\b|\bvoltar\s+(?:a\s+)?(?:m[uú]sica|faixa)\b""").containsMatchIn(lower) ->
+                Triple("previous", "Faixa anterior.", "⏮️ Faixa anterior")
+            Regex("""\b(pausar|pausa)\s+(?:a\s+)?(?:m[uú]sica|m[ií]dia|reprodu[cç][aã]o|v[ií]deo|spotify|player)\b|^(?:pausar|pausa|parar\s+m[uú]sica)$""").containsMatchIn(lower) ->
+                Triple("pause", "Mídia pausada.", "⏸️ Mídia pausada")
+            Regex("""\b(tocar|reproduzir|continuar|retomar|dar\s+play|play\s+na)\s+(?:a\s+)?(?:m[uú]sica|m[ií]dia|reprodu[cç][aã]o|v[ií]deo|spotify|player)\b|^(?:dar\s+)?play$|^(?:retomar|continuar)\s+m[uú]sica$""").containsMatchIn(lower) ->
+                Triple("play", "Reproduzindo mídia.", "▶️ Reprodução retomada")
+            else -> null
+        }
+        if (mediaAction != null) {
+            DeviceHardwareHelper.dispatchMediaControl(context, mediaAction.first)
+            return actionTurn(mediaAction.second, mediaAction.third)
+        }
+
+        // 5. Bateria e status do aparelho
+        if (Regex("""\b(bateria|quanta bateria|status do celular|status do sistema|mem[oó]ria ram)\b""").containsMatchIn(lower)) {
+            val st = DeviceHardwareHelper.readDeviceStatus(context)
+            val bat = st["batteryLevel"] as? Int ?: -1
+            val charging = if (st["isCharging"] == true) " carregando" else ""
+            val ramFree = st["ramFreeMb"] as? Int ?: 0
+            val vol = st["volumePercent"] as? Int ?: 0
+            val speak = "Bateria em $bat por cento$charging, volume em $vol por cento e $ramFree megabytes de RAM livres."
+            return actionTurn(speak, "📊 Bateria: $bat% • RAM livre: $ramFree MB")
+        }
+
+        // 6. Vibração
+        if (lower == "vibrar" || lower == "testar vibração" || lower == "vibracao") {
+            DeviceHardwareHelper.triggerVibration(context, 350L)
+            return actionTurn("Vibrando dispositivo.", "📳 Vibração executada")
+        }
+
+        // 7. Alarme e Timer
+        Regex("""\b(?:alarme|despertador)\s+(?:para\s+|às\s+|as\s+)?(\d{1,2})[:h](\d{2})\b""").find(lower)?.let { m ->
+            val h = (m.groupValues[1].toIntOrNull() ?: 7).coerceIn(0, 23)
+            val min = (m.groupValues[2].toIntOrNull() ?: 0).coerceIn(0, 59)
+            DeviceHardwareHelper.setAlarm(context, h, min, "U.L.T.R.O.N.", skipUi = true)
+            val hh = h.toString().padStart(2, '0')
+            val mm = min.toString().padStart(2, '0')
+            return actionTurn("Alarme definido para $hh horas e $mm minutos.", "⏰ Alarme $hh:$mm")
+        }
+        Regex("""\b(?:timer|temporizador|cron[oô]metro)\s+(?:de\s+)?(\d+)\s*(seg|segundo|segundos|s|min|minuto|minutos|m)?\b""").find(lower)?.let { m ->
+            val amount = (m.groupValues[1].toIntOrNull() ?: 1).coerceAtLeast(1)
+            val unit = m.groupValues[2].ifBlank { "m" }
+            val isSec = unit.startsWith("s")
+            val secs = if (isSec) amount else amount * 60
+            DeviceHardwareHelper.setTimer(context, secs, "U.L.T.R.O.N. Timer", skipUi = true)
+            val unitLabel = if (isSec) "segundos" else "minutos"
+            return actionTurn("Timer de $amount $unitLabel iniciado.", "⏱️ Timer (${secs}s)")
+        }
+
+        // 8. Nota rápida / Inbox Obsidian
+        Regex("""^(?:ultron[,\s]+)?(?:anote|anotar|nota\s+r[aá]pida|salvar\s+nota)[:\s]+(.+)$""").find(clean)?.let { m ->
+            val body = m.groupValues[1].trim()
+            if (body.isNotEmpty()) {
+                val fname = DeviceHardwareHelper.appendObsidianEntry(context, "Diario", "", body)
+                val log = if (fname != null) "📝 Nota salva ($fname)" else "📝 Nota registrada"
+                return actionTurn("Nota registrada no seu cofre.", log)
+            }
+        }
+        Regex("""^(?:capturar\s+ideia|anotar\s+ideia|ideia|inbox)[:\s]+(.+)$""", RegexOption.IGNORE_CASE).find(clean)?.let { m ->
+            val body = m.groupValues[1].trim()
+            if (body.isNotEmpty()) {
+                val fname = DeviceHardwareHelper.appendObsidianEntry(context, "Inbox", "", body)
+                val log = if (fname != null) "💡 Ideia salva ($fname)" else "💡 Ideia registrada"
+                return actionTurn("Ideia salva no Inbox do seu segundo cérebro.", log)
+            }
+        }
+
+        // 9. Pesquisa Web
+        Regex("""^(?:pesquisar|buscar na web|procurar no google)\s+(.+)$""", RegexOption.IGNORE_CASE).find(clean)?.let { m ->
+            val q = m.groupValues[1].trim()
+            if (q.isNotEmpty()) {
+                DeviceHardwareHelper.openUrl(context, "https://www.google.com/search?q=${Uri.encode(q)}")
+                return actionTurn("Pesquisando $q.", "🌐 Busca: $q")
+            }
+        }
+
+        // 10. Abrir aplicativos e configurações
+        Regex("""^(?:abrir|iniciar|abre|abra)\s+(?:o\s+|a\s+|app\s+|aplicativo\s+)?(.+)$""").find(lower)?.let { m ->
+            val target = m.groupValues[1].trim()
+            if (target.isNotEmpty() && target != "palco" && target != "documento") {
+                return try {
+                    val opened = DeviceHardwareHelper.launchInstalledApp(context, target)
+                    actionTurn("Abrindo $opened.", "📱 App aberto: $opened")
+                } catch (e: Throwable) {
+                    actionTurn("Não encontrei o aplicativo $target.", "⚠️ Abrir $target: ${e.message}")
+                }
+            }
+        }
+
         return null
     }
 
-    private fun queryAi(cfg: BackgroundVoiceConfig, userPrompt: String): String? {
+    private fun queryAi(context: Context, cfg: BackgroundVoiceConfig, userPrompt: String): String? {
         val base = cfg.aiBaseUrl.trim().trimEnd('/')
         val chatUrl = if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
         var conn: HttpURLConnection? = null
         return try {
+            val status = DeviceHardwareHelper.readDeviceStatus(context)
+            val bat = status["batteryLevel"] as? Int ?: -1
+            val charging = if (status["isCharging"] == true) "carregando" else "bateria"
+            val torch = if (status["torchOn"] == true) "LIGADA" else "DESLIGADA"
+            val vol = status["volumePercent"] as? Int ?: 0
+            val locked = isDeviceLocked(context)
+
+            val systemPrompt = "Você é o U.L.T.R.O.N., assistente pessoal tático Android em português do Brasil, respondendo em 2º plano (mãos-livres). " +
+                "Responda de forma natural em no máximo 2 ou 3 frases diretas, sem markdown ou emojis. " +
+                "TELEMETRIA: Bateria $bat% ($charging) | Lanterna $torch | Volume $vol% | Tela ${if (locked) "BLOQUEADA" else "DESBLOQUEADA"}. " +
+                "Se o operador pedir uma ação no aparelho, inclua uma ou mais tags exatas no final da resposta: " +
+                "[ACTION:TORCH_ON], [ACTION:TORCH_OFF], [ACTION:TORCH_TOGGLE], " +
+                "[ACTION:VOLUME_SET:N], [ACTION:VOLUME_UP], [ACTION:VOLUME_DOWN], [ACTION:VOLUME_MUTE], " +
+                "[ACTION:MEDIA_PLAY], [ACTION:MEDIA_PAUSE], [ACTION:MEDIA_PLAY_PAUSE], [ACTION:MEDIA_NEXT], [ACTION:MEDIA_PREVIOUS], [ACTION:MEDIA_STOP], " +
+                "[ACTION:OPEN_CAMERA], [ACTION:OPEN_APP:nome], [ACTION:OPEN_SETTINGS:wifi|bluetooth|display|sound|general], " +
+                "[ACTION:ALARM:HH:MM:Motivo], [ACTION:TIMER:SEGUNDOS:Motivo], [ACTION:VIBRATE], [ACTION:SEARCH:termo], " +
+                "[ACTION:NOTE:texto], [ACTION:INBOX:texto]. " +
+                "Ações sensíveis (enviar WhatsApp/SMS, ler notificações com tela bloqueada, desligar PC) exigem abrir o U.L.T.R.O.N."
+
+            val messages = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "system")
+                    put("content", systemPrompt)
+                })
+                for ((pastUser, pastAssistant) in BackgroundChatStore.recentHistoryPairs(context)) {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", pastUser)
+                    })
+                    put(JSONObject().apply {
+                        put("role", "assistant")
+                        put("content", pastAssistant)
+                    })
+                }
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", userPrompt)
+                })
+            }
+
             val payload = JSONObject().apply {
                 put("model", cfg.aiModel.ifBlank { "openai" })
                 put("temperature", 0.4)
-                put("max_tokens", 220)
-                put(
-                    "messages",
-                    JSONArray().apply {
-                        put(
-                            JSONObject().apply {
-                                put("role", "system")
-                                put(
-                                    "content",
-                                    "Você é o U.L.T.R.O.N., assistente de voz em português do Brasil. " +
-                                        "Responda em modo mãos-livres com o aplicativo em segundo plano, em no máximo 2 ou 3 frases diretas, sem markdown ou emojis. " +
-                                        "Se o usuário pedir ações sensíveis (enviar WhatsApp/SMS, apagar histórico, desligar PC ou acessar dados privados), peça para abrir e desbloquear o U.L.T.R.O.N.",
-                                )
-                            },
-                        )
-                        put(
-                            JSONObject().apply {
-                                put("role", "user")
-                                put("content", userPrompt)
-                            },
-                        )
-                    },
-                )
+                put("max_tokens", 260)
+                put("messages", messages)
             }.toString()
 
             conn = (URL(chatUrl).openConnection() as HttpURLConnection).apply {
@@ -386,6 +572,159 @@ object BackgroundVoiceResponder {
         } finally {
             conn?.disconnect()
         }
+    }
+
+    private fun executeAiActionTags(
+        context: Context,
+        rawReply: String,
+        aiModel: String,
+    ): BackgroundTurnResult {
+        val pattern = Regex("""\[ACTION:([^\]]+)\]""", RegexOption.IGNORE_CASE)
+        val matches = pattern.findAll(rawReply).toList()
+        val logs = mutableListOf<String>()
+        val locked = isDeviceLocked(context)
+
+        for (match in matches) {
+            val content = match.groupValues[1].trim()
+            val parts = content.split(':')
+            val cmd = parts.firstOrNull()?.trim()?.uppercase().orEmpty()
+            val arg1 = parts.getOrNull(1)?.trim().orEmpty()
+            val arg2 = parts.getOrNull(2)?.trim().orEmpty()
+            val arg3 = if (parts.size > 3) parts.drop(3).joinToString(":").trim() else ""
+
+            try {
+                when (cmd) {
+                    "TORCH_ON" -> {
+                        DeviceHardwareHelper.setTorch(context, true)
+                        logs.add("🔦 Lanterna ligada")
+                    }
+                    "TORCH_OFF" -> {
+                        DeviceHardwareHelper.setTorch(context, false)
+                        logs.add("🔦 Lanterna desligada")
+                    }
+                    "TORCH_TOGGLE" -> {
+                        val on = DeviceHardwareHelper.toggleTorch(context)
+                        logs.add("🔦 Lanterna: ${if (on) "ON" else "OFF"}")
+                    }
+                    "VOLUME_SET" -> {
+                        val updated = DeviceHardwareHelper.setMediaVolumePercent(context, arg1.toIntOrNull() ?: 50)
+                        logs.add("🔊 Volume: $updated%")
+                    }
+                    "VOLUME_UP" -> {
+                        val updated = DeviceHardwareHelper.adjustMediaVolume(context, "up")
+                        logs.add("🔊 Volume: $updated%")
+                    }
+                    "VOLUME_DOWN" -> {
+                        val updated = DeviceHardwareHelper.adjustMediaVolume(context, "down")
+                        logs.add("🔉 Volume: $updated%")
+                    }
+                    "VOLUME_MUTE" -> {
+                        DeviceHardwareHelper.adjustMediaVolume(context, "mute")
+                        logs.add("🔇 Áudio silenciado")
+                    }
+                    "MEDIA_PLAY" -> {
+                        DeviceHardwareHelper.dispatchMediaControl(context, "play")
+                        logs.add("▶️ Reprodução retomada")
+                    }
+                    "MEDIA_PAUSE" -> {
+                        DeviceHardwareHelper.dispatchMediaControl(context, "pause")
+                        logs.add("⏸️ Mídia pausada")
+                    }
+                    "MEDIA_PLAY_PAUSE" -> {
+                        DeviceHardwareHelper.dispatchMediaControl(context, "play_pause")
+                        logs.add("⏯️ Play/Pause enviado")
+                    }
+                    "MEDIA_NEXT" -> {
+                        DeviceHardwareHelper.dispatchMediaControl(context, "next")
+                        logs.add("⏭️ Próxima faixa")
+                    }
+                    "MEDIA_PREVIOUS" -> {
+                        DeviceHardwareHelper.dispatchMediaControl(context, "previous")
+                        logs.add("⏮️ Faixa anterior")
+                    }
+                    "MEDIA_STOP" -> {
+                        DeviceHardwareHelper.dispatchMediaControl(context, "stop")
+                        logs.add("⏹️ Mídia parada")
+                    }
+                    "OPEN_CAMERA" -> {
+                        DeviceHardwareHelper.launchInstalledApp(context, "camera")
+                        logs.add("📷 Câmera aberta")
+                    }
+                    "OPEN_APP" -> if (arg1.isNotEmpty()) {
+                        val opened = DeviceHardwareHelper.launchInstalledApp(context, arg1)
+                        logs.add("📱 App aberto: $opened")
+                    }
+                    "OPEN_SETTINGS" -> {
+                        val target = arg1.ifEmpty { "general" }
+                        DeviceHardwareHelper.openSettingsPanel(context, target)
+                        logs.add("⚙️ Configurações abertas ($target)")
+                    }
+                    "ALARM" -> {
+                        val h = (arg1.toIntOrNull() ?: 7).coerceIn(0, 23)
+                        val m = (arg2.toIntOrNull() ?: 0).coerceIn(0, 59)
+                        DeviceHardwareHelper.setAlarm(context, h, m, arg3.ifEmpty { "U.L.T.R.O.N." }, skipUi = true)
+                        logs.add("⏰ Alarme ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}")
+                    }
+                    "TIMER" -> {
+                        val secs = (arg1.toIntOrNull() ?: 60).coerceAtLeast(1)
+                        DeviceHardwareHelper.setTimer(context, secs, arg2.ifEmpty { "U.L.T.R.O.N. Timer" }, skipUi = true)
+                        logs.add("⏱️ Timer (${secs}s)")
+                    }
+                    "VIBRATE" -> {
+                        DeviceHardwareHelper.triggerVibration(context, 280L)
+                        logs.add("📳 Vibração")
+                    }
+                    "SEARCH" -> {
+                        val q = parts.drop(1).joinToString(":").trim()
+                        if (q.isNotEmpty()) {
+                            DeviceHardwareHelper.openUrl(context, "https://www.google.com/search?q=${Uri.encode(q)}")
+                            logs.add("🌐 Busca: $q")
+                        }
+                    }
+                    "NOTE" -> {
+                        val body = parts.drop(1).joinToString(":").trim()
+                        if (body.isNotEmpty()) {
+                            DeviceHardwareHelper.appendObsidianEntry(context, "Diario", "", body)
+                            logs.add("📝 Nota salva no Obsidian")
+                        }
+                    }
+                    "INBOX" -> {
+                        val body = parts.drop(1).joinToString(":").trim()
+                        if (body.isNotEmpty()) {
+                            DeviceHardwareHelper.appendObsidianEntry(context, "Inbox", "", body)
+                            logs.add("💡 Ideia salva no Inbox")
+                        }
+                    }
+                    "READ_MESSAGES" -> {
+                        if (locked) {
+                            logs.add("🔒 Desbloqueie para ler notificações")
+                        } else {
+                            val msgs = UltronNotificationService.getRecentMessages(3)
+                            logs.add(
+                                if (msgs.isEmpty()) "📭 Sem novas mensagens"
+                                else "📨 ${msgs.size} mensagens recentes"
+                            )
+                        }
+                    }
+                }
+            } catch (e: Throwable) {
+                logs.add("⚠️ Falha em $cmd: ${e.message}")
+            }
+        }
+
+        val clean = pattern.replace(rawReply, "").trim().ifEmpty {
+            if (logs.isNotEmpty()) "Comando executado no dispositivo." else rawReply.trim()
+        }
+        val display = if (logs.isEmpty()) {
+            clean
+        } else {
+            "$clean\n\n[Hardware: ${logs.joinToString(" • ")}]"
+        }
+        return BackgroundTurnResult(
+            speakText = clean,
+            displayText = display,
+            senderLabel = if (aiModel.isNotBlank()) "U.L.T.R.O.N. ($aiModel)" else "U.L.T.R.O.N. (2º plano)",
+        )
     }
 
     private fun sanitizeForSpeech(text: String): String {

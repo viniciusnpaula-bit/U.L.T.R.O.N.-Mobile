@@ -254,6 +254,37 @@ class WakeWordDiagnostics {
       ].join('\n');
 }
 
+class BackgroundConversationTurn {
+  const BackgroundConversationTurn({
+    required this.userText,
+    required this.assistantText,
+    required this.senderLabel,
+    required this.userTimestamp,
+    required this.replyTimestamp,
+  });
+
+  final String userText;
+  final String assistantText;
+  final String senderLabel;
+  final DateTime userTimestamp;
+  final DateTime replyTimestamp;
+
+  factory BackgroundConversationTurn.fromMap(Map<Object?, Object?> map) =>
+      BackgroundConversationTurn(
+        userText: (map['userText'] as String? ?? '').trim(),
+        assistantText: (map['assistantText'] as String? ?? '').trim(),
+        senderLabel: (map['senderLabel'] as String? ?? 'U.L.T.R.O.N.').trim(),
+        userTimestamp: DateTime.fromMillisecondsSinceEpoch(
+          (map['userTimestampMs'] as num?)?.toInt() ??
+              DateTime.now().millisecondsSinceEpoch,
+        ),
+        replyTimestamp: DateTime.fromMillisecondsSinceEpoch(
+          (map['replyTimestampMs'] as num?)?.toInt() ??
+              DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
+}
+
 class DeviceControlService {
   DeviceControlService({
     MethodChannel? channel,
@@ -273,6 +304,7 @@ class DeviceControlService {
     void Function(String phrase)? onWakeWord,
     void Function(String partial)? onSpeechPartial,
     void Function(double rms)? onSpeechRms,
+    VoidCallback? onBackgroundTurn,
   }) {
     _channel.setMethodCallHandler((call) async {
       switch (call.method) {
@@ -289,6 +321,8 @@ class DeviceControlService {
         case 'onSpeechRms':
           final rms = (call.arguments as num?)?.toDouble() ?? 0.0;
           onSpeechRms?.call(rms.clamp(0.0, 1.0));
+        case 'onBackgroundTurnAvailable':
+          onBackgroundTurn?.call();
       }
       return null;
     });
@@ -740,6 +774,25 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         'whisperMode': whisperMode,
       });
     } catch (_) {}
+  }
+
+  /// Consome turnos de conversa executados em 2º plano pelo serviço nativo
+  /// para salvar no histórico criptografado (SQLCipher) e atualizar o chat.
+  Future<List<BackgroundConversationTurn>>
+      consumePendingBackgroundTurns() async {
+    try {
+      final raw = await _channel.invokeListMethod<Object?>(
+        'consumePendingBackgroundTurns',
+      );
+      if (raw == null || raw.isEmpty) return const [];
+      return raw
+          .whereType<Map<Object?, Object?>>()
+          .map(BackgroundConversationTurn.fromMap)
+          .where((t) => t.userText.isNotEmpty && t.assistantText.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// Parses direct natural-language hardware commands so they execute immediately

@@ -61,17 +61,7 @@ object BackgroundVoiceConfigStore {
                 put("whisperMode", cfg.whisperMode)
             }.toString()
 
-            val key = getOrCreateSecretKey() ?: return
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.ENCRYPT_MODE, key)
-            val iv = cipher.iv
-            val ciphertext = cipher.doFinal(json.toByteArray(Charsets.UTF_8))
-
-            val combined = ByteArray(iv.size + ciphertext.size)
-            System.arraycopy(iv, 0, combined, 0, iv.size)
-            System.arraycopy(ciphertext, 0, combined, iv.size, ciphertext.size)
-
-            val encoded = Base64.encodeToString(combined, Base64.NO_WRAP)
+            val encoded = encryptString(json) ?: return
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_PAYLOAD, encoded)
@@ -84,16 +74,7 @@ object BackgroundVoiceConfigStore {
         return try {
             val encoded = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(KEY_PAYLOAD, null) ?: return BackgroundVoiceConfig()
-            val combined = Base64.decode(encoded, Base64.NO_WRAP)
-            if (combined.size <= IV_LENGTH_BYTES) return BackgroundVoiceConfig()
-
-            val iv = combined.copyOfRange(0, IV_LENGTH_BYTES)
-            val ciphertext = combined.copyOfRange(IV_LENGTH_BYTES, combined.size)
-
-            val key = getExistingSecretKey() ?: return BackgroundVoiceConfig()
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, iv))
-            val raw = String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+            val raw = decryptString(encoded) ?: return BackgroundVoiceConfig()
             val obj = JSONObject(raw)
 
             BackgroundVoiceConfig(
@@ -113,6 +94,41 @@ object BackgroundVoiceConfigStore {
             )
         } catch (_: Exception) {
             BackgroundVoiceConfig()
+        }
+    }
+
+    internal fun encryptString(plain: String): String? {
+        return try {
+            val key = getOrCreateSecretKey() ?: return null
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, key)
+            val iv = cipher.iv
+            val ciphertext = cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+
+            val combined = ByteArray(iv.size + ciphertext.size)
+            System.arraycopy(iv, 0, combined, 0, iv.size)
+            System.arraycopy(ciphertext, 0, combined, iv.size, ciphertext.size)
+
+            Base64.encodeToString(combined, Base64.NO_WRAP)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun decryptString(encoded: String): String? {
+        return try {
+            val combined = Base64.decode(encoded, Base64.NO_WRAP)
+            if (combined.size <= IV_LENGTH_BYTES) return null
+
+            val iv = combined.copyOfRange(0, IV_LENGTH_BYTES)
+            val ciphertext = combined.copyOfRange(IV_LENGTH_BYTES, combined.size)
+
+            val key = getExistingSecretKey() ?: return null
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, iv))
+            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+        } catch (_: Exception) {
+            null
         }
     }
 

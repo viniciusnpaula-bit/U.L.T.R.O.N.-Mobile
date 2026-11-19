@@ -128,6 +128,7 @@ class _CoreScreenState extends State<CoreScreen>
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
   String? _lastShownPipelineError;
+  Future<void>? _pendingBgSync;
   List<MobileSkill> mobileSkills = const [];
   List<CapturedNotification> recentMessages = const [];
 
@@ -210,6 +211,7 @@ class _CoreScreenState extends State<CoreScreen>
         if (!mounted) return;
         setState(() => speechRms = rms);
       },
+      onBackgroundTurn: () => unawaited(_syncPendingBackgroundTurns()),
     );
     _loadInitialState();
     _checkUpdate();
@@ -379,8 +381,76 @@ class _CoreScreenState extends State<CoreScreen>
     );
   }
 
+  Future<void> _syncPendingBackgroundTurns({bool persistOnly = false}) {
+    final prev = _pendingBgSync;
+    final current = () async {
+      if (prev != null) {
+        try {
+          await prev;
+        } catch (_) {}
+      }
+      await _performBackgroundTurnSync(persistOnly: persistOnly);
+    }();
+    _pendingBgSync = current;
+    return current;
+  }
+
+  Future<void> _performBackgroundTurnSync({required bool persistOnly}) async {
+    try {
+      final turns = await deviceService.consumePendingBackgroundTurns();
+      if (turns.isEmpty) return;
+
+      final entries = <_FeedEntry>[];
+      for (final turn in turns) {
+        await ConversationHistory.instance.save(
+          ChatMessage(
+            id: null,
+            conversationId: 'default',
+            role: ChatRole.user,
+            content: turn.userText,
+            createdAt: turn.userTimestamp,
+          ),
+        );
+        await ConversationHistory.instance.save(
+          ChatMessage(
+            id: null,
+            conversationId: 'default',
+            role: ChatRole.assistant,
+            content: turn.assistantText,
+            createdAt: turn.replyTimestamp,
+          ),
+        );
+        entries.add(
+          _FeedEntry(
+            isUser: true,
+            senderLabel: 'OPERADOR',
+            text: turn.userText,
+            timestamp: _formatTime(turn.userTimestamp.toLocal()),
+          ),
+        );
+        entries.add(
+          _FeedEntry(
+            isUser: false,
+            senderLabel: turn.senderLabel,
+            text: turn.assistantText,
+            timestamp: _formatTime(turn.replyTimestamp.toLocal()),
+          ),
+        );
+      }
+
+      if (!persistOnly && mounted && entries.isNotEmpty) {
+        setState(() {
+          feed = [...feed, ...entries];
+        });
+        _scrollToBottom();
+        unawaited(_refreshDeviceStatus());
+      }
+    } catch (_) {}
+  }
+
   Future<void> _loadInitialState() async {
     try {
+      await _syncPendingBackgroundTurns(persistOnly: true);
       final saved = await ConversationHistory.instance.messages(
         conversationId: 'default',
         limit: 20,
@@ -767,6 +837,7 @@ class _CoreScreenState extends State<CoreScreen>
     if (state != AppLifecycleState.resumed) {
       voiceService.stop();
     } else {
+      unawaited(_syncPendingBackgroundTurns());
       _consumePendingWakeWord();
       unawaited(_consumePendingTileAction());
     }
@@ -778,7 +849,11 @@ class _CoreScreenState extends State<CoreScreen>
     WidgetsBinding.instance.removeObserver(this);
     voicePipeline.removeListener(_onVoicePipelineChanged);
     voicePipeline.dispose();
-    deviceService.setNativeEventHandlers(onFlip: null, onWakeWord: null);
+    deviceService.setNativeEventHandlers(
+      onFlip: null,
+      onWakeWord: null,
+      onBackgroundTurn: null,
+    );
     ticker.dispose();
     coreTime.dispose();
     voiceService.stop();
