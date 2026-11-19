@@ -55,15 +55,24 @@ class _InMemorySecureStorage extends FlutterSecureStorage {
 }
 
 void main() {
-  test('validates LAN/private hosts and rejects public or malformed URLs by default', () {
-    expect(DesktopPairingService.isValidEndpoint('http://192.168.1.50:8765'), isTrue);
-    expect(DesktopPairingService.isValidEndpoint('http://10.0.0.12:8765'), isTrue);
-    expect(DesktopPairingService.isValidEndpoint('http://172.16.5.2:8765'), isTrue);
-    expect(DesktopPairingService.isValidEndpoint('http://127.0.0.1:8765'), isTrue);
-    expect(DesktopPairingService.isValidEndpoint('http://desktop.local:8765'), isTrue);
+  test(
+      'validates LAN/private hosts and rejects public or malformed URLs by default',
+      () {
+    expect(DesktopPairingService.isValidEndpoint('http://192.168.1.50:8765'),
+        isTrue);
+    expect(
+        DesktopPairingService.isValidEndpoint('http://10.0.0.12:8765'), isTrue);
+    expect(DesktopPairingService.isValidEndpoint('http://172.16.5.2:8765'),
+        isTrue);
+    expect(
+        DesktopPairingService.isValidEndpoint('http://127.0.0.1:8765'), isTrue);
+    expect(DesktopPairingService.isValidEndpoint('http://desktop.local:8765'),
+        isTrue);
 
-    expect(DesktopPairingService.isValidEndpoint('https://evil.example.com'), isFalse);
-    expect(DesktopPairingService.isValidEndpoint('http://8.8.8.8:8765'), isFalse);
+    expect(DesktopPairingService.isValidEndpoint('https://evil.example.com'),
+        isFalse);
+    expect(
+        DesktopPairingService.isValidEndpoint('http://8.8.8.8:8765'), isFalse);
     expect(DesktopPairingService.isValidEndpoint('not-a-url'), isFalse);
     expect(
       DesktopPairingService.isValidEndpoint(
@@ -74,7 +83,9 @@ void main() {
     );
   });
 
-  test('signs payload with HMAC-SHA256 + timestamp + nonce and requires ConfirmationGate', () async {
+  test(
+      'signs payload with HMAC-SHA256 + timestamp + nonce and requires ConfirmationGate',
+      () async {
     final receivedHeaders = <String, String>{};
     var receivedBody = '';
     var requestCount = 0;
@@ -83,18 +94,29 @@ void main() {
     addTearDown(() => server.close(force: true));
     server.listen((req) async {
       requestCount += 1;
-      req.headers.forEach((k, v) => receivedHeaders[k.toLowerCase()] = v.join(','));
+      req.headers
+          .forEach((k, v) => receivedHeaders[k.toLowerCase()] = v.join(','));
       receivedBody = await utf8.decoder.bind(req).join();
+      final responsePayload = jsonEncode({'ok': true});
+      final respTs = '1700000000999';
+      final respNonce = 'resp-nonce-xyz';
+      final respDigest = Hmac(sha256, utf8.encode('top-secret-pairing-key'))
+          .convert(utf8.encode('$respTs.$respNonce.$responsePayload'))
+          .toString();
       req.response
         ..statusCode = 200
-        ..write(jsonEncode({'ok': true}));
+        ..headers.set('X-Ultron-Timestamp', respTs)
+        ..headers.set('X-Ultron-Nonce', respNonce)
+        ..headers.set('X-Ultron-Signature', respDigest)
+        ..write(responsePayload);
       await req.response.close();
     });
 
     final storage = _InMemorySecureStorage();
     final service = DesktopPairingService(
       storage: storage,
-      now: () => DateTime.fromMillisecondsSinceEpoch(1700000000123, isUtc: true),
+      now: () =>
+          DateTime.fromMillisecondsSinceEpoch(1700000000123, isUtc: true),
       nonceGenerator: () => 'nonce-abc-123',
     );
 
@@ -129,5 +151,6 @@ void main() {
         .convert(utf8.encode('1700000000123.nonce-abc-123.$receivedBody'))
         .toString();
     expect(receivedHeaders['x-ultron-signature'], expectedDigest);
+    expect(approved.verifiedSignature, isTrue);
   });
 }

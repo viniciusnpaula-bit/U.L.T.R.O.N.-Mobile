@@ -44,6 +44,7 @@ class DesktopCommandResult {
     this.statusCode,
     this.responseBody,
     this.error,
+    this.verifiedSignature = false,
   });
 
   final bool sent;
@@ -51,6 +52,7 @@ class DesktopCommandResult {
   final int? statusCode;
   final String? responseBody;
   final String? error;
+  final bool verifiedSignature;
 }
 
 /// Manages authenticated LAN pairing with ULTRON Desktop using HMAC-SHA256
@@ -147,7 +149,8 @@ class DesktopPairingService {
       );
     }
     if (config.deviceId.trim().isEmpty || config.sharedSecret.trim().isEmpty) {
-      throw ArgumentError('Device ID e segredo compartilhado são obrigatórios.');
+      throw ArgumentError(
+          'Device ID e segredo compartilhado são obrigatórios.');
     }
     await _storage.write(
       key: _storageKey,
@@ -167,6 +170,54 @@ class DesktopPairingService {
     return Hmac(sha256, utf8.encode(sharedSecret))
         .convert(utf8.encode(message))
         .toString();
+  }
+
+  /// Constant-time verification for desktop response signatures (`X-Ultron-Signature`).
+  static bool verifyResponseSignature({
+    required String rawBody,
+    required String signatureHeader,
+    required String sharedSecret,
+    String timestamp = '',
+    String nonce = '',
+  }) {
+    if (sharedSecret.trim().isEmpty || signatureHeader.trim().isEmpty) {
+      return false;
+    }
+    final provided = signatureHeader
+        .trim()
+        .replaceFirst(RegExp(r'^sha256=', caseSensitive: false), '')
+        .toLowerCase();
+    final bodyOnly = Hmac(sha256, utf8.encode(sharedSecret))
+        .convert(utf8.encode(rawBody))
+        .toString()
+        .toLowerCase();
+    if (_constantTimeEquals(provided, bodyOnly)) return true;
+    if (timestamp.isNotEmpty || nonce.isNotEmpty) {
+      final envelope = computeSignature(
+        timestamp: timestamp,
+        nonce: nonce,
+        body: rawBody,
+        sharedSecret: sharedSecret,
+      ).toLowerCase();
+      if (_constantTimeEquals(provided, envelope)) return true;
+      if (nonce.isEmpty && timestamp.isNotEmpty) {
+        final tsBody = Hmac(sha256, utf8.encode(sharedSecret))
+            .convert(utf8.encode('$timestamp.$rawBody'))
+            .toString()
+            .toLowerCase();
+        if (_constantTimeEquals(provided, tsBody)) return true;
+      }
+    }
+    return false;
+  }
+
+  static bool _constantTimeEquals(String a, String b) {
+    if (a.length != b.length) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
+    }
+    return diff == 0;
   }
 
   Future<DesktopCommandResult> sendCommand({
@@ -236,10 +287,30 @@ class DesktopPairingService {
       req.add(encoded);
 
       final response = await req.close().timeout(requestTimeout);
-      final body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(requestTimeout);
+      final body =
+          await response.transform(utf8.decoder).join().timeout(requestTimeout);
+      final respSig =
+          response.headers.value('x-ultron-signature')?.trim() ?? '';
+      final respTs = response.headers.value('x-ultron-timestamp')?.trim() ?? '';
+      final respNonce = response.headers.value('x-ultron-nonce')?.trim() ?? '';
+      var verified = false;
+      if (respSig.isNotEmpty) {
+        verified = verifyResponseSignature(
+          rawBody: body,
+          signatureHeader: respSig,
+          sharedSecret: config.sharedSecret,
+          timestamp: respTs,
+          nonce: respNonce,
+        );
+        if (!verified) {
+          return DesktopCommandResult(
+            sent: false,
+            statusCode: response.statusCode,
+            error: 'Assinatura HMAC da resposta do desktop inválida.',
+            verifiedSignature: false,
+          );
+        }
+      }
       if (response.statusCode < 200 || response.statusCode >= 300) {
         return DesktopCommandResult(
           sent: false,
@@ -248,12 +319,14 @@ class DesktopPairingService {
             'Falha HTTP ${response.statusCode}: $body',
             config.sharedSecret,
           ),
+          verifiedSignature: verified,
         );
       }
       return DesktopCommandResult(
         sent: true,
         statusCode: response.statusCode,
         responseBody: body,
+        verifiedSignature: verified,
       );
     } catch (e) {
       return DesktopCommandResult(

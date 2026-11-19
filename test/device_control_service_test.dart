@@ -1,7 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:ultron_mobile/services/audit_log_service.dart';
 import 'package:ultron_mobile/services/device_control_service.dart';
 import 'package:ultron_mobile/services/obsidian_service.dart';
 
@@ -295,15 +298,80 @@ void main() {
     }
   });
 
-  test('prepares PC sync payload with HMAC-SHA256 signature', () {
+  test(
+      'prepares PC sync payload with HMAC-SHA256 signature and rejects empty secret',
+      () {
     final service = DeviceControlService(channel: channel);
     final sync = service.preparePcSyncPayload(
       command: 'SYNC_TELEMETRY',
       data: const {'battery': 98, 'ram': 4096},
+      secret: 'test-lan-secret-123',
     );
     expect(sync['body'], contains('SYNC_TELEMETRY'));
     expect(sync['signature'], startsWith('sha256='));
     expect(sync['timestamp'], isNotEmpty);
+
+    expect(
+      () => service.preparePcSyncPayload(
+        command: 'SYNC_TELEMETRY',
+        secret: '   ',
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('executeAiActions enforces ActionGate on sensitive actions', () async {
+    final service = DeviceControlService(channel: channel);
+
+    // Without confirmAction callback -> blocked fail-closed
+    final blocked = await service.executeAiActions(
+      'Enviando mensagem. [ACTION:WHATSAPP:Carlos:Oi]',
+    );
+    expect(blocked.executedLogs.single, contains('bloqueado'));
+    expect(calls.where((c) => c.method == 'sendWhatsApp'), isEmpty);
+
+    // With confirmAction returning false -> blocked
+    final denied = await service.executeAiActions(
+      'Enviando SMS. [ACTION:SMS:11999999999:Oi]',
+      confirmAction: (_) async => false,
+    );
+    expect(denied.executedLogs.single, contains('bloqueado'));
+    expect(calls.where((c) => c.method == 'sendSms'), isEmpty);
+
+    // With confirmAction returning true -> executed
+    final approved = await service.executeAiActions(
+      'Enviando WhatsApp. [ACTION:WHATSAPP:Carlos:Confirmado]',
+      confirmAction: (_) async => true,
+    );
+    expect(approved.executedLogs.single, contains('Carlos'));
+    expect(calls.where((c) => c.method == 'sendWhatsApp').length, 1);
+  });
+
+  test('captureVisionImage decodes VisionAttachment from native MethodChannel',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'captureVisionImage') {
+        return {
+          'base64': 'QUJDRA==',
+          'mimeType': 'image/jpeg',
+          'width': 800,
+          'height': 600,
+          'byteSize': 4096,
+          'source': call.arguments['source'],
+        };
+      }
+      return true;
+    });
+
+    final service = DeviceControlService(channel: channel);
+    final img = await service.captureVisionImage(source: 'gallery');
+    expect(img, isNotNull);
+    expect(img!.width, 800);
+    expect(img.height, 600);
+    expect(img.source, 'gallery');
+    expect(img.sizeKbLabel, '4.0 KB');
   });
 
   test('executes natural media playback commands and AI MEDIA_* tags',
@@ -425,4 +493,150 @@ void main() {
         'abra o whatsapp pra mim e veja minhas mensagens');
     expect(multiClause, isNull);
   });
+
+  test('parseNaturalCalendarEvent parses relative days, dates, and times', () {
+    final now = DateTime(2026, 11, 19, 8, 0);
+
+    final tomorrow = DeviceControlService.parseNaturalCalendarEvent(
+      'agendar Reunião com Carlos amanhã às 15:30',
+      now: now,
+    );
+    expect(tomorrow, isNotNull);
+    expect(tomorrow!.title, 'Reunião com Carlos');
+    expect(tomorrow.startTime, DateTime(2026, 11, 20, 15, 30));
+
+    final iso = DeviceControlService.parseNaturalCalendarEvent(
+      '2026-12-01 09:00 Revisão Trimestral',
+      now: now,
+    );
+    expect(iso, isNotNull);
+    expect(iso!.title, 'Revisão Trimestral');
+    expect(iso.startTime, DateTime(2026, 12, 1, 9, 0));
+  });
+
+  test('reads and creates calendar events with ActionGate enforcement',
+      () async {
+    final evStart = DateTime(2026, 11, 19, 14, 0).millisecondsSinceEpoch;
+    final evEnd = DateTime(2026, 11, 19, 15, 0).millisecondsSinceEpoch;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'getCalendarEvents') {
+        return [
+          {
+            'id': '101',
+            'title': 'Review Sprint',
+            'startMs': evStart,
+            'endMs': evEnd,
+            'allDay': false,
+            'location': 'Sala 1',
+            'calendarName': 'Trabalho',
+          },
+        ];
+      }
+      if (call.method == 'createCalendarEvent') {
+        return {
+          'created': true,
+          'mode': 'direct',
+          'eventId': '202',
+          'calendarName': 'Trabalho',
+          'title': call.arguments['title'],
+        };
+      }
+      return true;
+    });
+
+    final service = DeviceControlService(channel: channel);
+    final readNatural =
+        await service.tryExecuteNaturalCommand('agenda de hoje');
+    expect(readNatural?.handled, isTrue);
+    expect(readNatural?.message, contains('Review Sprint'));
+
+    // Blocked when ActionGate denies CREATE_EVENT
+    final denied = await service.executeAiActions(
+      'Criando evento. [ACTION:CREATE_EVENT:2026-11-20 10:00:Dentista]',
+      confirmAction: (_) async => false,
+    );
+    expect(denied.executedLogs.single, contains('bloqueado'));
+    expect(calls.where((c) => c.method == 'createCalendarEvent'), isEmpty);
+
+    // Executed when ActionGate approves CREATE_EVENT
+    final approved = await service.executeAiActions(
+      'Criando evento. [ACTION:CREATE_EVENT:2026-11-20 10:00:Dentista]',
+      confirmAction: (_) async => true,
+    );
+    expect(approved.executedLogs.single, contains('Dentista'));
+    expect(calls.where((c) => c.method == 'createCalendarEvent').length, 1);
+  });
+
+  test(
+      'executes HTTP bridge directives in Skills/*.md with ActionGate and immutable AuditLog',
+      () async {
+    final previousOverrides = HttpOverrides.current;
+    HttpOverrides.global = _RealHttpOverrides();
+    addTearDown(() => HttpOverrides.global = previousOverrides);
+
+    sqfliteFfiInit();
+    final db = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(version: 1, singleInstance: false),
+    );
+    final audit = await AuditLogService.open(database: db);
+    addTearDown(() => audit.close());
+
+    final receivedBodies = <String>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((req) async {
+      final body = await utf8.decoder.bind(req).join();
+      receivedBodies.add('${req.method} ${req.uri.path} $body');
+      req.response
+        ..statusCode = 200
+        ..write('{"ok":true}');
+      await req.response.close();
+    });
+
+    final tempDir = await Directory.systemTemp.createTemp('ultron_iot_skill_');
+    addTearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+    final obs = ObsidianService(tempDir);
+    await obs.initialize();
+    final skillFile = File('${tempDir.path}/Skills/iot_noite.md');
+    await skillFile.writeAsString(
+      '# IoT Boa Noite\n'
+      '[HTTP:GET:http://127.0.0.1:${server.port}/health]\n'
+      '[HTTP:POST:http://127.0.0.1:${server.port}/webhook|{"entity":"light.sala"}]\n',
+    );
+
+    final service = DeviceControlService(
+      channel: channel,
+      obsidianProvider: () async => obs,
+      auditLogProvider: () async => audit,
+    );
+
+    // Deny mutating POST -> GET on loopback still runs, POST denied & logged in AuditLog
+    final partial = await service.executeAiActions(
+      '[ACTION:SKILL:iot_noite]',
+      confirmAction: (_) async => false,
+    );
+    expect(partial.executedLogs.single, contains('HTTP GET'));
+    expect(partial.executedLogs.single, contains('bloqueado'));
+    expect(receivedBodies.length, 1);
+
+    // Approve mutating POST -> executes HTTP POST and records valid SHA-256 chain
+    final full = await service.executeAiActions(
+      '[ACTION:SKILL:iot_noite]',
+      confirmAction: (_) async => true,
+    );
+    expect(full.executedLogs.single, contains('HTTP POST'));
+    expect(receivedBodies.length, 3);
+    expect(receivedBodies.last, contains('{"entity":"light.sala"}'));
+
+    final verification = await audit.verifyChain();
+    expect(verification.valid, isTrue);
+    expect(verification.totalEntries, greaterThanOrEqualTo(4));
+  });
 }
+
+class _RealHttpOverrides extends HttpOverrides {}

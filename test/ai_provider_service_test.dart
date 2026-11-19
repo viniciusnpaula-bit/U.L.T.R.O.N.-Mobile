@@ -34,16 +34,19 @@ void main() {
       final messages = buildAiMessages(
         'Analise esta imagem tática',
         const [],
-        imageBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        imageBase64:
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
       );
       expect(messages.length, 1);
       final turn = messages.first;
       expect(turn['role'], 'user');
       final content = turn['content'] as List;
       expect(content.length, 2);
-      expect(content[0], {'type': 'text', 'text': 'Analise esta imagem tática'});
+      expect(
+          content[0], {'type': 'text', 'text': 'Analise esta imagem tática'});
       expect((content[1] as Map)['type'], 'image_url');
-      expect(((content[1] as Map)['image_url'] as Map)['url'], contains('data:image/jpeg;base64,'));
+      expect(((content[1] as Map)['image_url'] as Map)['url'],
+          contains('data:image/jpeg;base64,'));
     });
   });
 
@@ -131,7 +134,9 @@ void main() {
       );
     });
 
-    test('parseChatModelsList filters audio/guard models and prioritizes GPT-OSS', () {
+    test(
+        'parseChatModelsList filters audio/guard models and prioritizes GPT-OSS',
+        () {
       final raw = jsonEncode({
         'data': [
           {'id': 'whisper-large-v3'},
@@ -144,7 +149,9 @@ void main() {
       expect(models, ['openai/gpt-oss-120b', 'qwen/qwen3-32b']);
     });
 
-    test('FreeProviderPreset catalog includes 9 free providers and zero-key Pollinations', () {
+    test(
+        'FreeProviderPreset catalog includes 9 free providers and zero-key Pollinations',
+        () {
       expect(FreeProviderPreset.catalog.length, 9);
       final zeroKey = FreeProviderPreset.catalog.first;
       expect(zeroKey.requiresKey, isFalse);
@@ -160,6 +167,30 @@ void main() {
       expect(cfg.isKeylessProvider, isTrue);
       expect(cfg.hasUsableCredentials, isTrue);
       expect(cfg.effectiveToken, 'free');
+    });
+
+    test('detects vision-capable models and recommends multimodal fallbacks',
+        () {
+      expect(AiProviderStore.isVisionCapableModel('gemini-2.5-flash'), isTrue);
+      expect(
+          AiProviderStore.isVisionCapableModel(
+              'qwen/qwen2.5-vl-72b-instruct:free'),
+          isTrue);
+      expect(
+          AiProviderStore.isVisionCapableModel(
+              'meta-llama/llama-4-scout-17b-16e-instruct'),
+          isTrue);
+      expect(
+          AiProviderStore.isVisionCapableModel('openai/gpt-oss-120b'), isFalse);
+
+      final visionFallbacks = AiProviderStore.fallbackModelsFor(
+        'https://openrouter.ai/api/v1',
+        'deepseek/deepseek-r1:free',
+        requiresVision: true,
+      );
+      expect(
+          visionFallbacks.any((m) => m.contains('vl') || m.contains('gemini')),
+          isTrue);
     });
   });
 }

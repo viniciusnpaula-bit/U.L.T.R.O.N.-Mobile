@@ -1,11 +1,17 @@
 package com.viniciusnpaula.ultron_mobile
 
 import android.Manifest
+import android.app.Activity
 import android.app.ActivityManager
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -13,6 +19,7 @@ import android.hardware.SensorManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
+import android.media.ExifInterface
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -24,17 +31,24 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.AlarmClock
+import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Base64
 import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.util.TimeZone
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 class MainActivity : FlutterFragmentActivity(), SensorEventListener {
@@ -61,6 +75,12 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         var isActivityResumed: Boolean = false
 
         private const val PENDING_WAKE_TTL_MS = 90_000L
+        private const val VISION_CAMERA_REQUEST_CODE = 9101
+        private const val VISION_GALLERY_REQUEST_CODE = 9102
+        private const val VISION_CAMERA_PERM_REQUEST_CODE = 9103
+        private const val CALENDAR_PERM_REQUEST_CODE = 9104
+        private const val VISION_MAX_DIM_PX = 1024
+        private const val VISION_JPEG_QUALITY = 82
 
         private var instance: MainActivity? = null
 
@@ -142,7 +162,79 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 this, Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
             if (micGranted && !UltronAudioService.isRunning) startSentinelService()
+        } else if (requestCode == VISION_CAMERA_PERM_REQUEST_CODE) {
+            val camGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+            val pending = pendingVisionResult
+            if (camGranted && pending != null) {
+                startVisionCapture("camera", pending)
+            } else {
+                pendingVisionResult = null
+                pending?.error("PERMISSION_DENIED", "Permissão de câmera negada para Visão Multimodal.", null)
+            }
+        } else if (requestCode == CALENDAR_PERM_REQUEST_CODE) {
+            val readGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.READ_CALENDAR
+            ) == PackageManager.PERMISSION_GRANTED
+            val op = pendingCalendarOperation
+            val pending = pendingCalendarResult
+            pendingCalendarOperation = null
+            pendingCalendarResult = null
+            if (readGranted && op != null) {
+                op.invoke()
+            } else {
+                pending?.error("CALENDAR_PERMISSION_DENIED", "Permissão de Agenda (Calendário) negada.", null)
+            }
         }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != VISION_CAMERA_REQUEST_CODE && requestCode != VISION_GALLERY_REQUEST_CODE) {
+            return
+        }
+        val pending = pendingVisionResult ?: return
+        pendingVisionResult = null
+        val source = if (requestCode == VISION_CAMERA_REQUEST_CODE) "camera" else "gallery"
+        if (resultCode != Activity.RESULT_OK) {
+            pendingVisionCameraUri = null
+            pending.success(null)
+            return
+        }
+        val uri = if (requestCode == VISION_CAMERA_REQUEST_CODE) {
+            pendingVisionCameraUri
+        } else {
+            data?.data
+        }
+        pendingVisionCameraUri = null
+        if (uri == null) {
+            pending.success(null)
+            return
+        }
+        Thread {
+            try {
+                val payload = decodeAndCompressVisionImage(uri, source)
+                runOnUiThread {
+                    if (payload == null) {
+                        pending.error("VISION_DECODE_FAILED", "Não foi possível decodificar a imagem.", null)
+                    } else {
+                        pending.success(payload)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    pending.error("VISION_ERROR", e.message ?: "Falha ao processar imagem.", null)
+                }
+            } finally {
+                if (requestCode == VISION_CAMERA_REQUEST_CODE) {
+                    safely("cleanupVisionTemp") {
+                        File(cacheDir, "vision").listFiles()?.forEach { it.delete() }
+                    }
+                }
+            }
+        }.start()
     }
 
     /** Permite abrir sobre a tela de bloqueio quando a ativação por voz acorda o app. */
@@ -202,6 +294,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
     private var isFaceDown: Boolean = false
+    private var pendingVisionResult: MethodChannel.Result? = null
+    private var pendingVisionCameraUri: Uri? = null
+    private var pendingCalendarOperation: (() -> Unit)? = null
+    private var pendingCalendarResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -615,6 +711,46 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     result.success(false)
                 }
             }
+            "captureVisionImage" -> {
+                val source = (call.argument<String>("source") ?: "camera").lowercase()
+                if (pendingVisionResult != null) {
+                    result.error("VISION_BUSY", "Já existe uma captura de imagem em andamento.", null)
+                    return
+                }
+                startVisionCapture(source, result)
+            }
+            "getCalendarEvents" -> {
+                val nowMs = System.currentTimeMillis()
+                val startMs = (call.argument<Number>("startMs")?.toLong()) ?: nowMs
+                val endMs = (call.argument<Number>("endMs")?.toLong()) ?: (startMs + 86_400_000L)
+                val limit = ((call.argument<Number>("limit")?.toInt()) ?: 20).coerceIn(1, 50)
+                ensureCalendarPermissions(writeRequired = false, result = result) {
+                    queryCalendarEvents(startMs, endMs, limit, result)
+                }
+            }
+            "createCalendarEvent" -> {
+                val title = (call.argument<String>("title") ?: "").trim()
+                if (title.isEmpty()) {
+                    result.error("INVALID_ARGUMENT", "Título do evento não pode ser vazio.", null)
+                    return
+                }
+                val startMs = call.argument<Number>("startMs")?.toLong() ?: System.currentTimeMillis()
+                val endMs = call.argument<Number>("endMs")?.toLong() ?: (startMs + 3_600_000L)
+                val description = call.argument<String>("description") ?: ""
+                val location = call.argument<String>("location") ?: ""
+                val allDay = call.argument<Boolean>("allDay") ?: false
+                ensureCalendarPermissions(writeRequired = true, result = result) {
+                    insertOrOpenCalendarEvent(
+                        title = title,
+                        startMs = startMs,
+                        endMs = endMs,
+                        description = description,
+                        location = location,
+                        allDay = allDay,
+                        result = result,
+                    )
+                }
+            }
             else -> result.notImplemented()
         }
     }
@@ -752,5 +888,342 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         }
         startActivity(intent)
         return "App de SMS aberto para $label com a mensagem: \"$cleanText\"."
+    }
+
+    @Suppress("DEPRECATION")
+    private fun startVisionCapture(source: String, result: MethodChannel.Result) {
+        if (source == "gallery") {
+            pendingVisionResult = result
+            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+            try {
+                startActivityForResult(
+                    Intent.createChooser(intent, "Selecionar imagem para Visão"),
+                    VISION_GALLERY_REQUEST_CODE,
+                )
+            } catch (e: Exception) {
+                pendingVisionResult = null
+                result.error("GALLERY_UNAVAILABLE", e.message ?: "Galeria indisponível.", null)
+            }
+            return
+        }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingVisionResult = result
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.CAMERA),
+                VISION_CAMERA_PERM_REQUEST_CODE,
+            )
+            return
+        }
+
+        try {
+            val visionDir = File(cacheDir, "vision").apply { mkdirs() }
+            val imageFile = File(visionDir, "capture_${System.currentTimeMillis()}.jpg")
+            val photoUri = FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                imageFile,
+            )
+            pendingVisionCameraUri = photoUri
+            pendingVisionResult = result
+            val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                putExtra(MediaStore.EXTRA_OUTPUT, photoUri)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivityForResult(intent, VISION_CAMERA_REQUEST_CODE)
+        } catch (e: Exception) {
+            pendingVisionResult = null
+            pendingVisionCameraUri = null
+            result.error("CAMERA_UNAVAILABLE", e.message ?: "Câmera indisponível.", null)
+        }
+    }
+
+    private fun decodeAndCompressVisionImage(uri: Uri, source: String): Map<String, Any>? {
+        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, boundsOpts)
+        } ?: return null
+
+        val rawW = boundsOpts.outWidth
+        val rawH = boundsOpts.outHeight
+        if (rawW <= 0 || rawH <= 0) return null
+
+        var sampleSize = 1
+        while (max(rawW / sampleSize, rawH / sampleSize) > VISION_MAX_DIM_PX * 2) {
+            sampleSize *= 2
+        }
+        val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        val decoded = contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, decodeOpts)
+        } ?: return null
+
+        val rotated = applyExifOrientationIfNeeded(uri, decoded)
+        val longest = max(rotated.width, rotated.height)
+        val scaled = if (longest > VISION_MAX_DIM_PX) {
+            val scale = VISION_MAX_DIM_PX.toFloat() / longest.toFloat()
+            val targetW = max(1, (rotated.width * scale).roundToInt())
+            val targetH = max(1, (rotated.height * scale).roundToInt())
+            Bitmap.createScaledBitmap(rotated, targetW, targetH, true).also {
+                if (it != rotated) rotated.recycle()
+            }
+        } else {
+            rotated
+        }
+
+        val out = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, out)
+        val finalW = scaled.width
+        val finalH = scaled.height
+        scaled.recycle()
+        val bytes = out.toByteArray()
+        val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        return mapOf(
+            "base64" to encoded,
+            "mimeType" to "image/jpeg",
+            "width" to finalW,
+            "height" to finalH,
+            "byteSize" to bytes.size,
+            "source" to source,
+        )
+    }
+
+    private fun applyExifOrientationIfNeeded(uri: Uri, bitmap: Bitmap): Bitmap {
+        val orientation = try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                ExifInterface(input).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL,
+                )
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+        val degrees = when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+        if (degrees == 0f) return bitmap
+        val matrix = Matrix().apply { postRotate(degrees) }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also {
+            if (it != bitmap) bitmap.recycle()
+        }
+    }
+
+    private fun ensureCalendarPermissions(
+        writeRequired: Boolean,
+        result: MethodChannel.Result,
+        onGranted: () -> Unit,
+    ) {
+        val readOk = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.READ_CALENDAR,
+        ) == PackageManager.PERMISSION_GRANTED
+        val writeOk = !writeRequired || ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.WRITE_CALENDAR,
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (readOk && writeOk) {
+            onGranted()
+            return
+        }
+        if (pendingCalendarResult != null) {
+            result.error("CALENDAR_BUSY", "Já existe uma solicitação de agenda em andamento.", null)
+            return
+        }
+        pendingCalendarResult = result
+        pendingCalendarOperation = {
+            val writeNowOk = !writeRequired || ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.WRITE_CALENDAR,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (writeNowOk) {
+                onGranted()
+            } else {
+                result.error("CALENDAR_PERMISSION_DENIED", "Permissão de escrita na Agenda negada.", null)
+            }
+        }
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+            CALENDAR_PERM_REQUEST_CODE,
+        )
+    }
+
+    private fun queryCalendarEvents(
+        startMs: Long,
+        endMs: Long,
+        limit: Int,
+        result: MethodChannel.Result,
+    ) {
+        try {
+            val projection = arrayOf(
+                CalendarContract.Instances.EVENT_ID,
+                CalendarContract.Instances.TITLE,
+                CalendarContract.Instances.BEGIN,
+                CalendarContract.Instances.END,
+                CalendarContract.Instances.ALL_DAY,
+                CalendarContract.Instances.EVENT_LOCATION,
+                CalendarContract.Instances.CALENDAR_DISPLAY_NAME,
+                CalendarContract.Instances.DESCRIPTION,
+            )
+            val items = mutableListOf<Map<String, Any?>>()
+            CalendarContract.Instances.query(
+                contentResolver,
+                projection,
+                startMs,
+                endMs,
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndex(CalendarContract.Instances.EVENT_ID)
+                val titleIdx = cursor.getColumnIndex(CalendarContract.Instances.TITLE)
+                val beginIdx = cursor.getColumnIndex(CalendarContract.Instances.BEGIN)
+                val endIdx = cursor.getColumnIndex(CalendarContract.Instances.END)
+                val allDayIdx = cursor.getColumnIndex(CalendarContract.Instances.ALL_DAY)
+                val locIdx = cursor.getColumnIndex(CalendarContract.Instances.EVENT_LOCATION)
+                val calIdx = cursor.getColumnIndex(CalendarContract.Instances.CALENDAR_DISPLAY_NAME)
+                val descIdx = cursor.getColumnIndex(CalendarContract.Instances.DESCRIPTION)
+
+                while (cursor.moveToNext()) {
+                    val title = if (titleIdx >= 0) cursor.getString(titleIdx) ?: "" else ""
+                    if (title.isBlank()) continue
+                    val begin = if (beginIdx >= 0) cursor.getLong(beginIdx) else startMs
+                    val end = if (endIdx >= 0) cursor.getLong(endIdx) else begin
+                    items.add(
+                        mapOf(
+                            "id" to (if (idIdx >= 0) cursor.getLong(idIdx).toString() else ""),
+                            "title" to title.trim(),
+                            "startMs" to begin,
+                            "endMs" to end,
+                            "allDay" to (if (allDayIdx >= 0) cursor.getInt(allDayIdx) == 1 else false),
+                            "location" to (if (locIdx >= 0) cursor.getString(locIdx) ?: "" else ""),
+                            "calendarName" to (if (calIdx >= 0) cursor.getString(calIdx) ?: "" else ""),
+                            "description" to (if (descIdx >= 0) cursor.getString(descIdx) ?: "" else ""),
+                        ),
+                    )
+                }
+            }
+            val sorted = items.sortedBy { (it["startMs"] as? Long) ?: 0L }.take(limit)
+            result.success(sorted)
+        } catch (e: Exception) {
+            result.error("CALENDAR_READ_ERROR", e.message ?: "Falha ao ler eventos da Agenda.", null)
+        }
+    }
+
+    private fun findPrimaryWritableCalendar(): Pair<Long, String>? {
+        val projection = arrayOf(
+            CalendarContract.Calendars._ID,
+            CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
+            CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
+            CalendarContract.Calendars.VISIBLE,
+            CalendarContract.Calendars.IS_PRIMARY,
+        )
+        var fallback: Pair<Long, String>? = null
+        contentResolver.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            projection,
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val idIdx = cursor.getColumnIndex(CalendarContract.Calendars._ID)
+            val nameIdx = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME)
+            val accessIdx = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL)
+            val visibleIdx = cursor.getColumnIndex(CalendarContract.Calendars.VISIBLE)
+            val primaryIdx = cursor.getColumnIndex(CalendarContract.Calendars.IS_PRIMARY)
+
+            while (cursor.moveToNext()) {
+                val id = if (idIdx >= 0) cursor.getLong(idIdx) else continue
+                val access = if (accessIdx >= 0) cursor.getInt(accessIdx) else 0
+                if (access < CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR) continue
+                val visible = if (visibleIdx >= 0) cursor.getInt(visibleIdx) == 1 else true
+                val primary = if (primaryIdx >= 0) cursor.getInt(primaryIdx) == 1 else false
+                val name = (if (nameIdx >= 0) cursor.getString(nameIdx) else null) ?: "Agenda"
+                val pair = Pair(id, name)
+                if (visible && primary) return pair
+                if (fallback == null && visible) {
+                    fallback = pair
+                } else if (fallback == null) {
+                    fallback = pair
+                }
+            }
+        }
+        return fallback
+    }
+
+    private fun insertOrOpenCalendarEvent(
+        title: String,
+        startMs: Long,
+        endMs: Long,
+        description: String,
+        location: String,
+        allDay: Boolean,
+        result: MethodChannel.Result,
+    ) {
+        try {
+            val writable = findPrimaryWritableCalendar()
+            if (writable != null) {
+                val values = ContentValues().apply {
+                    put(CalendarContract.Events.DTSTART, startMs)
+                    put(CalendarContract.Events.DTEND, if (endMs > startMs) endMs else startMs + 3_600_000L)
+                    put(CalendarContract.Events.TITLE, title)
+                    if (description.isNotBlank()) {
+                        put(CalendarContract.Events.DESCRIPTION, description)
+                    }
+                    if (location.isNotBlank()) {
+                        put(CalendarContract.Events.EVENT_LOCATION, location)
+                    }
+                    put(CalendarContract.Events.CALENDAR_ID, writable.first)
+                    put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+                    put(CalendarContract.Events.ALL_DAY, if (allDay) 1 else 0)
+                }
+                val uri = contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
+                if (uri != null) {
+                    val eventId = ContentUris.parseId(uri)
+                    result.success(
+                        mapOf(
+                            "created" to true,
+                            "mode" to "direct",
+                            "eventId" to eventId.toString(),
+                            "calendarName" to writable.second,
+                            "title" to title,
+                        ),
+                    )
+                    return
+                }
+            }
+
+            val intent = Intent(Intent.ACTION_INSERT).apply {
+                data = CalendarContract.Events.CONTENT_URI
+                putExtra(CalendarContract.Events.TITLE, title)
+                putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, startMs)
+                putExtra(CalendarContract.EXTRA_EVENT_END_TIME, if (endMs > startMs) endMs else startMs + 3_600_000L)
+                putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, allDay)
+                if (description.isNotBlank()) {
+                    putExtra(CalendarContract.Events.DESCRIPTION, description)
+                }
+                if (location.isNotBlank()) {
+                    putExtra(CalendarContract.Events.EVENT_LOCATION, location)
+                }
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            result.success(
+                mapOf(
+                    "created" to true,
+                    "mode" to "intent",
+                    "eventId" to "",
+                    "calendarName" to "App de Agenda",
+                    "title" to title,
+                ),
+            )
+        } catch (e: Exception) {
+            result.error("CALENDAR_WRITE_ERROR", e.message ?: "Falha ao criar evento na Agenda.", null)
+        }
     }
 }

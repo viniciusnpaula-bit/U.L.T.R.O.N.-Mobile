@@ -1,11 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../core/security/action_gate.dart';
+import 'audit_log_service.dart';
 import 'obsidian_service.dart';
+import 'vault_search_service.dart';
 
 class DeviceStatus {
   const DeviceStatus({
@@ -128,6 +132,76 @@ class CapturedNotification {
         timeFormatted: (map['timeFormatted'] as String?) ?? '',
         canReplyInline: (map['canReplyInline'] as bool?) ?? false,
       );
+}
+
+/// Compromisso lido do Android CalendarContract.
+class CalendarEvent {
+  const CalendarEvent({
+    required this.id,
+    required this.title,
+    required this.startTime,
+    required this.endTime,
+    this.allDay = false,
+    this.location = '',
+    this.calendarName = '',
+    this.description = '',
+  });
+
+  factory CalendarEvent.fromMap(Map<Object?, Object?> map) {
+    final startMs = (map['startMs'] as num?)?.toInt() ?? 0;
+    final endMs = (map['endMs'] as num?)?.toInt() ?? startMs;
+    return CalendarEvent(
+      id: (map['id'] as String?) ?? '',
+      title: ((map['title'] as String?) ?? 'Sem título').trim(),
+      startTime: DateTime.fromMillisecondsSinceEpoch(startMs),
+      endTime: DateTime.fromMillisecondsSinceEpoch(
+        endMs >= startMs ? endMs : startMs,
+      ),
+      allDay: (map['allDay'] as bool?) ?? false,
+      location: ((map['location'] as String?) ?? '').trim(),
+      calendarName: ((map['calendarName'] as String?) ?? '').trim(),
+      description: ((map['description'] as String?) ?? '').trim(),
+    );
+  }
+
+  final String id;
+  final String title;
+  final DateTime startTime;
+  final DateTime endTime;
+  final bool allDay;
+  final String location;
+  final String calendarName;
+  final String description;
+
+  static String _two(int v) => v.toString().padLeft(2, '0');
+
+  String get timeRangeLabel {
+    if (allDay) return 'Dia inteiro';
+    final s = '${_two(startTime.hour)}:${_two(startTime.minute)}';
+    final e = '${_two(endTime.hour)}:${_two(endTime.minute)}';
+    return s == e ? s : '$s–$e';
+  }
+
+  String get dateLabel => '${_two(startTime.day)}/${_two(startTime.month)}';
+
+  String formatLine({bool includeDate = false}) {
+    final prefix = includeDate ? '$dateLabel $timeRangeLabel' : timeRangeLabel;
+    final loc = location.isEmpty ? '' : ' @ $location';
+    return '• $prefix — $title$loc';
+  }
+}
+
+/// Resultado de parsing determinístico de comando para criação de evento na agenda.
+class ParsedCalendarDraft {
+  const ParsedCalendarDraft({
+    required this.title,
+    required this.startTime,
+    required this.endTime,
+  });
+
+  final String title;
+  final DateTime startTime;
+  final DateTime endTime;
 }
 
 /// Diagnóstico do sentinela sherpa-onnx KWS, vindo do serviço nativo.
@@ -289,11 +363,50 @@ class BackgroundConversationTurn {
       );
 }
 
+typedef ActionGateConfirmCallback = Future<bool> Function(
+  ActionSimulation simulation,
+);
+
+/// Imagem capturada pela câmera ou galeria, já redimensionada e codificada em JPEG Base64.
+class VisionAttachment {
+  const VisionAttachment({
+    required this.base64,
+    required this.mimeType,
+    required this.width,
+    required this.height,
+    required this.byteSize,
+    required this.source,
+  });
+
+  factory VisionAttachment.fromMap(Map<Object?, Object?> map) {
+    return VisionAttachment(
+      base64: map['base64'] as String? ?? '',
+      mimeType: map['mimeType'] as String? ?? 'image/jpeg',
+      width: (map['width'] as num?)?.toInt() ?? 0,
+      height: (map['height'] as num?)?.toInt() ?? 0,
+      byteSize: (map['byteSize'] as num?)?.toInt() ?? 0,
+      source: map['source'] as String? ?? 'camera',
+    );
+  }
+
+  final String base64;
+  final String mimeType;
+  final int width;
+  final int height;
+  final int byteSize;
+  final String source;
+
+  String get sizeKbLabel => '${(byteSize / 1024).toStringAsFixed(1)} KB';
+}
+
 class DeviceControlService {
   DeviceControlService({
     MethodChannel? channel,
     FlutterSecureStorage? storage,
     this.obsidianProvider,
+    this.vaultSearchProvider,
+    this.auditLogProvider,
+    this.actionGate = const ActionGate(),
   })  : _channel = channel ??
             const MethodChannel('com.viniciusnpaula.ultron_mobile/device'),
         _storage = storage ?? const FlutterSecureStorage();
@@ -301,7 +414,11 @@ class DeviceControlService {
   final MethodChannel _channel;
   final FlutterSecureStorage _storage;
   final Future<ObsidianService> Function()? obsidianProvider;
+  final Future<VaultSearchService> Function()? vaultSearchProvider;
+  final Future<AuditLogService> Function()? auditLogProvider;
+  final ActionGate actionGate;
   static const _pcEndpointKey = 'ultron.pc.killswitch.v1';
+  static const _pcSecretKey = 'ultron.pc.killswitch.secret.v1';
 
   void setNativeEventHandlers({
     VoidCallback? onFlip,
@@ -358,21 +475,108 @@ class DeviceControlService {
     }
   }
 
+  Future<VaultSearchService> _getVaultSearch() async {
+    if (vaultSearchProvider != null) {
+      return vaultSearchProvider!();
+    }
+    final vault = await _getObsidian();
+    return VaultSearchService.open(vaultRoot: Directory(vault.vaultPath));
+  }
+
+  /// P5: Acesso seguro ao log imutável de auditoria (nunca quebra em ambiente headless sem sqflite).
+  Future<AuditLogService?> _getAuditLogOrNull() async {
+    try {
+      if (auditLogProvider != null) {
+        return await auditLogProvider!();
+      }
+      return await AuditLogService.instance();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> recordAudit({
+    required String actor,
+    required String action,
+    String target = '',
+    required String status,
+    String detail = '',
+  }) async {
+    try {
+      final audit = await _getAuditLogOrNull();
+      await audit?.record(
+        actor: actor,
+        action: action,
+        target: target,
+        status: status,
+        detail: detail,
+      );
+    } catch (_) {}
+  }
+
+  /// P1: Busca léxica (SQLite FTS5/BM25) nas notas Markdown do cofre Obsidian.
+  Future<List<VaultSearchHit>> searchObsidianVault(
+    String query, {
+    int limit = 5,
+  }) async {
+    final search = await _getVaultSearch();
+    await search.sync();
+    return search.search(query, limit: limit);
+  }
+
+  /// P2: Captura ou seleciona imagem (câmera ou galeria), já redimensionada em JPEG Base64.
+  Future<VisionAttachment?> captureVisionImage({
+    String source = 'camera',
+  }) async {
+    final normalized =
+        source.trim().toLowerCase() == 'gallery' ? 'gallery' : 'camera';
+    final raw = await _channel.invokeMethod<Map<Object?, Object?>>(
+      'captureVisionImage',
+      {'source': normalized},
+    );
+    if (raw == null) return null;
+    final attachment = VisionAttachment.fromMap(raw);
+    return attachment.base64.isEmpty ? null : attachment;
+  }
+
   /// Constrói o System Prompt contextual injetando a memória de longo prazo
-  /// e o perfil do operador salvos no cofre do Obsidian (Segundo Cérebro).
-  Future<String> buildContextualSystemPrompt() async {
+  /// e trechos relevantes do cofre Obsidian (RAG lexical local via FTS5).
+  Future<String> buildContextualSystemPrompt({String? userQuery}) async {
+    final sections = <String>[aiSystemPrompt];
     try {
       final vault = await _getObsidian();
       final memory = await vault.readLongTermMemory();
       if (memory.trim().isNotEmpty) {
-        return '$aiSystemPrompt\n\n'
-            '=== SEGUNDO CÉREBRO — MEMÓRIA ATIVA DO COFRE OBSIDIAN ===\n'
-            'As informações abaixo são notas e memórias reais do operador gravadas no Obsidian:\n'
-            '$memory\n'
-            '=== FIM DA MEMÓRIA DO COFRE ===';
+        sections.add(
+          '=== SEGUNDO CÉREBRO — MEMÓRIA ATIVA DO COFRE OBSIDIAN ===\n'
+          'As informações abaixo são notas e memórias reais do operador gravadas no Obsidian:\n'
+          '$memory\n'
+          '=== FIM DA MEMÓRIA DO COFRE ===',
+        );
       }
     } catch (_) {}
-    return aiSystemPrompt;
+
+    final query = userQuery?.trim() ?? '';
+    if (query.isNotEmpty) {
+      try {
+        final search = await _getVaultSearch();
+        await search.sync();
+        final rag = await search.buildRagContext(
+          query,
+          limit: 3,
+          maxChars: 1400,
+        );
+        if (rag.trim().isNotEmpty) {
+          sections.add(
+            '=== NOTAS RELEVANTES DO COFRE (RAG FTS5) ===\n'
+            '$rag\n'
+            '=== FIM DO CONTEXTO RAG ===',
+          );
+        }
+      } catch (_) {}
+    }
+
+    return sections.join('\n\n');
   }
 
   Future<String> loadPcKillSwitchUrl() async =>
@@ -381,13 +585,36 @@ class DeviceControlService {
   Future<void> savePcKillSwitchUrl(String url) =>
       _storage.write(key: _pcEndpointKey, value: url.trim());
 
+  Future<String> loadPcLanSecret() async =>
+      (await _storage.read(key: _pcSecretKey))?.trim() ?? '';
+
+  Future<void> savePcLanSecret(String secret) =>
+      _storage.write(key: _pcSecretKey, value: secret.trim());
+
+  Future<String> generatePcLanSecret() async {
+    const alphabet =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+    final rng = Random.secure();
+    final secret = List.generate(
+      32,
+      (_) => alphabet[rng.nextInt(alphabet.length)],
+    ).join();
+    await savePcLanSecret(secret);
+    return secret;
+  }
+
   Future<String> triggerPcKillSwitch({
     String? overrideUrl,
+    String? overrideSecret,
     String? reason,
   }) async {
     final target = (overrideUrl ?? await loadPcKillSwitchUrl()).trim();
     if (target.isEmpty) {
       return '⚠️ Kill Switch Local: Endpoint do PC não configurado (sessão mobile bloqueada).';
+    }
+    final secret = (overrideSecret ?? await loadPcLanSecret()).trim();
+    if (secret.isEmpty) {
+      return '🚫 Kill Switch bloqueado: configure a chave secreta HMAC LAN na aba Segurança antes de disparar.';
     }
     final normalized =
         target.startsWith('http://') || target.startsWith('https://')
@@ -401,9 +628,7 @@ class DeviceControlService {
       'reason': reason ?? 'manual',
       'timestamp': timestamp,
     });
-    final signature = Hmac(sha256, utf8.encode('ULTRON_LAN_GUARD'))
-        .convert(utf8.encode(payload))
-        .toString();
+    final signature = ActionGate.signPayload(payload, secret: secret);
 
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
     try {
@@ -414,7 +639,25 @@ class DeviceControlService {
       req.write(payload);
       final resp = await req.close().timeout(const Duration(seconds: 8));
       await resp.drain<void>();
-      return '🚨 Pacote Kill Switch enviado para ${uri.host} (HTTP ${resp.statusCode}).';
+      final summary =
+          '🚨 Pacote Kill Switch enviado para ${uri.host} (HTTP ${resp.statusCode}).';
+      await recordAudit(
+        actor: 'OPERATOR',
+        action: 'KILL_SWITCH',
+        target: uri.host,
+        status: resp.statusCode < 400 ? 'EXECUTED' : 'FAILED',
+        detail: 'HTTP ${resp.statusCode} (${reason ?? 'manual'})',
+      );
+      return summary;
+    } catch (e) {
+      await recordAudit(
+        actor: 'OPERATOR',
+        action: 'KILL_SWITCH',
+        target: uri.host,
+        status: 'FAILED',
+        detail: '$e',
+      );
+      rethrow;
     } finally {
       client.close(force: true);
     }
@@ -439,7 +682,7 @@ class DeviceControlService {
   Map<String, String> preparePcSyncPayload({
     required String command,
     Map<String, dynamic> data = const {},
-    String secret = 'ULTRON_LAN_GUARD',
+    required String secret,
   }) {
     final timestamp = DateTime.now().toUtc().toIso8601String();
     final body = jsonEncode({
@@ -448,8 +691,7 @@ class DeviceControlService {
       'timestamp': timestamp,
       'payload': data,
     });
-    final signature =
-        Hmac(sha256, utf8.encode(secret)).convert(utf8.encode(body)).toString();
+    final signature = ActionGate.signPayload(body, secret: secret);
     return {
       'body': body,
       'signature': 'sha256=$signature',
@@ -484,6 +726,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
 - Vibrar celular: [ACTION:VIBRATE]
 - Discar número: [ACTION:DIAL:11999999999]
 - Pesquisar na web: [ACTION:SEARCH:termo de busca]
+- Ler agenda do celular (dias à frente): [ACTION:READ_CALENDAR:1]
+- Criar evento na agenda (YYYY-MM-DD HH:MM:Título): [ACTION:CREATE_EVENT:2026-11-20 15:00:Reunião Tática]
 ''';
 
   Future<bool> setTorch(bool enabled) async {
@@ -689,6 +933,193 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     return res ?? false;
   }
 
+  /// Lê compromissos da agenda Android (`CalendarContract.Instances`).
+  Future<List<CalendarEvent>> getCalendarEvents({
+    DateTime? from,
+    DateTime? to,
+    int daysAhead = 1,
+    int limit = 20,
+  }) async {
+    final base = from ?? DateTime.now();
+    final start = from ?? DateTime(base.year, base.month, base.day);
+    final safeDays = daysAhead.clamp(1, 30);
+    final end = to ??
+        DateTime(start.year, start.month, start.day)
+            .add(Duration(days: safeDays));
+    final raw = await _channel.invokeListMethod<Object?>(
+      'getCalendarEvents',
+      {
+        'startMs': start.millisecondsSinceEpoch,
+        'endMs': end.millisecondsSinceEpoch,
+        'limit': limit.clamp(1, 50),
+      },
+    );
+    if (raw == null || raw.isEmpty) return const [];
+    return raw
+        .whereType<Map<Object?, Object?>>()
+        .map(CalendarEvent.fromMap)
+        .toList();
+  }
+
+  /// Cria um evento na agenda Android (`CalendarContract.Events`).
+  Future<Map<String, dynamic>> createCalendarEvent({
+    required String title,
+    required DateTime startTime,
+    DateTime? endTime,
+    String description = '',
+    String location = '',
+    bool allDay = false,
+  }) async {
+    final cleanTitle = title.trim();
+    if (cleanTitle.isEmpty) {
+      throw ArgumentError('Título do evento não pode ser vazio.');
+    }
+    final resolvedEnd = endTime != null && endTime.isAfter(startTime)
+        ? endTime
+        : startTime.add(const Duration(hours: 1));
+    final raw = await _channel.invokeMethod<Map<Object?, Object?>>(
+      'createCalendarEvent',
+      {
+        'title': cleanTitle,
+        'startMs': startTime.millisecondsSinceEpoch,
+        'endMs': resolvedEnd.millisecondsSinceEpoch,
+        'description': description.trim(),
+        'location': location.trim(),
+        'allDay': allDay,
+      },
+    );
+    return (raw ?? const {}).map(
+      (k, v) => MapEntry(k.toString(), v),
+    );
+  }
+
+  /// Extrai data, horário e título de instruções naturais como
+  /// `"agendar reunião com Carlos amanhã às 15:30"` ou `"marcar 2026-11-20 09:00 Daily"`.
+  static ParsedCalendarDraft? parseNaturalCalendarEvent(
+    String rawText, {
+    DateTime? now,
+  }) {
+    final ref = now ?? DateTime.now();
+    var body = rawText.trim();
+    body = body
+        .replaceFirst(
+          RegExp(
+            r'^(?:ultron[,\s]+)?(?:agendar|marcar|criar|adicionar)\s+(?:(?:um|uma)\s+)?(?:(?:novo\s+)?evento|compromisso|lembrete\s+na\s+agenda)?\s*:?\s*',
+            caseSensitive: false,
+          ),
+          '',
+        )
+        .trim();
+    if (body.isEmpty) return null;
+
+    var targetDate = DateTime(ref.year, ref.month, ref.day);
+    var dateMatched = false;
+
+    final isoDate = RegExp(r'\b(\d{4})-(\d{1,2})-(\d{1,2})\b').firstMatch(body);
+    if (isoDate != null) {
+      final y = int.parse(isoDate.group(1)!);
+      final m = int.parse(isoDate.group(2)!);
+      final d = int.parse(isoDate.group(3)!);
+      targetDate = DateTime(y, m, d);
+      body = body.replaceRange(isoDate.start, isoDate.end, ' ');
+      dateMatched = true;
+    } else {
+      final brDate =
+          RegExp(r'\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b').firstMatch(body);
+      if (brDate != null) {
+        final d = int.parse(brDate.group(1)!);
+        final m = int.parse(brDate.group(2)!);
+        var y = ref.year;
+        if (brDate.group(3) != null) {
+          final parsedY = int.parse(brDate.group(3)!);
+          y = parsedY < 100 ? 2000 + parsedY : parsedY;
+        }
+        targetDate = DateTime(y, m, d);
+        body = body.replaceRange(brDate.start, brDate.end, ' ');
+        dateMatched = true;
+      } else {
+        final afterTomorrow = RegExp(
+          r'(?:^|\s)(?:para\s+)?depois\s+de\s+amanh[aã](?=\s|$)',
+          caseSensitive: false,
+        );
+        final tomorrow = RegExp(
+          r'(?:^|\s)(?:para\s+)?amanh[aã](?=\s|$)',
+          caseSensitive: false,
+        );
+        final today = RegExp(
+          r'(?:^|\s)(?:para\s+)?hoje(?=\s|$)',
+          caseSensitive: false,
+        );
+        if (afterTomorrow.hasMatch(body)) {
+          targetDate = targetDate.add(const Duration(days: 2));
+          body = body.replaceAll(afterTomorrow, ' ');
+          dateMatched = true;
+        } else if (tomorrow.hasMatch(body)) {
+          targetDate = targetDate.add(const Duration(days: 1));
+          body = body.replaceAll(tomorrow, ' ');
+          dateMatched = true;
+        } else if (today.hasMatch(body)) {
+          body = body.replaceAll(today, ' ');
+          dateMatched = true;
+        }
+      }
+    }
+
+    int? hour;
+    int minute = 0;
+    final timeMatch = RegExp(
+      r'(?:(?:^|\s)(?:para\s+)?(?:[àa]s?|as)\s+|\b)(\d{1,2})(?:[:h](\d{2})|h)(?:\s*h(?:oras?)?)?(?=\s|$)',
+      caseSensitive: false,
+    ).firstMatch(body);
+    if (timeMatch != null) {
+      final h = int.tryParse(timeMatch.group(1)!);
+      final min =
+          timeMatch.group(2) != null ? int.tryParse(timeMatch.group(2)!) : 0;
+      if (h != null &&
+          h >= 0 &&
+          h <= 23 &&
+          min != null &&
+          min >= 0 &&
+          min <= 59) {
+        hour = h;
+        minute = min;
+        body = body.replaceRange(timeMatch.start, timeMatch.end, ' ');
+      }
+    }
+
+    if (hour == null) {
+      final fallbackStart = dateMatched
+          ? DateTime(targetDate.year, targetDate.month, targetDate.day, 9, 0)
+          : ref.add(const Duration(hours: 1));
+      hour = fallbackStart.hour;
+      minute = dateMatched ? 0 : fallbackStart.minute;
+    }
+
+    var start = DateTime(
+      targetDate.year,
+      targetDate.month,
+      targetDate.day,
+      hour,
+      minute,
+    );
+    if (!dateMatched && !start.isAfter(ref)) {
+      start = start.add(const Duration(days: 1));
+    }
+
+    final cleanTitle = body
+        .replaceAll(RegExp(r'\s{2,}'), ' ')
+        .replaceFirst(RegExp(r'^[-:,\s]+'), '')
+        .replaceFirst(RegExp(r'[-:,\s]+$'), '')
+        .trim();
+    if (cleanTitle.isEmpty) return null;
+
+    return ParsedCalendarDraft(
+      title: cleanTitle,
+      startTime: start,
+      endTime: start.add(const Duration(hours: 1)),
+    );
+  }
+
   Future<bool> isAudioSentinelRunning() async {
     final res = await _channel.invokeMethod<bool>('isAudioSentinelRunning');
     return res ?? false;
@@ -857,7 +1288,10 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
 
   /// Parses direct natural-language hardware commands so they execute immediately
   /// with zero latency and even without internet/API keys.
-  Future<DeviceActionResult?> tryExecuteNaturalCommand(String rawInput) async {
+  Future<DeviceActionResult?> tryExecuteNaturalCommand(
+    String rawInput, {
+    ActionGateConfirmCallback? confirmAction,
+  }) async {
     final text = _stripCourtesyPhrasing(rawInput);
     if (text.isEmpty) return null;
     final lower = text.toLowerCase();
@@ -1141,7 +1575,10 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         final vault = await _getObsidian();
         final skill = await vault.findSkill(query);
         if (skill != null) {
-          final exec = await executeAiActions(skill.content);
+          final exec = await executeAiActions(
+            skill.content,
+            confirmAction: confirmAction,
+          );
           return DeviceActionResult(
             handled: true,
             message:
@@ -1152,11 +1589,53 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         }
       }
 
+      // 12b. Lexical Search / RAG in Obsidian Vault ("buscar nas notas: <termo>")
+      final vaultSearchMatch = RegExp(
+        r'^(?:buscar|pesquisar|procurar)\s+(?:n[ao]s?\s+)?(?:notas|cofre|obsidian|mem[oó]rias?)\s*:?\s+(.+)$',
+        caseSensitive: false,
+      ).firstMatch(text);
+      if (vaultSearchMatch != null) {
+        final query = vaultSearchMatch.group(1)?.trim() ?? '';
+        if (query.isNotEmpty) {
+          final hits = await searchObsidianVault(query, limit: 5);
+          if (hits.isEmpty) {
+            return DeviceActionResult(
+              handled: true,
+              message: '🔍 Nenhuma nota encontrada no cofre para "$query".',
+              speakText: 'Não encontrei notas sobre $query no cofre.',
+            );
+          }
+          final summary = hits
+              .map(
+                (h) => '• ${h.title} (${h.path})\n  ${h.snippet}',
+              )
+              .join('\n\n');
+          return DeviceActionResult(
+            handled: true,
+            message:
+                '🔍 ${hits.length} nota(s) encontrada(s) para "$query":\n\n$summary',
+            speakText:
+                'Encontrei ${hits.length} notas sobre $query. A principal é ${hits.first.title}.',
+          );
+        }
+      }
+
       // 13. PC Remote Kill Switch
       if (RegExp(
         r'^(travar\s+pc|bloquear\s+pc|kill\s*switch)$',
         caseSensitive: false,
       ).hasMatch(lower)) {
+        if (confirmAction != null) {
+          final sim = actionGate.simulate('KILL_SWITCH');
+          final allowed = await confirmAction(sim);
+          if (!allowed) {
+            return const DeviceActionResult(
+              handled: true,
+              message: '🚫 Kill Switch cancelado pelo Operador (Action Gate).',
+              speakText: 'Kill switch cancelado.',
+            );
+          }
+        }
         final resultMsg = await triggerPcKillSwitch();
         return DeviceActionResult(
           handled: true,
@@ -1216,6 +1695,19 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       if (replyMatch != null) {
         final target = (replyMatch.group(1) ?? '').trim();
         final replyBody = replyMatch.group(2)!.trim();
+        if (confirmAction != null) {
+          final sim = actionGate.simulate(
+            'REPLY_MESSAGE:${target.isEmpty ? 'ultimo' : target}:$replyBody',
+          );
+          final allowed = await confirmAction(sim);
+          if (!allowed) {
+            return const DeviceActionResult(
+              handled: true,
+              message: '🚫 Envio de resposta cancelado pelo Operador.',
+              speakText: 'Envio cancelado.',
+            );
+          }
+        }
         try {
           final status = await replyNotification(
             target: target,
@@ -1248,6 +1740,17 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       if (waMatch != null) {
         final target = waMatch.group(1)!.trim();
         final body = waMatch.group(2)!.trim();
+        if (confirmAction != null) {
+          final sim = actionGate.simulate('WHATSAPP:$target:$body');
+          final allowed = await confirmAction(sim);
+          if (!allowed) {
+            return const DeviceActionResult(
+              handled: true,
+              message: '🚫 Envio no WhatsApp cancelado pelo Operador.',
+              speakText: 'Envio cancelado.',
+            );
+          }
+        }
         final status = await sendWhatsApp(target: target, text: body);
         return DeviceActionResult(
           handled: true,
@@ -1264,6 +1767,17 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       if (smsMatch != null) {
         final target = smsMatch.group(1)!.trim();
         final body = smsMatch.group(2)!.trim();
+        if (confirmAction != null) {
+          final sim = actionGate.simulate('SMS:$target:$body');
+          final allowed = await confirmAction(sim);
+          if (!allowed) {
+            return const DeviceActionResult(
+              handled: true,
+              message: '🚫 Envio de SMS cancelado pelo Operador.',
+              speakText: 'Envio cancelado.',
+            );
+          }
+        }
         final status = await sendSms(target: target, text: body);
         return DeviceActionResult(
           handled: true,
@@ -1365,6 +1879,14 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         }
       }
 
+      // 22b. Calendar read/write ("minha agenda", "agenda de amanhã", "agendar reunião às 15:00")
+      final calRes = await _tryHandleCalendarNaturalCommand(
+        text,
+        lower,
+        confirmAction: confirmAction,
+      );
+      if (calRes != null) return calRes;
+
       // 23. Open any installed app ("abrir whatsapp", "abra o youtube pra mim", etc.)
       final openMatch = RegExp(
         r'^(?:abrir|iniciar|executar|abre|abra)\s+(?:o\s+|a\s+|app\s+|aplicativo\s+)?(.+)$',
@@ -1407,10 +1929,19 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     return null;
   }
 
-  /// Parses `[ACTION:...]` tags emitted by the AI model, executes them on the
-  /// Android device, and returns the cleaned reply text + execution logs.
-  Future<AiActionExecution> executeAiActions(String rawReply) async {
-    final pattern = RegExp(r'\[ACTION:([^\]]+)\]', caseSensitive: false);
+  /// Parses `[ACTION:...]` tags and `[HTTP:METHOD:URL|JSON]` bridge directives
+  /// emitted by the AI model or `Skills/*.md`, executes them on Android/LAN,
+  /// enforces `ActionGate`, records tamper-evident audit entries, and returns
+  /// cleaned reply text + execution logs.
+  Future<AiActionExecution> executeAiActions(
+    String rawReply, {
+    ActionGateConfirmCallback? confirmAction,
+    String actor = 'AI_TAG',
+  }) async {
+    final pattern = RegExp(
+      r'\[(?:ACTION:([^\]]+)|HTTP:(GET|POST|PUT|PATCH|DELETE):([^\]]+))\]',
+      caseSensitive: false,
+    );
     final matches = pattern.allMatches(rawReply).toList();
     if (matches.isEmpty) {
       return AiActionExecution(
@@ -1419,12 +1950,31 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
 
     final logs = <String>[];
     for (final match in matches) {
-      final content = match.group(1)?.trim() ?? '';
+      final isHttpDirective = match.group(2) != null;
+      final content = isHttpDirective
+          ? 'HTTP_${match.group(2)!.toUpperCase()}:${match.group(3)!.trim()}'
+          : (match.group(1)?.trim() ?? '');
       final parts = content.split(':');
       final cmd = parts.first.toUpperCase();
       final arg1 = parts.length > 1 ? parts[1].trim() : '';
       final arg2 = parts.length > 2 ? parts[2].trim() : '';
       final arg3 = parts.length > 3 ? parts.sublist(3).join(':').trim() : '';
+
+      final sim = actionGate.simulate('[ACTION:$content]');
+      if (sim.requiresConfirmation) {
+        final allowed = confirmAction != null && await confirmAction(sim);
+        if (!allowed) {
+          logs.add('🚫 $cmd bloqueado pelo Action Gate');
+          await recordAudit(
+            actor: actor,
+            action: cmd,
+            target: sim.targetResource,
+            status: 'DENIED',
+            detail: sim.description,
+          );
+          continue;
+        }
+      }
 
       try {
         switch (cmd) {
@@ -1556,8 +2106,19 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
               final vault = await _getObsidian();
               final skill = await vault.findSkill(arg1);
               if (skill != null) {
-                final sub = await executeAiActions(skill.content);
+                final sub = await executeAiActions(
+                  skill.content,
+                  confirmAction: confirmAction,
+                  actor: 'SKILL:${skill.id}',
+                );
                 logs.add('⚡ Skill ${skill.id}: ${sub.executedLogs.join(', ')}');
+                await recordAudit(
+                  actor: actor,
+                  action: 'SKILL',
+                  target: skill.id,
+                  status: 'EXECUTED',
+                  detail: sub.executedLogs.join(' • '),
+                );
               }
             }
             break;
@@ -1602,9 +2163,83 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
               logs.add('📲 $res');
             }
             break;
+          case 'READ_CALENDAR':
+            final days = (int.tryParse(arg1) ?? 1).clamp(1, 30);
+            final events = await getCalendarEvents(daysAhead: days);
+            if (events.isEmpty) {
+              logs.add('📅 Agenda livre');
+            } else {
+              logs.add(
+                '📅 ${events.length} evento(s): ${events.take(3).map((e) => '${e.timeRangeLabel} ${e.title}').join(' | ')}',
+              );
+            }
+            break;
+          case 'CREATE_EVENT':
+          case 'CALENDAR_EVENT':
+            final rawSpec = parts.skip(1).join(':').trim();
+            final draft = parseNaturalCalendarEvent(rawSpec);
+            if (draft != null) {
+              final created = await createCalendarEvent(
+                title: draft.title,
+                startTime: draft.startTime,
+                endTime: draft.endTime,
+              );
+              final mode =
+                  created['mode'] == 'direct' ? 'direto' : 'app Agenda';
+              final detail =
+                  '${draft.title} (${CalendarEvent._two(draft.startTime.day)}/${CalendarEvent._two(draft.startTime.month)} ${CalendarEvent._two(draft.startTime.hour)}:${CalendarEvent._two(draft.startTime.minute)}) [$mode]';
+              logs.add('📅 Evento "$detail"');
+              await recordAudit(
+                actor: actor,
+                action: 'CREATE_EVENT',
+                target: draft.title,
+                status: 'EXECUTED',
+                detail: detail,
+              );
+            }
+            break;
+          case 'HTTP_GET':
+          case 'HTTP_POST':
+          case 'HTTP_PUT':
+          case 'HTTP_PATCH':
+          case 'HTTP_DELETE':
+            final method = cmd.substring('HTTP_'.length);
+            final spec = parts.skip(1).join(':').trim();
+            final httpSummary = await _dispatchHttpBridge(
+              method: method,
+              spec: spec,
+            );
+            logs.add(httpSummary);
+            await recordAudit(
+              actor: actor,
+              action: cmd,
+              target: sim.targetResource,
+              status: 'EXECUTED',
+              detail: httpSummary,
+            );
+            break;
+        }
+        if (cmd == 'WHATSAPP' ||
+            cmd == 'SMS' ||
+            cmd == 'REPLY_MESSAGE' ||
+            cmd == 'DIAL') {
+          await recordAudit(
+            actor: actor,
+            action: cmd,
+            target: sim.targetResource,
+            status: 'EXECUTED',
+            detail: logs.isEmpty ? cmd : logs.last,
+          );
         }
       } catch (e) {
         logs.add('⚠️ Falha em $cmd: $e');
+        await recordAudit(
+          actor: actor,
+          action: cmd,
+          target: sim.targetResource,
+          status: 'FAILED',
+          detail: '$e',
+        );
       }
     }
 
@@ -1613,6 +2248,56 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       cleanText: clean.isEmpty ? 'Comando executado no dispositivo.' : clean,
       executedLogs: logs,
     );
+  }
+
+  /// Dispara requisição HTTP/HTTPS configurada em `Skills/*.md` (`[HTTP:POST:url|json]`)
+  /// para integrações IoT (Home Assistant, ESPHome, Node-RED, webhooks locais).
+  Future<String> _dispatchHttpBridge({
+    required String method,
+    required String spec,
+  }) async {
+    final pipeIdx = spec.indexOf('|');
+    final rawUrl = (pipeIdx >= 0 ? spec.substring(0, pipeIdx) : spec).trim();
+    final body = pipeIdx >= 0 ? spec.substring(pipeIdx + 1).trim() : '';
+
+    final uri = Uri.tryParse(rawUrl);
+    if (uri == null ||
+        !(uri.scheme == 'http' || uri.scheme == 'https') ||
+        uri.host.isEmpty) {
+      throw ArgumentError('URL HTTP/HTTPS inválida no Skill Bridge: "$rawUrl"');
+    }
+
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+    try {
+      final req = await client
+          .openUrl(method.toUpperCase(), uri)
+          .timeout(const Duration(seconds: 6));
+      req.headers.set('User-Agent', 'ULTRON-Mobile/1.4');
+      req.headers.set('Accept', 'application/json, text/plain;q=0.9');
+      if (body.isNotEmpty) {
+        req.headers.contentType = ContentType.json;
+        req.write(body);
+      }
+      final resp = await req.close().timeout(const Duration(seconds: 6));
+      final respText = (await utf8.decoder
+              .bind(resp)
+              .join()
+              .timeout(const Duration(seconds: 4)))
+          .trim();
+      final portPart = uri.hasPort ? ':${uri.port}' : '';
+      if (resp.statusCode >= 400) {
+        throw HttpException(
+          'HTTP ${resp.statusCode} em ${uri.host}$portPart${uri.path}',
+          uri: uri,
+        );
+      }
+      final snippet = respText.isEmpty
+          ? ''
+          : ' • ${respText.length > 80 ? '${respText.substring(0, 80)}…' : respText}';
+      return '🌐 HTTP $method ${uri.host}$portPart${uri.path} (${resp.statusCode})$snippet';
+    } finally {
+      client.close(force: true);
+    }
   }
 
   static const Map<String, _MediaActionSpec> _mediaActionSpecs = {
@@ -1690,6 +2375,89 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       tag: 'MEDIA_STOP',
     ),
   ];
+
+  Future<DeviceActionResult?> _tryHandleCalendarNaturalCommand(
+    String text,
+    String lower, {
+    ActionGateConfirmCallback? confirmAction,
+  }) async {
+    if (RegExp(
+      r'^(?:ver|ler|abrir|mostrar|quais(?:\s+s[aã]o)?(?:\s+os)?)?\s*(?:minha\s+|meus\s+)?(?:agenda|compromissos?|eventos?)(?:\s+de\s+hoje|\s+para\s+hoje|\s+de\s+amanh[aã]|\s+da\s+semana)?$',
+      caseSensitive: false,
+    ).hasMatch(lower)) {
+      final isTomorrow = lower.contains('amanhã') || lower.contains('amanha');
+      final isWeek = lower.contains('semana');
+      final now = DateTime.now();
+      final base = DateTime(now.year, now.month, now.day);
+      final from = isTomorrow ? base.add(const Duration(days: 1)) : base;
+      final daysAhead = isWeek ? 7 : 1;
+      final events = await getCalendarEvents(from: from, daysAhead: daysAhead);
+      if (events.isEmpty) {
+        final period = isWeek
+            ? 'para os próximos 7 dias'
+            : isTomorrow
+                ? 'para amanhã'
+                : 'para hoje';
+        return DeviceActionResult(
+          handled: true,
+          message: '📅 Agenda livre $period — nenhum compromisso encontrado.',
+          speakText: 'Sua agenda está livre $period.',
+        );
+      }
+      final lines =
+          events.map((e) => e.formatLine(includeDate: isWeek)).join('\n');
+      final first = events.first;
+      return DeviceActionResult(
+        handled: true,
+        message: '📅 COMPROMISSOS (${events.length}):\n$lines',
+        speakText:
+            'Você tem ${events.length} compromissos. O primeiro é ${first.title}, às ${first.timeRangeLabel}.',
+      );
+    }
+
+    if (RegExp(
+      r'^(?:agendar|marcar|criar\s+(?:evento|compromisso)|adicionar\s+(?:evento|compromisso))\b',
+      caseSensitive: false,
+    ).hasMatch(lower)) {
+      final draft = parseNaturalCalendarEvent(text);
+      if (draft == null) {
+        return const DeviceActionResult(
+          handled: true,
+          message:
+              '📅 Informe o título e horário. Ex.: "agendar reunião com Carlos amanhã às 15:00".',
+        );
+      }
+      final formattedWhen =
+          '${CalendarEvent._two(draft.startTime.day)}/${CalendarEvent._two(draft.startTime.month)} ${CalendarEvent._two(draft.startTime.hour)}:${CalendarEvent._two(draft.startTime.minute)}';
+      if (confirmAction != null) {
+        final sim = actionGate.simulate(
+          'CREATE_EVENT:${draft.title}:$formattedWhen',
+        );
+        final allowed = await confirmAction(sim);
+        if (!allowed) {
+          return const DeviceActionResult(
+            handled: true,
+            message: '🚫 Criação de evento cancelada pelo Operador.',
+            speakText: 'Agendamento cancelado.',
+          );
+        }
+      }
+      final res = await createCalendarEvent(
+        title: draft.title,
+        startTime: draft.startTime,
+        endTime: draft.endTime,
+      );
+      final calName = (res['calendarName'] as String?) ?? 'Agenda';
+      return DeviceActionResult(
+        handled: true,
+        message:
+            '📅 Evento agendado em $calName:\n• ${draft.title} ($formattedWhen)',
+        speakText: 'Evento ${draft.title} agendado para $formattedWhen.',
+      );
+    }
+
+    return null;
+  }
 
   static _MediaActionSpec? _matchMediaNaturalCommand(String lower) {
     for (final entry in _naturalMediaMatchers) {

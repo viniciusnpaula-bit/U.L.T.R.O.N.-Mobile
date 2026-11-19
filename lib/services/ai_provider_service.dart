@@ -198,8 +198,7 @@ class AiProviderConfig {
   bool get hasUsableCredentials =>
       isKeylessProvider || apiKey.trim().isNotEmpty;
 
-  String get effectiveToken =>
-      apiKey.trim().isEmpty ? 'free' : apiKey.trim();
+  String get effectiveToken => apiKey.trim().isEmpty ? 'free' : apiKey.trim();
 
   AiProviderConfig copyWith({
     String? name,
@@ -317,10 +316,9 @@ class SttConfig {
       };
 
   factory SttConfig.fromJson(Map<String, dynamic> j) => SttConfig(
-        endpointUrl:
-            (j['endpointUrl'] as String?)?.trim().isNotEmpty == true
-                ? (j['endpointUrl'] as String).trim()
-                : defaultEndpointUrl,
+        endpointUrl: (j['endpointUrl'] as String?)?.trim().isNotEmpty == true
+            ? (j['endpointUrl'] as String).trim()
+            : defaultEndpointUrl,
         model: (j['model'] as String?)?.trim().isNotEmpty == true
             ? (j['model'] as String).trim()
             : defaultModel,
@@ -434,6 +432,24 @@ class AiProviderStore {
     return cleanModel.isEmpty ? 'openai/gpt-oss-120b' : cleanModel;
   }
 
+  /// Indica se o identificador de modelo suporta entrada multimodal (imagem).
+  static bool isVisionCapableModel(String model) {
+    final lower = model.trim().toLowerCase();
+    if (lower.isEmpty) return false;
+    return lower == 'openai' ||
+        lower == 'openai-large' ||
+        lower.contains('gemini-2') ||
+        lower.contains('gemini-1.5') ||
+        lower.contains('gpt-4o') ||
+        lower.contains('gpt-4.1') ||
+        lower.contains('vision') ||
+        lower.contains('-vl') ||
+        lower.contains('pixtral') ||
+        lower.contains('scout') ||
+        lower.contains('maverick') ||
+        lower.contains('llava');
+  }
+
   /// Fallback models tried automatically if the primary model on a provider
   /// is unavailable, rate-limited, or decommissioned.
   static List<String> fallbackModelsFor(
@@ -442,21 +458,21 @@ class AiProviderStore {
     bool requiresVision = false,
   }) {
     final lowerUrl = baseUrl.toLowerCase();
-    final candidates = <String>[primaryModel];
+    final candidates = <String>[
+      if (!requiresVision || isVisionCapableModel(primaryModel)) primaryModel,
+    ];
     if (lowerUrl.contains('pollinations.ai')) {
-      for (final m in const [
-        'openai',
-        'mistral',
-        'qwen-coder',
-      ]) {
+      final models = requiresVision
+          ? const ['openai', 'openai-large']
+          : const ['openai', 'mistral', 'qwen-coder'];
+      for (final m in models) {
         if (!candidates.contains(m)) candidates.add(m);
       }
     } else if (lowerUrl.contains('groq.com')) {
       final groqModels = requiresVision
           ? const [
-              'llama-3.2-11b-vision-preview',
-              'llama-3.2-90b-vision-preview',
-              'openai/gpt-oss-120b',
+              'meta-llama/llama-4-scout-17b-16e-instruct',
+              'meta-llama/llama-4-maverick-17b-128e-instruct',
             ]
           : const [
               'openai/gpt-oss-120b',
@@ -483,8 +499,8 @@ class AiProviderStore {
       final openRouterModels = requiresVision
           ? const [
               'google/gemini-2.0-flash-exp:free',
+              'qwen/qwen2.5-vl-72b-instruct:free',
               'meta-llama/llama-3.2-11b-vision-instruct:free',
-              'deepseek/deepseek-r1:free',
             ]
           : const [
               'deepseek/deepseek-r1:free',
@@ -496,17 +512,25 @@ class AiProviderStore {
       for (final m in openRouterModels) {
         if (!candidates.contains(m)) candidates.add(m);
       }
+    } else if (lowerUrl.contains('inference.ai.azure.com') ||
+        lowerUrl.contains('github')) {
+      for (final m in const ['gpt-4o-mini', 'gpt-4o']) {
+        if (!candidates.contains(m)) candidates.add(m);
+      }
     } else if (lowerUrl.contains('cerebras.ai')) {
       for (final m in const ['llama-3.3-70b', 'qwen-3-32b', 'llama3.1-8b']) {
         if (!candidates.contains(m)) candidates.add(m);
       }
     } else if (lowerUrl.contains('mistral.ai')) {
-      for (final m in const [
-        'mistral-small-latest',
-        'open-mistral-nemo',
-      ]) {
+      final mistralModels = requiresVision
+          ? const ['pixtral-12b-2409']
+          : const ['mistral-small-latest', 'open-mistral-nemo'];
+      for (final m in mistralModels) {
         if (!candidates.contains(m)) candidates.add(m);
       }
+    }
+    if (!candidates.contains(primaryModel) && primaryModel.trim().isNotEmpty) {
+      candidates.add(primaryModel);
     }
     return candidates;
   }
@@ -705,8 +729,8 @@ String parseAiReply(String rawBody) {
   if (choices == null || choices.isEmpty) {
     throw const FormatException('Resposta sem choices.');
   }
-  final message =
-      (choices.first as Map<String, Object?>)['message'] as Map<String, Object?>?;
+  final message = (choices.first as Map<String, Object?>)['message']
+      as Map<String, Object?>?;
   final content = message?['content'] as String?;
   if (content == null || content.trim().isEmpty) {
     throw const FormatException('Resposta vazia do provedor.');

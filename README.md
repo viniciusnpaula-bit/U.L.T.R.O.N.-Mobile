@@ -1,6 +1,6 @@
-# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.3.2`)
+# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.4.2`)
 
-Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado para operar com estética tática **AMOLED Carmesim**, segurança **Fail-Closed**, **Action Gate tático**, **Slash Commands determinísticos**, **Visão Multimodal**, controle direto sobre o hardware do celular e integração nativa com múltiplos provedores de IA.
+Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado com **Núcleo Holográfico Shader (`CoreOrb`)**, estética tática **AMOLED Carmesim**, banco local criptografado **SQLCipher**, segurança **Fail-Closed**, **Action Gate tático**, **25 Slash Commands determinísticos**, **RAG Lexical FTS5 (Obsidian)**, **Visão Multimodal (VLM)**, **Agenda Android (`CalendarContract`) + Briefing Matinal Unificado**, **Log Imutável de Auditoria (SHA-256) + Bridge HTTP IoT em `Skills/*.md`**, **Sentinela de Voz não-Google (`AudioRecord` + Eco-VAD + `sherpa-onnx` KWS)** e **Bridge Bidirecional Desktop LAN**.
 
 > **Alvo de Referência**: Dispositivos Android `arm64-v8a` (ex.: Samsung Galaxy A34 5G — Dimensity 1080, Mali-G68, 6–8 GB RAM), sem pesos de LLM locais para preservar bateria, memória e temperatura.
 
@@ -8,101 +8,92 @@ Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projet
 
 ## ⚡ O que o U.L.T.R.O.N. Mobile faz atualmente
 
-### 1. 📱 Controle Nativo do Celular e Hardware Android (`MethodChannel`)
-Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/device`) ou pedindo em linguagem natural para a IA:
+### 1. 📱 Controle Nativo do Celular, Hardware e Mídia (`MethodChannel`)
+Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/device`), pelos **Quick Settings Tiles** ou pedindo em linguagem natural para a IA:
 - **Lanterna / Flash LED**: Liga, desliga ou alterna o flash traseiro (`/lanterna`, `"ligar lanterna"`, `"apagar luz"`).
-- **Volume e Áudio do Sistema**: Ajusta o volume de mídia de `0%` a `100%`, aumenta, diminui ou silencia (`"volume 80"`, `"aumentar volume"`, `"silenciar"`).
-- **Lançador de Aplicativos**: Abre apps conhecidos (WhatsApp, YouTube, Instagram, Chrome, Spotify, Gmail, Maps, Telegram, Calculadora, Galeria, Play Store, Netflix, TikTok) ou **qualquer aplicativo instalado** buscando pelo nome no Android (`"abrir whatsapp"`, `"abrir câmera"`).
-- **Painéis do Sistema Android**: Abre diretamente as configurações nativas de **Wi-Fi**, **Bluetooth**, **Brilho/Tela**, **Som**, **Bateria**, **GPS/Localização**, **Segurança** e **Aplicativos** (`"abrir wifi"`, `"configurar bluetooth"`).
-- **Alarmes e Temporizadores (Timers)**: Cria despertadores e contagens regressivas direto no Relógio do sistema (`"alarme 07:30"`, `"timer 10 minutos"`).
-- **Telemetria Real de Hardware**: Lê em tempo real **nível e temperatura da bateria (`°C`)**, **status de carregamento**, **memória RAM usada/total/livre (`MB`)**, **modelo do aparelho**, **versão do Android** e **status de rede** (`"status da bateria"`, `"memória ram"`).
-- **Discador, Vibração e Web**: Abre o discador com número preenchido (`"ligar para ..."`), aciona o motor háptico (`"vibrar"`) e realiza buscas na web (`"pesquisar ..."`).
+- **Volume, Áudio e Controle Universal de Mídia**: Ajusta volume de mídia de `0%` a `100%` e envia comandos universais de `play`, `pause`, `play_pause`, `next`, `previous` e `stop` via `AudioManager` (`KEYCODE_MEDIA_*`) para Spotify, YouTube Music e outros players.
+- **Lançador Universal de Apps & Painéis Android**: Abre apps conhecidos ou qualquer app instalado buscando no `PackageManager`, além de painéis nativos (**Wi-Fi**, **Bluetooth**, **Tela**, **Som**, **Bateria**, **Localização**, **Segurança**, **Apps**).
+- **Alarmes, Timers, Discador, Vibração e Web**: Cria despertadores e timers no Relógio nativo, abre o discador, aciona motor háptico e abre buscas na web.
+- **Telemetria Real de Hardware**: Lê nível e temperatura da bateria (`°C`), carregamento, RAM usada/total/livre (`MB`), modelo, versão Android e status de rede.
 
 ### 1B. 📨 Sentinela de Mensagens & Comunicação Autônoma (`NotificationListenerService` + `RemoteInput`)
-- **Leitura Real de Mensagens (WhatsApp, Telegram, Instagram, SMS, Gmail, Discord)**:
-  - Captura notificações em tempo real e lê em voz alta (`pt-BR`) com `"ler mensagens"`, `/mensagens` ou pelo botão **🔊 LER EM VOZ ALTA** na aba **CELULAR**.
-- **Resumo Tático por IA**:
-  - Botão **🧠 RESUMO TÁTICO IA** que analisa todas as mensagens recentes, filtra ruído de grupos triviais, destaca o que é urgente e sugere respostas.
-- **Resposta Instantânea em 2º Plano (`RemoteInput` Nativo — Sem Abrir o App)**:
-  - Diga ou digite `"responder: Chego em 10 minutos"`, `"responder para João: Já estou indo"` ou `/responder <texto>` e o U.L.T.R.O.N. injeta a resposta direto na notificação do WhatsApp/Telegram/SMS em segundo plano, sem precisar abrir o aplicativo!
-- **Envio Ativo de WhatsApp e SMS com Busca na Agenda (`ContactsContract`)**:
-  - Diga `"mandar whatsapp para Mãe: Já cheguei"` ou `"enviar sms para Carlos: Reunião às 15h"`. O U.L.T.R.O.N. busca o telefone do contato na agenda do Android e dispara a mensagem (ou usa o painel rápido de envio na aba **CELULAR**).
+- **Captura em Tempo Real (WhatsApp, Telegram, Instagram, SMS, Gmail, Discord)**: Lê em voz alta (`/mensagens`, `"ler mensagens"`) e gera **Resumo Tático por IA** filtrando ruídos.
+- **Resposta Silenciosa em 2º Plano (`RemoteInput`) e Envio Ativo (`ContactsContract`)**: Responde notificações sem abrir o app (`"responder: ..."`, `/reply`) e resolve contatos da agenda para WhatsApp/SMS — **protegidos pelo `ActionGate` Fail-Closed com confirmação explícita antes do disparo**.
 
-### 1C. 🎙️ Motor de Voz Neural Limpo & Reconhecimento Ao Vivo (`v1.0.0`)
-- **Reconhecimento de Voz In-App em Tempo Real (`SpeechRecognizer` + Fallback Automático)**:
-  - Transcrição parcial ao vivo direto na barra de comando do HUD enquanto você fala (`onSpeechPartial`), sem abrir popups brancos bloqueantes do sistema.
-  - Reação visual a 60 FPS do Núcleo Carmesim sincronizada com a amplitude da sua voz (`onSpeechRms`).
-  - Tolerância estendida de pausa (`1.8s`) para não cortar frases no meio e botão **🎤 CONCLUIR FALA** para enviar imediatamente.
-- **Hotword Fonético Tolerante a Ruído (`WakeWord` + `UltronWakeWordRecognizer`)**:
-  - Reconhece `"Ultron"`, `"Ei Ultron"`, `"Oi Ultron"` e variações fonéticas do STT em português (`"Outron"`, `"Uoltron"`, `"Ultrom"`, `"Ultrão"`) com extração direta de comando inline (ex.: `"Ei Ultron ligar lanterna"` executa direto em 1 passo).
-- **Fala Neural Limpa (`SpeechText` + `VoiceService` + Perfis de Timbre)**:
-  - Sanitizador inteligente que remove Markdown (`**`, `` ` ``, `#`), blocos de código, URLs, emojis e tags `[ACTION:...]` antes de falar, além de pronunciar `"Ultron"` naturalmente em vez de soletrar `"U ponto L ponto..."`.
-  - Divisão automática de respostas longas em sentenças naturais (`<= 220` caracteres) com interrupção instantânea (`CALAR VOZ` ou Flip-to-Shush).
-  - **3 Perfis de Timbre (`GRAVE` `0.80`, `NATURAL` `1.00`, `ÁGIL` `0.88`)** e seleção automática da melhor voz neural offline `pt-BR` instalada no Android, com **Bloqueio Anti-Eco Half-Duplex** para que o microfone nunca capte a própria voz do Ultron.
+### 1C. 🎙️ Motor de Voz Neural Não-Google, Wake Word (`sherpa-onnx`), Push-to-Talk e Fish Studio TTS
+- **Captura PCM Nativa (`AudioRecord` + AEC/NS/AGC) & Eco-VAD 24h (`UltronAudioService`)**: Escuta em primeiro plano e serviço de 2º plano com `AudioCaptureSource` (Zero popup do Google), segmentação VAD (`AudioVadBuffer`) e `GroqWhisperSttService` + fallback nativo.
+- **Hotword Offline (`sherpa-onnx` Zipformer KWS + `UltronWakeWordRecognizer`)**: Reconhece `"Ei Ultron"` / `"Ultron"` com suporte a ativação sobre a tela de bloqueio e opt-in de reinício pós-boot (`BootReceiver`).
+- **Push-to-Talk + Barge-in Seletivo + Fish Studio TTS + TTS Nativo**: Segure 🎤 na barra de comandos para Push-to-Talk, escolha entre **3 perfis de timbre (`GRAVE`, `NATURAL`, `ÁGIL`)**, síntese neural **Fish Studio** ou fallback nativo `pt-BR`, e modo sussurro noturno.
+- **Dicionário Fonético & Atalhos (`/memory`)**: Correções PT-BR personalizadas (`VoiceCorrectionsService`) e atalhos de voz com confirmação (`VoiceShortcutsService`).
 
-### 2. 🧠 Central de IA 100% Gratuita (9 Provedores + Zero-Key Sem Cadastro)
-- **IA Grátis Sem Chave (Zero-Key Out-of-the-Box)**:
-  - **Pollinations AI (`openai`, `mistral`, `qwen-coder`, `deepseek-reasoning`)**: Já vem pré-configurado de fábrica para responder **100% de graça sem precisar criar conta nem chave de API**.
-- **Catálogo Visual de 9 Provedores Gratuitos (com botão 1-toque para gerar chave grátis)**:
-  1. **Pollinations AI (Zero-Key / Sem Chave)** — `openai`, `mistral`, `qwen-coder`
-  2. **Groq Cloud (Free Tier Ultra-Rápido)** — `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3-32b`, `moonshotai/kimi-k2-instruct`
-  3. **Google Gemini AI Studio (Free Tier)** — `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash`
-  4. **OpenRouter (Modelos `:free` 100% Gratuitos)** — `deepseek/deepseek-r1:free`, `deepseek/deepseek-chat-v3-0324:free`, `qwen/qwen3-235b-a22b:free`
-  5. **Cerebras Inference (Free Tier 2000+ tok/s)** — `llama-3.3-70b`, `qwen-3-32b`
-  6. **GitHub Models (Grátis com conta GitHub)** — `gpt-4o-mini`, `gpt-4o`, `DeepSeek-R1`
-  7. **Mistral La Plateforme (Experiment Plan Grátis)** — `mistral-small-latest`, `codestral-latest`
-  8. **SambaNova Cloud (Free Tier)** — `Meta-Llama-3.3-70B-Instruct`, `DeepSeek-R1`
-  9. **HuggingFace Inference Router (Free Tier)** — `Qwen/Qwen2.5-72B-Instruct`, `deepseek-ai/DeepSeek-R1`
-- **Auto-Discovery (`/models`) e Failover em Cadeia**: Consulta modelos ativos ao vivo e alterna automaticamente entre provedores/modelos caso um atinja limite.
-- **Tags de Ação (`[ACTION:...]`)**: A IA executa ações físicas no aparelho enquanto conversa com o operador.
+### 2. 🧠 Central de IA 100% Gratuita (9 Provedores) + Visão Multimodal VLM (P2)
+- **Zero-Key Out-of-the-Box + 9 Provedores Gratuitos**: **Pollinations AI** (sem chave), Groq Cloud (`openai/gpt-oss-120b`, `meta-llama/llama-4-scout-17b-16e-instruct`), Google Gemini (`gemini-2.5-flash`), OpenRouter (`:free` + `qwen/qwen2.5-vl-72b-instruct:free`), Cerebras, GitHub Models, Mistral, SambaNova e HuggingFace.
+- **Auto-Discovery (`/models`) e Failover Inteligente (`AiFailover`)**: Prioriza automaticamente modelos multimodais quando uma imagem é anexada (`requiresVision`).
+- **Visão Multimodal Nativa (`P2` — Câmera & Galeria -> VLM)**:
+  - Botão 📷 ao lado da barra de comandos e comando `/visao` (`/visao`, `/visao galeria`, `/ocr`).
+  - Captura via `FileProvider` + `ACTION_IMAGE_CAPTURE` ou galeria (`ACTION_GET_CONTENT`), corrige rotação EXIF, redimensiona para `<= 1024px`, comprime JPEG Base64 em memória e envia direto para o VLM com pré-visualização inline.
 
-### 3. 📓 Obsidian "Quick Captures" e Skills Locais (`.md`)
-- **Quick Captures no Diário (`Diario/AAAA-MM-DD.md`)**:
-  - Registra notas rápidas com timestamp ISO-8601 no cofre local (`ULTRON-Vault/Diario/`).
-  - Comandos: `/note <texto>`, `"Ultron, anote: revisar sensores"` ou pelo campo rápido na aba **CELULAR**.
-- **Skills Procedurais Mobile (`Skills/*.md`)**:
-  - Executa rotinas em Markdown que combinam múltiplos comandos do Android. Inclui 3 skills de fábrica:
-    - `modo_estudo.md`: Silencia mídia e inicia Pomodoro de 25 minutos.
-    - `foco_noturno.md`: Apaga lanterna e reduz volume para 15%.
-    - `alerta_tatico.md`: Aciona lanterna traseira no máximo e dispara vibração de alerta.
-  - Comandos: `/skills`, `/skill modo_estudo`, `"ativar modo estudo"` ou pelos botões rápidos na aba **CELULAR**.
+### 3. 📓 Segundo Cérebro Obsidian, RAG Lexical FTS5 (P1) e Skills Locais (`.md`)
+- **Quick Captures no Diário (`Diario/AAAA-MM-DD.md`), Inbox e Memória (`/note`, `/vault`, `[ACTION:REMEMBER]`)**.
+- **Busca & RAG Lexical Local (`P1` — `VaultSearchService` via SQLite FTS5/FTS4/BM25)**:
+  - Indexa incrementalmente todo o cofre Markdown (`ULTRON-Vault`) em SQLite (< 5 MB de RAM) e injeta trechos relevantes no contexto da IA automaticamente durante a conversa.
+  - Consulta direta com `/buscar <termo>` (`/search`, `/rag`) ou `"buscar nas notas: <termo>"`.
+- **Skills Procedurais Mobile (`Skills/*.md`)**: Rotinas executáveis com `[ACTION:...]` (`modo_estudo.md`, `foco_noturno.md`, `alerta_tatico.md`) via `/skills` e `/skill <nome>`.
 
-### 4. 🧭 Sensores de Contexto e Gestos Físicos
-- **Flip-to-Shush (Virar para Calar)**: Virar o celular com a tela para baixo na mesa interrompe imediatamente a fala do assistente (usa o acelerômetro apenas com a tela ativa, zero drenagem em segundo plano).
-- **Modo Foco Noturno**: Ao carregar entre 22h e 06h (ou pelo botão **NOTURNO**), reduz o brilho do núcleo para `35%` e ativa o **Modo Sussurro** no TTS.
-- **Vigilância de Bateria Crítica (`< 15%`)**: Pausa automaticamente o renderizador orbital de 60 FPS (`CoreStage.hidden`) para economizar GPU quando a bateria entra em nível crítico fora do carregador.
+### 4. 🧭 Sensores de Contexto e Núcleo Holográfico Shader 60 FPS
+- **Núcleo Holográfico GLSL (`shaders/crimson_core.frag` + `CoreOrb`)**: Anéis energéticos reativos à voz (`speechRms`), estados **Centro**, **Palco** e **Tela Cheia** (GPU desligada).
+- **Flip-to-Shush, Modo Foco Noturno (22h–06h) e Vigilância de Bateria (`< 15%`)**.
 
-### 5. 🛡️ Segurança *Fail-Closed*, Modo Coação (*Duress PIN*) e Kill Switch
-- **Biometria Nativa (`local_auth`) + Cofre de PIN (`PBKDF2-HMAC-SHA256`, 120.000 iterações)**:
-  - Armazenado no Android Keystore via `flutter_secure_storage`, com bloqueio exponencial contra força bruta (30s até 15 min após 5 falhas).
-- **PIN de Coação (*Duress PIN* / Modo Camuflado)**:
-  - Configurável em `/security`. Se digitado na tela de desbloqueio sob coação, o app **apaga silenciosamente o histórico de conversas** e abre um aplicativo falso de **"Bloco de Notas Pessoal"** (`AccessLevel.guarded`).
-- **Kill Switch Remoto do PC (LAN / Webhook)**:
-  - Envia um pacote JSON assinado com `HMAC-SHA256` para o endpoint do computador na rede local para travar/suspender a estação de trabalho e bloqueia a sessão mobile (`/killswitch`, `"travar pc"` ou botão de emergência em `/security`).
+### 5. 🛡️ Segurança *Fail-Closed*, SQLCipher, Duress PIN, Action Gate & Bridge Desktop LAN (P3)
+- **Biometria (`local_auth`) + PIN (`PBKDF2-HMAC-SHA256`, 120.000 iterações) + PIN de Coação (*Duress PIN*)**.
+- **Banco Criptografado SQLCipher v2 (`DatabaseKeyVault` + `ConversationHistory`)**: Chave de 256 bits no Keystore e migração automática; `/clear` expurga tanto RAM quanto SQLCipher.
+- **Action Gate Tático**: Classifica ações (`safe`, `sensitive`, `critical`) e exige confirmação explícita do Operador para ações sensíveis (`WHATSAPP`, `SMS`, `REPLY_MESSAGE`, `DIAL`, `PC_OPEN_APP`, `PC_MEDIA`, `PC_CLIPBOARD_*`, `PC_RUN_SKILL`) e críticas (`KILL_SWITCH`, `CLEAR_HISTORY`).
+- **Bridge Bidirecional Desktop LAN & Kill Switch (`P3` — `/desktop`, `/pc`, `/killswitch`)**:
+  - Pareamento LAN assinado com **HMAC-SHA256 + Timestamp + Nonce + verificação de assinatura na resposta (`X-Ultron-Signature`)**.
+  - Kill Switch Fail-Closed que exige chave HMAC explícita configurável em `/security` (**FIXAR IP** / **CHAVE** / **GERAR**).
+  - Subcomandos diretos via `/pc`: `/pc status`, `/pc abrir <app>`, `/pc midia <acao>`, `/pc copiar <texto>`, `/pc colar` e `/pc skill <nome>`.
 
-### 6. 🎛️ Interface Tática, Comando por Voz (STT + TTS) e Atualizador OTA
-- **Escuta por Voz Nativa (`RecognizerIntent` Speech-to-Text `pt-BR`)**: Botão de microfone (`🎤`) na barra `EI, ULTRON ›`, botão rápido `FALAR POR VOZ` abaixo do núcleo e comando `/voz` para falar diretamente com o U.L.T.R.O.N. sem digitar.
-- **Voz Sintetizada Nativa (`flutter_tts`)**: Timbre grave (`pitch: 0.55`) em `pt-BR` + Modo Sussurro noturno.
-- **Núcleo Orbital 60 FPS (`CorePainter`)**: Alterna entre **Modo Centro**, **Modo Palco** (relatórios isolados com núcleo no canto) e **Modo Tela Cheia** (GPU desligada).
-- **Histórico Local em SQLite (`/history`)**: Busca instantânea por mensagens e limpeza rápida, excluído de backups em nuvem (`allowBackup=false`).
-- **Atualizador GitHub OTA**: Verifica novas releases no GitHub, valida a integridade `SHA-256` do APK e dispara a instalação local.
+### 6. 📅 Agenda Android (`CalendarContract`) & Briefing Matinal Unificado (P4)
+- **Leitura e Escrita Nativa de Agenda (`/agenda`, `/calendar`, `"minha agenda"`, `"agendar ..."`)**:
+  - Consulta eventos e recorrências reais no Android via `CalendarContract.Instances` (`/agenda hoje`, `/agenda semana`, `/agenda amanha`).
+  - Agenda compromissos direto no calendário primário (ou fallback `ACTION_INSERT`) via `/agenda criar <detalhes>` ou `[ACTION:CREATE_EVENT:...]`, sempre protegido por confirmação explícita do **Action Gate**.
+- **Briefing Executivo Matinal (`/briefing`, `"bom dia"`, `"briefing matinal"`)**:
+  - `BriefingService` cruza em paralelo **Clima atual (sem chave de API)**, **Compromissos do dia (`CalendarContract`)**, **Mensagens recentes da Sentinela** e **Telemetria do dispositivo**, gerando relatório tático + leitura em voz alta. Permite fixar cidade com `/briefing cidade <nome>`.
+
+### 7. 📜 Log Imutável de Auditoria (SHA-256) & Bridge HTTP em `Skills/*.md` (P5)
+- **Trilha de Auditoria Encadeada por SHA-256 (`AuditLogService` + `/audit`)**:
+  - Registro local *append-only* (`ultron_audit.db`) em que cada entrada inclui o hash da anterior, permitindo detectar qualquer adulteração via `/audit` ou na aba **SEGURANÇA**.
+  - Registra automaticamente Kill Switches, `/pc`, `/clear`, envios de WhatsApp/SMS/Reply, criação de eventos e disparos HTTP.
+- **Bridge HTTP / Webhooks IoT em `Skills/*.md` (`[HTTP:METHOD:URL|JSON]`)**:
+  - Permite acionar *Home Assistant*, *ESPHome*, *Node-RED* e webhooks locais diretamente dentro das skills Markdown (ex.: `[HTTP:POST:http://192.168.1.50:8123/api/webhook/luz|{"estado":"on"}]`), protegidos pelo **Action Gate**.
+
+### 8. 🌐 Atualizador OTA (`SHA-256`) e Histórico Criptografado (`/history`)
+- **Atualizador GitHub OTA**: Verifica releases no GitHub, valida integridade `SHA-256` do APK e inicia instalação local (`REQUEST_INSTALL_PACKAGES`).
 
 ---
 
-## 💬 Comandos Rápidos (Slash Commands & Voz)
+## 💬 Comandos Rápidos (25 Slash Commands & Voz)
 
 | Comando / Voz | Função |
 | :--- | :--- |
-| `/help` | Abre o guia de sintaxe e comandos disponíveis |
-| `/device` ou `/celular` | Abre o painel de controle de hardware, notas e skills |
-| `/lanterna` ou `"ligar lanterna"` | Liga ou desliga o flash LED traseiro |
-| `/note <texto>` ou `"anote: <texto>"` | Salva uma nota rápida em `Diario/AAAA-MM-DD.md` |
-| `/skills` ou `/skill <nome>` | Lista ou executa uma skill local em `Skills/*.md` |
-| `/security` ou `/security lock` | Abre o Painel de Segurança (Duress PIN / Kill Switch) ou trava a sessão |
-| `/killswitch` ou `"travar pc"` | Dispara o pacote de bloqueio remoto para o PC e trava o celular |
-| `/settings` | Configura provedores de IA, chaves de API e modelos ativos |
-| `/history` | Abre o histórico de conversas salvo no SQLite |
-| `"palco"` / `"tela cheia"` | Alterna o estágio visual do núcleo orbital |
+| `/help` | Lista todos os 25 Slash Commands disponíveis |
+| `/audit` ou `/auditoria` | Verifica cadeia SHA-256 do log imutável de auditoria (**P5**) |
+| `/briefing [cidade]` ou `"bom dia"` | Briefing executivo (Agenda + Sentinela + Clima + Telemetria) (**P4**) |
+| `/agenda [hoje\|semana\|criar ...]` | Lê compromissos ou agenda novos eventos via `CalendarContract` (**P4**) |
+| `/device` ou `/celular` | Painel de hardware, sentinela de mensagens e skills |
+| `/buscar <termo>` ou `"buscar nas notas: ..."` | Busca léxica SQLite FTS5/BM25 no cofre Obsidian (**P1**) |
+| `/visao [camera\|galeria] [pergunta]` ou `/ocr` | Anexa foto/print comprimido para análise VLM (**P2**) |
+| `/desktop` | Tela de pareamento LAN e testes HMAC com o PC |
+| `/pc <status\|abrir\|midia\|copiar\|colar\|skill>` | Envia comandos assinados HMAC bidirecionais ao PC (**P3**) |
+| `/memory` ou `/memoria` | Correções fonéticas PT-BR, preferências e atalhos por voz |
+| `/lanterna` ou `"ligar lanterna"` | Liga/desliga o flash LED traseiro |
+| `/note <texto>` / `/vault [ideia]` | Salva nota no Diário ou Inbox do Obsidian |
+| `/skills` ou `/skill <nome>` | Lista ou executa skills Markdown em `Skills/*.md` |
+| `/mensagens` / `/reply <texto>` | Lê mensagens capturadas ou responde em 2º plano |
+| `/models` | Lista modelos ativos ao vivo (Auto-Discovery) |
+| `/security` / `/killswitch` / `/lock` | Segurança, Duress PIN, chave HMAC LAN e Kill Switch |
+| `/settings` / `/history` / `/clear` | Provedores de IA, histórico SQLCipher e expurgo seguro |
+| `/voice` / `/status` | Ativa captura de voz ou exibe telemetria rápida |
 
 ---
 
@@ -111,28 +102,37 @@ Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/de
 ```text
 lib/
 ├── core/security/
+│   ├── action_gate.dart              # Simulação de risco + fail-closed HMAC-SHA256
 │   ├── auth_gate.dart              # Máquina de estados (locked, guarded/duress, session)
-│   └── pin_vault.dart              # Verificador PBKDF2-HMAC-SHA256 (PIN normal + Duress PIN)
+│   ├── database_key_vault.dart       # Chave SQLCipher 256-bit no Keystore
+│   └── pin_vault.dart              # PBKDF2-HMAC-SHA256 (PIN normal + Duress PIN)
 ├── models/
-│   └── chat_message.dart           # Modelo de mensagens persistidas no SQLite
+│   └── chat_message.dart
 ├── services/
-│   ├── ai_provider_service.dart    # Cliente OpenAI-compatible, failover, presets e auto-discovery
-│   ├── app_update_service.dart     # Atualizador OTA via GitHub Releases com validação SHA-256
-│   ├── conversation_history.dart   # Persistência SQLite local
-│   ├── device_control_service.dart # Ponte MethodChannel Android + parser natural + Kill Switch
-│   ├── obsidian_service.dart       # Cofre Markdown local (Diario/ e Skills/*.md)
-│   ├── slash_command_parser.dart   # Parser determinístico de comandos /slash
-│   └── voice_service.dart          # TTS nativo pt-BR + Modo Sussurro
-└── ui/screens/
-    ├── auth_screen.dart            # HUD de desbloqueio biométrico e teclado PIN tático
-    ├── core_screen.dart            # Tela principal, núcleo 60 FPS, painéis e modo camuflado
-    ├── ai_settings_screen.dart     # Gerenciador de provedores, modelos e atualizador
-    ├── conversation_history_screen.dart
-    └── update_screen.dart
+│   ├── ai_provider_service.dart      # 9 provedores, failover inteligente e suporte VLM
+│   ├── android_actions_service.dart  # Ponte de ações protegida pelo AuthGate
+│   ├── app_update_service.dart       # Atualizador OTA GitHub com SHA-256
+│   ├── audio_capture_service.dart    # AudioRecord PCM + VAD (não-Google)
+│   ├── audit_log_service.dart        # Log append-only encadeado com SHA-256 (P5)
+│   ├── briefing_service.dart         # Clima + Agenda + Sentinela + Telemetria (P4)
+│   ├── conversation_history.dart     # Persistência SQLCipher v2 com migração
+│   ├── desktop_pairing_service.dart  # Bridge LAN HMAC-SHA256 bidirecional + nonce
+│   ├── device_control_service.dart   # MethodChannel, Vision, RAG, Agenda, HTTP Bridge e Kill Switch
+│   ├── obsidian_service.dart         # Cofre Markdown (Diario/, Inbox, Skills/*.md)
+│   ├── slash_command_parser.dart     # Parser determinístico de 25 /commands
+│   ├── vault_search_service.dart     # Motor de busca/RAG FTS5/FTS4/BM25 local
+│   ├── voice_pipeline_controller.dart# Pipeline de voz contínua, PTT e barge-in
+│   └── voice_service.dart            # Fish Studio TTS + TTS nativo pt-BR
+└── ui/
+    ├── screens/                      # Auth, Core (CoreOrb shader), DesktopPairing, Memory, AI Settings, History, Update
+    └── widgets/                      # CoreOrb, ActionConfirmationDialog, VoiceSelectorSheet
 android/
 └── app/src/main/
-    ├── kotlin/.../MainActivity.kt  # Ponte nativa Android (CameraManager, AudioManager, SensorManager, Intents)
-    └── res/                        # Adaptive Icon vetorial + ícones U.L.T.R.O.N. em todas as densidades
+    ├── kotlin/.../MainActivity.kt    # Ponte nativa (Hardware, MediaSession, NotificationSentinel, CalendarContract, AudioRecord, FileProvider Vision)
+    ├── res/xml/file_paths.xml        # FileProvider seguro para capturas temporárias de Visão
+    └── assets/                       # Modelo sherpa-onnx Zipformer KWS (offline Wake Word)
+shaders/
+└── crimson_core.frag                 # Fragment shader GLSL do Núcleo Holográfico
 ```
 
 ---

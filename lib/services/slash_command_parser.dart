@@ -18,6 +18,12 @@ enum UltronCommand {
   lock,
   status,
   vault,
+  search,
+  vision,
+  pc,
+  calendar,
+  briefing,
+  audit,
 }
 
 class CommandResult {
@@ -85,6 +91,24 @@ class SlashCommandParser {
     '/obsidian': UltronCommand.vault,
     '/cerebro': UltronCommand.vault,
     '/segundocerebro': UltronCommand.vault,
+    '/search': UltronCommand.search,
+    '/buscar': UltronCommand.search,
+    '/rag': UltronCommand.search,
+    '/visao': UltronCommand.vision,
+    '/vision': UltronCommand.vision,
+    '/camera': UltronCommand.vision,
+    '/ocr': UltronCommand.vision,
+    '/pc': UltronCommand.pc,
+    '/agenda': UltronCommand.calendar,
+    '/calendar': UltronCommand.calendar,
+    '/evento': UltronCommand.calendar,
+    '/eventos': UltronCommand.calendar,
+    '/briefing': UltronCommand.briefing,
+    '/bomdia': UltronCommand.briefing,
+    '/resumodia': UltronCommand.briefing,
+    '/audit': UltronCommand.audit,
+    '/auditoria': UltronCommand.audit,
+    '/logs': UltronCommand.audit,
   };
 
   static CommandResult? parse(String input) {
@@ -100,9 +124,21 @@ class SlashCommandParser {
   /// Retorna lista de sintaxes disponíveis com documentação tática.
   static List<Map<String, String>> commandCatalog() => [
         {
+          'command': '/help',
+          'aliases': '/?, /ajuda',
+          'description': 'Exibe este catálogo de comandos e sintaxes táticas.',
+        },
+        {
           'command': '/device',
           'aliases': '/celular, /telemetria',
-          'description': 'Abre cockpit com telemetria circular (RAM, bateria, °C, sensores).',
+          'description':
+              'Abre cockpit com telemetria circular (RAM, bateria, °C, sensores).',
+        },
+        {
+          'command': '/status',
+          'aliases': '/diag, /saude',
+          'description':
+              'Exibe resumo instantâneo de saúde e telemetria do aparelho.',
         },
         {
           'command': '/lanterna [on|off|toggle]',
@@ -111,8 +147,9 @@ class SlashCommandParser {
         },
         {
           'command': '/note <texto>',
-          'aliases': '/nota, /anote',
-          'description': 'Quick Capture salvo em ULTRON-Vault/Diario/YYYY-MM-DD.md.',
+          'aliases': '/nota, /anote, /anotar',
+          'description':
+              'Quick Capture salvo em ULTRON-Vault/Diario/YYYY-MM-DD.md.',
         },
         {
           'command': '/skills [nome]',
@@ -122,17 +159,19 @@ class SlashCommandParser {
         {
           'command': '/models',
           'aliases': '/modelos',
-          'description': 'Auto-discovery de modelos ativos no provedor de IA conectado.',
+          'description':
+              'Auto-discovery de modelos ativos no provedor de IA conectado.',
         },
         {
           'command': '/mensagens',
-          'aliases': '/notificacoes, /ler',
+          'aliases': '/messages, /notificacoes, /ler',
           'description': 'Sentinela lê notificações recentes em voz alta.',
         },
         {
           'command': '/responder <texto>',
-          'aliases': '/reply',
-          'description': 'Responde notificação em 2º plano via RemoteInput nativo.',
+          'aliases': '/reply, /responda',
+          'description':
+              'Responde notificação em 2º plano via RemoteInput nativo.',
         },
         {
           'command': '/killswitch',
@@ -142,12 +181,37 @@ class SlashCommandParser {
         {
           'command': '/voice',
           'aliases': '/voz, /falar',
-          'description': 'Inicia captura de voz ao vivo com tolerância a ruído.',
+          'description':
+              'Inicia captura de voz ao vivo com tolerância a ruído.',
+        },
+        {
+          'command': '/memory',
+          'aliases': '/memoria',
+          'description':
+              'Gerencia correções fonéticas, atalhos de voz e preferências.',
+        },
+        {
+          'command': '/desktop',
+          'aliases': '/pc',
+          'description':
+              'Pareamento e controle bidirecional Desktop LAN via HMAC-SHA256.',
         },
         {
           'command': '/security',
           'aliases': '/seguranca, /duress',
-          'description': 'Painel de segurança, Duress PIN e bloqueio biométrico.',
+          'description': 'Painel de segurança, Duress PIN e Kill Switch LAN.',
+        },
+        {
+          'command': '/settings',
+          'aliases': '/config, /configuracoes, /ajustes',
+          'description':
+              'Abre a central de provedores de IA, chaves e modelos.',
+        },
+        {
+          'command': '/history',
+          'aliases': '/historico',
+          'description':
+              'Abre o histórico completo de conversas salvo no SQLCipher local.',
         },
         {
           'command': '/lock',
@@ -156,13 +220,51 @@ class SlashCommandParser {
         },
         {
           'command': '/clear',
-          'aliases': '/limpar',
-          'description': 'Expurga histórico da sessão de bate-papo atual.',
+          'aliases': '/limpar, /expurgar',
+          'description':
+              'Expurga permanentemente o histórico local de conversas.',
         },
         {
           'command': '/vault',
-          'aliases': '/obsidian, /cerebro',
-          'description': 'Abre o cofre Obsidian ou gerencia o Segundo Cérebro.',
+          'aliases': '/obsidian, /cerebro, /segundocerebro',
+          'description':
+              'Abre o cofre Obsidian ou salva ideia rápida no Inbox.',
+        },
+        {
+          'command': '/buscar <consulta>',
+          'aliases': '/search, /rag',
+          'description':
+              'Busca léxica local (SQLite FTS5) nas notas do ULTRON-Vault.',
+        },
+        {
+          'command': '/visao [camera|galeria]',
+          'aliases': '/vision, /camera, /ocr',
+          'description':
+              'Captura foto ou seleciona print para análise visual (OCR/QR/VLM).',
+        },
+        {
+          'command': '/pc <status|abrir|midia|clipboard|skill>',
+          'aliases': '/desktop',
+          'description':
+              'Envia comandos remotos autenticados ao PC pareado na LAN.',
+        },
+        {
+          'command': '/agenda [hoje|semana|criar <evento>]',
+          'aliases': '/calendar, /evento, /eventos',
+          'description':
+              'Lê compromissos do Android ou agenda um novo evento (CalendarContract).',
+        },
+        {
+          'command': '/briefing [cidade|cidade <nome>]',
+          'aliases': '/bomdia, /resumodia',
+          'description':
+              'Briefing matinal unificado: Agenda + Sentinela de Mensagens + Clima + Telemetria.',
+        },
+        {
+          'command': '/audit',
+          'aliases': '/auditoria, /logs',
+          'description':
+              'Verifica a cadeia SHA-256 do log imutável de auditoria e exibe ações recentes.',
         },
       ];
 }

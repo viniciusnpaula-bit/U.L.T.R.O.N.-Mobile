@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -14,6 +15,8 @@ import '../../services/android_actions_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/audio_capture_service.dart';
 import '../../services/audio_vad_buffer.dart';
+import '../../services/audit_log_service.dart';
+import '../../services/briefing_service.dart';
 import '../../services/conversation_history.dart';
 import '../../services/desktop_pairing_service.dart';
 import '../../services/device_control_service.dart';
@@ -89,6 +92,7 @@ class _CoreScreenState extends State<CoreScreen>
   final quickNoteController = TextEditingController();
   final duressPinController = TextEditingController();
   final pcKillSwitchUrlController = TextEditingController();
+  final pcLanSecretController = TextEditingController();
   final messageTargetController = TextEditingController();
   final messageBodyController = TextEditingController();
   final scrollController = ScrollController();
@@ -97,6 +101,7 @@ class _CoreScreenState extends State<CoreScreen>
   final updateService = AppUpdateService();
   final providerStore = AiProviderStore();
   final deviceService = DeviceControlService();
+  late final briefingService = BriefingService(deviceService: deviceService);
   final actionGate = const ActionGate();
   late final VoicePipelineController voicePipeline;
   late final AndroidActionsService androidActions;
@@ -131,6 +136,7 @@ class _CoreScreenState extends State<CoreScreen>
   Future<void>? _pendingBgSync;
   List<MobileSkill> mobileSkills = const [];
   List<CapturedNotification> recentMessages = const [];
+  VisionAttachment? pendingVisionImage;
 
   static const _defaultFeed = <_FeedEntry>[
     _FeedEntry(
@@ -469,6 +475,7 @@ class _CoreScreenState extends State<CoreScreen>
       final pinSet = await widget.vault.hasPin;
       final duressSet = await widget.vault.hasDuressPin;
       final killUrl = await deviceService.loadPcKillSwitchUrl();
+      final lanSecret = await deviceService.loadPcLanSecret();
       List<MobileSkill> loadedSkills = const [];
       try {
         final obsidian = await ObsidianService.openDefaultVault();
@@ -494,6 +501,9 @@ class _CoreScreenState extends State<CoreScreen>
         recentMessages = loadedMsgs;
         if (killUrl.isNotEmpty && pcKillSwitchUrlController.text.isEmpty) {
           pcKillSwitchUrlController.text = killUrl;
+        }
+        if (lanSecret.isNotEmpty && pcLanSecretController.text.isEmpty) {
+          pcLanSecretController.text = lanSecret;
         }
         mobileSkills = loadedSkills;
         if (hwStatus != null) {
@@ -881,6 +891,7 @@ class _CoreScreenState extends State<CoreScreen>
     quickNoteController.dispose();
     duressPinController.dispose();
     pcKillSwitchUrlController.dispose();
+    pcLanSecretController.dispose();
     messageTargetController.dispose();
     messageBodyController.dispose();
     scrollController.dispose();
@@ -1105,17 +1116,26 @@ class _CoreScreenState extends State<CoreScreen>
 
   Future<void> saveCommand() async {
     if (sending) return;
-    final text = commandController.text.trim();
-    if (text.isEmpty) return;
+    final attachedVision = pendingVisionImage;
+    var text = commandController.text.trim();
+    if (text.isEmpty && attachedVision == null) return;
+    if (text.isEmpty && attachedVision != null) {
+      text =
+          'Analise esta imagem em detalhes (texto/OCR, objetos, códigos QR e contexto tático).';
+    }
 
     SystemSound.play(SystemSoundType.click);
     HapticFeedback.lightImpact();
     commandController.clear();
+    if (attachedVision != null && mounted) {
+      setState(() => pendingVisionImage = null);
+    }
     final now = DateTime.now();
     final timeStr = _formatTime(now);
 
     // 1. Slash commands
-    final command = SlashCommandParser.parse(text);
+    final command =
+        attachedVision == null ? SlashCommandParser.parse(text) : null;
     if (command != null) {
       _appendFeed(
         _FeedEntry(
@@ -1128,7 +1148,7 @@ class _CoreScreenState extends State<CoreScreen>
       await _runCommand(command.command, command.argument);
       return;
     }
-    if (text.startsWith('/')) {
+    if (attachedVision == null && text.startsWith('/')) {
       _appendFeed(
         _FeedEntry(
           isUser: true,
@@ -1198,8 +1218,31 @@ class _CoreScreenState extends State<CoreScreen>
       return;
     }
 
+    // 2b. Unified Morning Briefing natural trigger ("bom dia", "briefing matinal", "resumo do dia")
+    if (attachedVision == null &&
+        RegExp(
+          r'^(?:(?:ei|oi|ol[aá]|ok)\s+ultron[,\s]+)?(?:bom\s+dia(?:\s+ultron)?|briefing(?:\s+matinal|\s+do\s+dia)?|resumo\s+(?:matinal|do\s+dia)|meu\s+briefing)[!?.]*$',
+          caseSensitive: false,
+        ).hasMatch(text.trim())) {
+      _appendFeed(
+        _FeedEntry(
+          isUser: true,
+          senderLabel: 'OPERADOR',
+          text: text,
+          timestamp: timeStr,
+        ),
+      );
+      await _runMorningBriefing();
+      return;
+    }
+
     // 3. Direct Android Hardware & OS Commands (instant, works offline)
-    final deviceAction = await deviceService.tryExecuteNaturalCommand(text);
+    final deviceAction = attachedVision == null
+        ? await deviceService.tryExecuteNaturalCommand(
+            text,
+            confirmAction: _confirmActionSimulation,
+          )
+        : null;
     if (deviceAction != null && deviceAction.handled) {
       _appendFeed(
         _FeedEntry(
@@ -1225,11 +1268,14 @@ class _CoreScreenState extends State<CoreScreen>
     }
 
     // 4. AI Conversation + Failover + AI Hardware Actions
+    final userFeedText = attachedVision == null
+        ? text
+        : '📷 [Imagem ${attachedVision.width}x${attachedVision.height} · ${attachedVision.sizeKbLabel}]\n$text';
     _appendFeed(
       _FeedEntry(
         isUser: true,
         senderLabel: 'OPERADOR',
-        text: text,
+        text: userFeedText,
         timestamp: timeStr,
       ),
     );
@@ -1266,13 +1312,17 @@ class _CoreScreenState extends State<CoreScreen>
 
     try {
       final contextualSystemPrompt =
-          await deviceService.buildContextualSystemPrompt();
+          await deviceService.buildContextualSystemPrompt(userQuery: text);
       final reply = await AiFailover(store: providerStore).ask(
         text,
         history: aiHistory,
         systemPrompt: contextualSystemPrompt,
+        imageBase64: attachedVision?.base64,
       );
-      final actionExec = await deviceService.executeAiActions(reply.text);
+      final actionExec = await deviceService.executeAiActions(
+        reply.text,
+        confirmAction: _confirmActionSimulation,
+      );
       await _refreshDeviceStatus();
       final displayReply = actionExec.executedLogs.isEmpty
           ? actionExec.cleanText
@@ -1314,6 +1364,146 @@ class _CoreScreenState extends State<CoreScreen>
     } finally {
       if (mounted) setState(() => sending = false);
     }
+  }
+
+  Future<void> _runMorningBriefing({String? cityOverride}) async {
+    if (!mounted) return;
+    setState(() => sending = true);
+    try {
+      final briefing = await briefingService.generateBriefing(
+        cityOverride: cityOverride,
+      );
+      if (!mounted) return;
+      _appendFeed(
+        _FeedEntry(
+          isUser: false,
+          senderLabel: 'Briefing Executivo (P4)',
+          text: briefing.formattedReport,
+          timestamp: _formatTime(DateTime.now()),
+        ),
+      );
+      if (_isForegroundActive) {
+        await voiceService.speak(briefing.speakText);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _appendFeed(
+        _FeedEntry(
+          isUser: false,
+          senderLabel: 'Briefing Executivo (P4)',
+          text: '⚠️ Falha ao consolidar briefing: $e',
+          timestamp: _formatTime(DateTime.now()),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => sending = false);
+    }
+  }
+
+  Future<bool> _confirmActionSimulation(ActionSimulation sim) async {
+    if (!mounted) return false;
+    return _confirmActionGate(
+      title: '⚠️ ACTION GATE — ${sim.actionCode}',
+      message:
+          '${sim.description}\n\nImpacto: ${sim.estimatedImpact}\nAlvo: ${sim.targetResource}',
+      confirmText: 'APROVAR',
+    );
+  }
+
+  Future<void> _captureVisionImage(String source) async {
+    try {
+      final attachment = await deviceService.captureVisionImage(source: source);
+      if (!mounted) return;
+      if (attachment == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Captura de imagem cancelada.',
+              style: TextStyle(fontSize: 11),
+            ),
+          ),
+        );
+        return;
+      }
+      setState(() => pendingVisionImage = attachment);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '📷 Imagem anexada (${attachment.width}x${attachment.height} · ${attachment.sizeKbLabel}). Digite sua pergunta ou toque em enviar.',
+            style: const TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _appendFeed(_FeedEntry(
+        isUser: false,
+        senderLabel: 'Visão Multimodal',
+        text: '⚠️ Falha ao capturar imagem: $e',
+        timestamp: _formatTime(DateTime.now()),
+      ));
+    }
+  }
+
+  Future<void> _openVisionPicker() async {
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1A0204),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'VISÃO MULTIMODAL (CÂMERA / GALERIA)',
+                style: TextStyle(
+                  color: _crimson,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.photo_camera, color: _rose),
+                title: const Text(
+                  'Capturar com a Câmera',
+                  style: TextStyle(color: Colors.white, fontSize: 13),
+                ),
+                subtitle: const Text(
+                  'OCR, QR Code, placas ou diagnóstico visual',
+                  style: TextStyle(color: Color(0xFFA89698), fontSize: 11),
+                ),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  unawaited(_captureVisionImage('camera'));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: _rose),
+                title: const Text(
+                  'Escolher da Galeria',
+                  style: TextStyle(color: Colors.white, fontSize: 13),
+                ),
+                subtitle: const Text(
+                  'Prints de tela ou fotos salvas',
+                  style: TextStyle(color: Color(0xFFA89698), fontSize: 11),
+                ),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  unawaited(_captureVisionImage('gallery'));
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<bool> _confirmActionGate({
@@ -1695,11 +1885,221 @@ class _CoreScreenState extends State<CoreScreen>
           confirmText: 'EXPURGAR',
         );
         if (confirmed) {
+          await ConversationHistory.instance.clear();
+          await deviceService.recordAudit(
+            actor: 'OPERATOR',
+            action: 'CLEAR_HISTORY',
+            target: 'SQLCipher',
+            status: 'EXECUTED',
+            detail: 'Histórico local expurgado via /clear',
+          );
+          if (!mounted) return;
           setState(() => feed = _defaultFeed);
           _appendFeed(_FeedEntry(
             isUser: false,
             senderLabel: 'Memória Local',
-            text: 'Histórico da sessão purgado da memória RAM.',
+            text:
+                'Histórico da sessão expurgado (RAM + Banco Criptografado SQLCipher).',
+            timestamp: timeStr,
+          ));
+        } else {
+          await deviceService.recordAudit(
+            actor: 'OPERATOR',
+            action: 'CLEAR_HISTORY',
+            target: 'SQLCipher',
+            status: 'DENIED',
+            detail: 'Operador cancelou /clear no Action Gate',
+          );
+        }
+        break;
+      case UltronCommand.search:
+        if (argument.isEmpty) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'RAG Obsidian (FTS5)',
+            text: 'Uso: /buscar <termo ou tópico> (ex.: /buscar sensores)',
+            timestamp: timeStr,
+          ));
+        } else {
+          final hits = await deviceService.searchObsidianVault(
+            argument,
+            limit: 5,
+          );
+          if (hits.isEmpty) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'RAG Obsidian (FTS5)',
+              text: '🔍 Nenhuma nota encontrada para "$argument".',
+              timestamp: timeStr,
+            ));
+          } else {
+            final summary = hits
+                .map((h) => '• ${h.title} (${h.path})\n  ${h.snippet}')
+                .join('\n\n');
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'RAG Obsidian (FTS5)',
+              text:
+                  '🔍 ${hits.length} resultado(s) para "$argument":\n\n$summary',
+              timestamp: timeStr,
+            ));
+          }
+        }
+        break;
+      case UltronCommand.vision:
+        final argLower = argument.trim().toLowerCase();
+        final source = argLower == 'galeria' ||
+                argLower == 'gallery' ||
+                argLower.startsWith('galeria ') ||
+                argLower.startsWith('gallery ')
+            ? 'gallery'
+            : 'camera';
+        if (argument.isEmpty ||
+            argLower == 'camera' ||
+            argLower == 'galeria' ||
+            argLower == 'gallery') {
+          await _captureVisionImage(source);
+        } else {
+          final prompt = source == 'gallery'
+              ? argument.trim().replaceFirst(
+                    RegExp(r'^(?:galeria|gallery)\s*', caseSensitive: false),
+                    '',
+                  )
+              : argument.trim();
+          await _captureVisionImage(source);
+          if (pendingVisionImage != null && prompt.isNotEmpty) {
+            commandController.text = prompt;
+            await saveCommand();
+          }
+        }
+        break;
+      case UltronCommand.pc:
+        final parts = argument.trim().split(RegExp(r'\s+'));
+        final sub = parts.isNotEmpty ? parts.first.toLowerCase() : '';
+        final rest = parts.length > 1 ? parts.sublist(1).join(' ').trim() : '';
+        if (sub.isEmpty) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Bridge Desktop LAN',
+            text: 'Uso de /pc:\n'
+                '• /pc status — ping HMAC assinado no Desktop\n'
+                '• /pc abrir <app> — solicita abertura de app no PC\n'
+                '• /pc midia <play_pause|next|previous|mute> — controle de mídia\n'
+                '• /pc copiar <texto> — envia texto para clipboard do PC\n'
+                '• /pc colar — lê clipboard do PC\n'
+                '• /pc skill <nome> — executa skill no Desktop\n'
+                '• Use /desktop para parear ou testar o endpoint LAN.',
+            timestamp: timeStr,
+          ));
+          break;
+        }
+        String pcCmd;
+        Map<String, dynamic> pcArgs = const {};
+        switch (sub) {
+          case 'status':
+          case 'ping':
+            pcCmd = 'ping';
+            break;
+          case 'abrir':
+          case 'open':
+            if (rest.isEmpty) {
+              _appendFeed(_FeedEntry(
+                isUser: false,
+                senderLabel: 'Bridge Desktop LAN',
+                text: 'Uso: /pc abrir <nome_do_app>',
+                timestamp: timeStr,
+              ));
+              return;
+            }
+            pcCmd = 'PC_OPEN_APP';
+            pcArgs = {'app': rest};
+            break;
+          case 'midia':
+          case 'media':
+            pcCmd = 'PC_MEDIA';
+            pcArgs = {'action': rest.isEmpty ? 'play_pause' : rest};
+            break;
+          case 'copiar':
+          case 'clipboard':
+          case 'push':
+            if (rest.isEmpty) {
+              _appendFeed(_FeedEntry(
+                isUser: false,
+                senderLabel: 'Bridge Desktop LAN',
+                text: 'Uso: /pc copiar <texto>',
+                timestamp: timeStr,
+              ));
+              return;
+            }
+            pcCmd = 'PC_CLIPBOARD_PUSH';
+            pcArgs = {'text': rest};
+            break;
+          case 'colar':
+          case 'pull':
+            pcCmd = 'PC_CLIPBOARD_PULL';
+            break;
+          case 'skill':
+            if (rest.isEmpty) {
+              _appendFeed(_FeedEntry(
+                isUser: false,
+                senderLabel: 'Bridge Desktop LAN',
+                text: 'Uso: /pc skill <nome>',
+                timestamp: timeStr,
+              ));
+              return;
+            }
+            pcCmd = 'PC_RUN_SKILL';
+            pcArgs = {'skill': rest};
+            break;
+          default:
+            pcCmd = sub.toUpperCase();
+            if (rest.isNotEmpty) {
+              pcArgs = {'arg': rest};
+            }
+        }
+        try {
+          final res = await desktopPairing.sendCommand(
+            command: pcCmd,
+            args: pcArgs,
+            confirm: (req) => showActionConfirmationDialog(context, req),
+          );
+          final statusMsg = res.deniedByUser
+              ? '🚫 Comando /pc ($pcCmd) cancelado pelo Operador.'
+              : res.sent
+                  ? '✅ PC ($pcCmd) -> HTTP ${res.statusCode ?? 200}'
+                      '${res.verifiedSignature ? ' [HMAC resposta verificado]' : ''}'
+                      '${(res.responseBody ?? '').trim().isNotEmpty ? '\n${res.responseBody}' : ''}'
+                  : '⚠️ Falha no /pc ($pcCmd): ${res.error ?? 'HTTP ${res.statusCode}'}';
+          await deviceService.recordAudit(
+            actor: 'OPERATOR',
+            action: pcCmd,
+            target: 'Desktop LAN',
+            status: res.deniedByUser
+                ? 'DENIED'
+                : res.sent
+                    ? 'EXECUTED'
+                    : 'FAILED',
+            detail:
+                'HTTP ${res.statusCode ?? '-'}${res.error == null ? '' : ' • ${res.error}'}',
+          );
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Bridge Desktop LAN',
+            text: statusMsg,
+            timestamp: timeStr,
+          ));
+        } catch (e) {
+          await deviceService.recordAudit(
+            actor: 'OPERATOR',
+            action: pcCmd,
+            target: 'Desktop LAN',
+            status: 'FAILED',
+            detail: '$e',
+          );
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Bridge Desktop LAN',
+            text: '⚠️ Falha no comando /pc ($pcCmd): $e',
             timestamp: timeStr,
           ));
         }
@@ -1715,6 +2115,95 @@ class _CoreScreenState extends State<CoreScreen>
             isUser: false,
             senderLabel: 'Telemetria do Dispositivo',
             text: stat.formatSummary(),
+            timestamp: timeStr,
+          ));
+        }
+        break;
+      case UltronCommand.calendar:
+        final argLower = argument.trim().toLowerCase();
+        if (argLower.isEmpty ||
+            argLower == 'hoje' ||
+            argLower == 'amanha' ||
+            argLower == 'amanhã' ||
+            argLower == 'semana') {
+          final queryPhrase = argLower.isEmpty
+              ? 'agenda de hoje'
+              : argLower == 'semana'
+                  ? 'agenda da semana'
+                  : 'agenda de $argLower';
+          final res = await deviceService.tryExecuteNaturalCommand(
+            queryPhrase,
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Agenda Android (CalendarContract)',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+            if (res.speakText != null && _isForegroundActive) {
+              await voiceService.speak(res.speakText!);
+            }
+          }
+        } else {
+          final createSpec = argument.trim().replaceFirst(
+                RegExp(r'^criar\s+', caseSensitive: false),
+                '',
+              );
+          final res = await deviceService.tryExecuteNaturalCommand(
+            'agendar $createSpec',
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Agenda Android (CalendarContract)',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+            if (res.speakText != null && _isForegroundActive) {
+              await voiceService.speak(res.speakText!);
+            }
+          }
+        }
+        break;
+      case UltronCommand.briefing:
+        final argTrim = argument.trim();
+        final cityMatch = RegExp(
+          r'^(?:cidade|local|city)\s+(.+)$',
+          caseSensitive: false,
+        ).firstMatch(argTrim);
+        if (cityMatch != null) {
+          final city = cityMatch.group(1)!.trim();
+          await briefingService.savePreferredCity(city);
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Briefing Executivo (P4)',
+            text: '🌤️ Cidade padrão do Briefing salva: $city.',
+            timestamp: timeStr,
+          ));
+        } else {
+          await _runMorningBriefing(
+            cityOverride: argTrim.isEmpty ? null : argTrim,
+          );
+        }
+        break;
+      case UltronCommand.audit:
+        try {
+          final audit = await AuditLogService.instance();
+          final report = await audit.formatReport(limit: 18);
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Auditoria SHA-256 (P5)',
+            text: report,
+            timestamp: timeStr,
+          ));
+        } catch (e) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Auditoria SHA-256 (P5)',
+            text: '⚠️ Falha ao carregar trilha de auditoria: $e',
             timestamp: timeStr,
           ));
         }
@@ -2109,151 +2598,253 @@ class _CoreScreenState extends State<CoreScreen>
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: _border),
             ),
-            child: Row(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  '›',
-                  style: TextStyle(
-                    color: _crimson,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: TextField(
-                    controller: commandController,
-                    enabled: !sending,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => saveCommand(),
-                    style: const TextStyle(
-                      color: Color(0xFFF0E6E7),
-                      fontSize: 12,
+                if (pendingVisionImage != null)
+                  Container(
+                    margin: const EdgeInsets.only(top: 4, bottom: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 5,
                     ),
-                    decoration: InputDecoration(
-                      isDense: true,
-                      border: InputBorder.none,
-                      hintText: voicePipeline.isPushToTalkActive
-                          ? '🎤 Gravando Push-to-Talk…'
-                          : listeningVoice
-                              ? '🎤 Ouvindo ao vivo (toque no 🎤 para concluir)…'
-                              : sending
-                                  ? 'Consultando provedor ativo…'
-                                  : 'Comando ou toque/segure 🎤...',
-                      hintStyle: TextStyle(
-                        color:
-                            (listeningVoice || voicePipeline.isPushToTalkActive)
-                                ? _crimson
-                                : const Color(0xFF635355),
-                        fontSize: 11,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A0204),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _crimson.withValues(alpha: 0.45),
                       ),
                     ),
+                    child: Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Image.memory(
+                            base64Decode(pendingVisionImage!.base64),
+                            width: 40,
+                            height: 40,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'VISÃO MULTIMODAL ANEXADA',
+                                style: TextStyle(
+                                  color: _rose,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                '${pendingVisionImage!.width}x${pendingVisionImage!.height} · ${pendingVisionImage!.sizeKbLabel} · JPEG VLM',
+                                style: const TextStyle(
+                                  color: Color(0xFFA89698),
+                                  fontSize: 9,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Remover imagem anexada',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
+                          onPressed: () =>
+                              setState(() => pendingVisionImage = null),
+                          icon: const Icon(
+                            Icons.close,
+                            size: 16,
+                            color: _rose,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                Builder(
-                  builder: (context) {
-                    final continuousActive =
-                        voicePipeline.isContinuousEnabled ||
-                            ecoVadSentinelRunning;
-                    return Tooltip(
-                      message: continuousActive
-                          ? 'Desativar escuta contínua ("Ultron")'
-                          : 'Ativar escuta contínua ("Ultron")',
+                Row(
+                  children: [
+                    const Text(
+                      '›',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: TextField(
+                        controller: commandController,
+                        enabled: !sending,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => saveCommand(),
+                        style: const TextStyle(
+                          color: Color(0xFFF0E6E7),
+                          fontSize: 12,
+                        ),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          border: InputBorder.none,
+                          hintText: voicePipeline.isPushToTalkActive
+                              ? '🎤 Gravando Push-to-Talk…'
+                              : listeningVoice
+                                  ? '🎤 Ouvindo ao vivo (toque no 🎤 para concluir)…'
+                                  : sending
+                                      ? 'Consultando provedor ativo…'
+                                      : pendingVisionImage != null
+                                          ? 'Pergunte sobre a imagem anexada…'
+                                          : 'Comando ou toque/segure 🎤...',
+                          hintStyle: TextStyle(
+                            color: (listeningVoice ||
+                                    voicePipeline.isPushToTalkActive)
+                                ? _crimson
+                                : const Color(0xFF635355),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Tooltip(
+                      message: 'Visão Multimodal (Câmera / Galeria)',
                       child: InkWell(
-                        onTap: sending ? null : _toggleContinuousListening,
+                        onTap: sending ? null : _openVisionPicker,
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
                           padding: const EdgeInsets.all(6),
                           margin: const EdgeInsets.only(right: 5),
                           decoration: BoxDecoration(
-                            color: continuousActive
+                            color: pendingVisionImage != null
                                 ? _crimson.withValues(alpha: 0.25)
                                 : const Color(0xFF2E0305),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                              color: continuousActive
+                              color: pendingVisionImage != null
                                   ? _crimson
                                   : _crimson.withValues(alpha: 0.25),
                             ),
                           ),
                           child: Icon(
-                            continuousActive
-                                ? Icons.hearing
-                                : Icons.hearing_disabled,
+                            Icons.photo_camera_outlined,
                             size: 14,
-                            color: continuousActive
+                            color: pendingVisionImage != null
                                 ? _rose
                                 : const Color(0xFF993036),
                           ),
                         ),
                       ),
-                    );
-                  },
-                ),
-                GestureDetector(
-                  onLongPressStart: sending
-                      ? null
-                      : (_) async {
-                          HapticFeedback.mediumImpact();
-                          await voicePipeline.startPushToTalk();
-                        },
-                  onLongPressEnd: (_) async {
-                    await voicePipeline.stopPushToTalk();
-                  },
-                  onLongPressCancel: () async {
-                    await voicePipeline.stopPushToTalk();
-                  },
-                  child: InkWell(
-                    onTap: sending
-                        ? null
-                        : () => voicePipeline.isPushToTalkActive
-                            ? _togglePushToTalk()
-                            : _startVoiceInput(),
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      margin: const EdgeInsets.only(right: 5),
-                      decoration: BoxDecoration(
-                        color:
-                            (listeningVoice || voicePipeline.isPushToTalkActive)
+                    ),
+                    Builder(
+                      builder: (context) {
+                        final continuousActive =
+                            voicePipeline.isContinuousEnabled ||
+                                ecoVadSentinelRunning;
+                        return Tooltip(
+                          message: continuousActive
+                              ? 'Desativar escuta contínua ("Ultron")'
+                              : 'Ativar escuta contínua ("Ultron")',
+                          child: InkWell(
+                            onTap: sending ? null : _toggleContinuousListening,
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              margin: const EdgeInsets.only(right: 5),
+                              decoration: BoxDecoration(
+                                color: continuousActive
+                                    ? _crimson.withValues(alpha: 0.25)
+                                    : const Color(0xFF2E0305),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: continuousActive
+                                      ? _crimson
+                                      : _crimson.withValues(alpha: 0.25),
+                                ),
+                              ),
+                              child: Icon(
+                                continuousActive
+                                    ? Icons.hearing
+                                    : Icons.hearing_disabled,
+                                size: 14,
+                                color: continuousActive
+                                    ? _rose
+                                    : const Color(0xFF993036),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    GestureDetector(
+                      onLongPressStart: sending
+                          ? null
+                          : (_) async {
+                              HapticFeedback.mediumImpact();
+                              await voicePipeline.startPushToTalk();
+                            },
+                      onLongPressEnd: (_) async {
+                        await voicePipeline.stopPushToTalk();
+                      },
+                      onLongPressCancel: () async {
+                        await voicePipeline.stopPushToTalk();
+                      },
+                      child: InkWell(
+                        onTap: sending
+                            ? null
+                            : () => voicePipeline.isPushToTalkActive
+                                ? _togglePushToTalk()
+                                : _startVoiceInput(),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          margin: const EdgeInsets.only(right: 5),
+                          decoration: BoxDecoration(
+                            color: (listeningVoice ||
+                                    voicePipeline.isPushToTalkActive)
                                 ? _crimson.withValues(alpha: 0.25)
                                 : const Color(0xFF2E0305),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: (listeningVoice ||
-                                  voicePipeline.isPushToTalkActive)
-                              ? _crimson
-                              : _crimson.withValues(alpha: 0.35),
-                        ),
-                      ),
-                      child: Icon(
-                        (listeningVoice || voicePipeline.isPushToTalkActive)
-                            ? Icons.graphic_eq
-                            : Icons.mic,
-                        size: 14,
-                        color:
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: (listeningVoice ||
+                                      voicePipeline.isPushToTalkActive)
+                                  ? _crimson
+                                  : _crimson.withValues(alpha: 0.35),
+                            ),
+                          ),
+                          child: Icon(
                             (listeningVoice || voicePipeline.isPushToTalkActive)
+                                ? Icons.graphic_eq
+                                : Icons.mic,
+                            size: 14,
+                            color: (listeningVoice ||
+                                    voicePipeline.isPushToTalkActive)
                                 ? _rose
                                 : _crimson,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                InkWell(
-                  onTap: sending ? null : saveCommand,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.all(7),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2E0305),
+                    InkWell(
+                      onTap: sending ? null : saveCommand,
                       borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.all(7),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2E0305),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(
+                          Icons.send,
+                          size: 14,
+                          color: _crimson,
+                        ),
+                      ),
                     ),
-                    child: const Icon(
-                      Icons.send,
-                      size: 14,
-                      color: _crimson,
-                    ),
-                  ),
+                  ],
                 ),
               ],
             ),
@@ -2978,6 +3569,63 @@ class _CoreScreenState extends State<CoreScreen>
               ),
               const SizedBox(height: 12),
 
+              // Immutable Audit Log Card (P5)
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2E0305),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'LOG IMUTÁVEL DE AUDITORIA (SHA-256 • P5)',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Cadeia criptográfica append-only de todas as ações sensíveis, Kill Switches, /pc e webhooks HTTP em Skills/*.md.',
+                      style: TextStyle(
+                        color: Color(0xFFA89698),
+                        fontSize: 10,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          _setPanel(_ActivePanel.main);
+                          unawaited(_runCommand(UltronCommand.audit, ''));
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _rose,
+                          side: const BorderSide(color: _crimson),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        icon:
+                            const Icon(Icons.verified_user_outlined, size: 15),
+                        label: const Text(
+                          'VERIFICAR CADEIA & LOGS (/audit)',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
               // Remote PC Kill Switch Card
               Container(
                 padding: const EdgeInsets.all(14),
@@ -3049,6 +3697,87 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                           child: const Text(
                             'FIXAR IP',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: pcLanSecretController,
+                            obscureText: true,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                            ),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: 'Chave secreta HMAC LAN (obrigatória)',
+                              hintStyle: TextStyle(
+                                color: Color(0xFF635355),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        OutlinedButton(
+                          onPressed: () async {
+                            await deviceService.savePcLanSecret(
+                              pcLanSecretController.text,
+                            );
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Chave HMAC LAN salva com segurança.',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                              ),
+                            );
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _crimson,
+                            side: const BorderSide(color: _crimson),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text(
+                            'CHAVE',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        OutlinedButton(
+                          onPressed: () async {
+                            final gen =
+                                await deviceService.generatePcLanSecret();
+                            pcLanSecretController.text = gen;
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Nova chave HMAC LAN gerada e salva.',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                              ),
+                            );
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _rose,
+                            side: const BorderSide(color: _border),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text(
+                            'GERAR',
                             style: TextStyle(
                               fontSize: 10,
                               fontWeight: FontWeight.bold,
@@ -3607,6 +4336,80 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                         ),
                       ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 1. Agenda & Briefing Matinal (P4)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2E0305),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _crimson.withValues(alpha: 0.45),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '📅 AGENDA ANDROID & BRIEFING MATINAL (P4)',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              _setPanel(_ActivePanel.main);
+                              unawaited(
+                                  _runCommand(UltronCommand.calendar, 'hoje'));
+                            },
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: _rose,
+                              side: BorderSide(
+                                color: _crimson.withValues(alpha: 0.5),
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: const Icon(Icons.calendar_today, size: 13),
+                            label: const Text(
+                              'AGENDA HOJE',
+                              style: TextStyle(fontSize: 10),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () {
+                              _setPanel(_ActivePanel.main);
+                              unawaited(_runMorningBriefing());
+                            },
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _crimson,
+                              foregroundColor: const Color(0xFFF0E6E7),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: const Icon(Icons.wb_sunny_outlined, size: 14),
+                            label: const Text(
+                              'BRIEFING',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
