@@ -13,6 +13,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Wrapper de Voz Offline do U.L.T.R.O.N. com Bloqueio Anti-Eco (Half-Duplex):
@@ -38,7 +40,10 @@ object UltronTtsHelper {
 
     private var player: MediaPlayer? = null
     private var pendingAudioResult: MethodChannel.Result? = null
+    private var pendingAudioCallback: ((Boolean) -> Unit)? = null
     private var pendingAudioFile: File? = null
+    @Volatile
+    private var activeSpeakLatch: CountDownLatch? = null
     private var offlineTts: TextToSpeech? = null
     private var ttsReady: Boolean = false
     private var preferredVoiceName: String? = null
@@ -82,11 +87,15 @@ object UltronTtsHelper {
         lastSpeechEndTimestampMs = now
         MainActivity.isUltronSpeakingGlobal = false
         MainActivity.lastSpeechEndTimestampMs = now
+        activeSpeakLatch?.countDown()
+        activeSpeakLatch = null
     }
 
     private fun cleanupPendingAudio(completed: Boolean) {
         val pending = pendingAudioResult
         pendingAudioResult = null
+        val cb = pendingAudioCallback
+        pendingAudioCallback = null
         val file = pendingAudioFile
         pendingAudioFile = null
         try {
@@ -97,11 +106,17 @@ object UltronTtsHelper {
             pending?.success(completed)
         } catch (_: Exception) {
         }
+        try {
+            cb?.invoke(completed)
+        } catch (_: Exception) {
+        }
     }
 
     private fun failPendingAudio(code: String, message: String) {
         val pending = pendingAudioResult
         pendingAudioResult = null
+        val cb = pendingAudioCallback
+        pendingAudioCallback = null
         val file = pendingAudioFile
         pendingAudioFile = null
         try {
@@ -112,6 +127,53 @@ object UltronTtsHelper {
             pending?.error(code, message, null)
         } catch (_: Exception) {
         }
+        try {
+            cb?.invoke(false)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Reproduz bytes de áudio TTS (ex.: Fish Audio MP3) e bloqueia até terminar. */
+    fun playAudioBytesBlocking(
+        context: Context,
+        bytes: ByteArray,
+        volume: Float = 1.0f,
+        timeoutMs: Long = 25_000L
+    ): Boolean {
+        if (bytes.isEmpty()) return false
+        val latch = CountDownLatch(1)
+        var ok = false
+        playAudioBytes(context, bytes, volume, result = null) { completed ->
+            ok = completed
+            latch.countDown()
+        }
+        try {
+            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+        }
+        return ok
+    }
+
+    /** Fala via motor offline do Android e aguarda término antes de retomar o KWS. */
+    fun speakBlocking(
+        context: Context,
+        text: String,
+        timeoutMs: Long = 25_000L
+    ) {
+        val clean = text.trim()
+        if (clean.isEmpty()) return
+        val latch = CountDownLatch(1)
+        activeSpeakLatch?.countDown()
+        activeSpeakLatch = latch
+        speakWithOfflineEngine(context.applicationContext, clean)
+        try {
+            latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+        } finally {
+            if (activeSpeakLatch === latch) {
+                activeSpeakLatch = null
+            }
+        }
     }
 
     /** Reproduz bytes de áudio TTS (ex.: Fish Audio MP3) respeitando o bloqueio anti-eco. */
@@ -119,14 +181,16 @@ object UltronTtsHelper {
         context: Context,
         bytes: ByteArray,
         volume: Float,
-        result: MethodChannel.Result
+        result: MethodChannel.Result?,
+        onComplete: ((Boolean) -> Unit)? = null
     ) {
         val task = Runnable {
             if (MainActivity.isForegroundRecognizerActive || bytes.isEmpty()) {
                 try {
-                    result.success(false)
+                    result?.success(false)
                 } catch (_: Exception) {
                 }
+                onComplete?.invoke(false)
                 return@Runnable
             }
             releasePlayer()
@@ -135,6 +199,7 @@ object UltronTtsHelper {
                 tempFile = File.createTempFile("ultron_fish_tts_", ".mp3", context.cacheDir)
                 tempFile.writeBytes(bytes)
                 pendingAudioResult = result
+                pendingAudioCallback = onComplete
                 pendingAudioFile = tempFile
                 markSpeechStarted()
 
@@ -169,11 +234,13 @@ object UltronTtsHelper {
                 }
                 pendingAudioFile = null
                 pendingAudioResult = null
+                pendingAudioCallback = null
                 markSpeechEnded()
                 try {
-                    result.error("fish_audio_playback", e.message ?: "Falha ao reproduzir áudio", null)
+                    result?.error("fish_audio_playback", e.message ?: "Falha ao reproduzir áudio", null)
                 } catch (_: Exception) {
                 }
+                onComplete?.invoke(false)
             }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {

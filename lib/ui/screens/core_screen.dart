@@ -437,6 +437,46 @@ class _CoreScreenState extends State<CoreScreen>
       });
       _applyContextSensors(hwStatus);
       _scrollToBottom();
+      unawaited(_syncBackgroundVoiceConfig(enabledProviders: enabledProviders));
+    } catch (_) {}
+  }
+
+  Future<void> _syncBackgroundVoiceConfig({
+    List<AiProviderConfig>? enabledProviders,
+  }) async {
+    try {
+      await voiceService.initialize();
+      final providers = enabledProviders ??
+          ((await providerStore.load()).where((p) => p.enabled).toList()
+            ..sort((a, b) => a.priority.compareTo(b.priority)));
+      final sttCfg = await providerStore.resolveSttConfig();
+      final primaryAi = providers.isNotEmpty
+          ? providers.first
+          : const AiProviderConfig(
+              id: 'pollinations_free',
+              name: 'Pollinations',
+              baseUrl: 'https://text.pollinations.ai/openai',
+              model: 'openai',
+              apiKey: '',
+              enabled: true,
+              priority: 0,
+            );
+      final fish = voiceService.fishConfig;
+      await deviceService.syncBackgroundVoiceConfig(
+        sttUrl: sttCfg.endpointUrl,
+        sttKey: sttCfg.apiKey,
+        sttModel: sttCfg.model,
+        sttLanguage: sttCfg.language,
+        aiBaseUrl: primaryAi.baseUrl,
+        aiKey: primaryAi.apiKey,
+        aiModel: primaryAi.model,
+        fishEnabled: fish.enabled,
+        fishKey: fish.apiKey,
+        fishRefId: fish.referenceId,
+        fishLanguage: fish.language,
+        fishModel: fish.model,
+        whisperMode: nightFocusMode,
+      );
     } catch (_) {}
   }
 
@@ -477,6 +517,7 @@ class _CoreScreenState extends State<CoreScreen>
     final next = !nightFocusMode;
     setState(() => nightFocusMode = next);
     await voiceService.setWhisperMode(next);
+    unawaited(_syncBackgroundVoiceConfig());
   }
 
   Future<void> _refreshDeviceStatus() async {
@@ -1216,6 +1257,7 @@ class _CoreScreenState extends State<CoreScreen>
         if (mounted) {
           setState(() => selectedVoiceProfile = voiceService.profile);
         }
+        unawaited(_syncBackgroundVoiceConfig());
       },
     );
   }
@@ -1223,6 +1265,9 @@ class _CoreScreenState extends State<CoreScreen>
   Future<bool> _setOfflineSentinelEnabled(bool next) async {
     if (next && voicePipeline.isContinuousEnabled) {
       await voicePipeline.stopContinuousListening();
+    }
+    if (next) {
+      unawaited(_syncBackgroundVoiceConfig());
     }
     final requested = await deviceService.setAudioSentinel(next);
     var real = false;
@@ -1273,21 +1318,7 @@ class _CoreScreenState extends State<CoreScreen>
       await voicePipeline.stopContinuousListening();
       return;
     }
-    SttConfig? dedicatedStt;
-    try {
-      dedicatedStt = await providerStore.loadSttConfig();
-    } catch (_) {
-      dedicatedStt = null;
-    }
-    if (dedicatedStt == null || dedicatedStt.apiKey.trim().isEmpty) {
-      await _setOfflineSentinelEnabled(true);
-      return;
-    }
-    final ok = await voicePipeline.startContinuousListening();
-    if (!mounted || ok || voicePipeline.lastError == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(voicePipeline.lastError!)),
-    );
+    await _setOfflineSentinelEnabled(true);
   }
 
   Future<void> _togglePushToTalk() async {
@@ -1342,6 +1373,7 @@ class _CoreScreenState extends State<CoreScreen>
         if (mounted) {
           setState(() => selectedVoiceProfile = voiceService.profile);
         }
+        unawaited(_syncBackgroundVoiceConfig());
         break;
       case UltronCommand.desktop:
         await Navigator.of(context).push(

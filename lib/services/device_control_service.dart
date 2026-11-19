@@ -706,6 +706,42 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     return res ?? text;
   }
 
+  /// Sincroniza com o serviço nativo em 2º plano (criptografado no Keystore) as
+  /// credenciais de STT não-Google, IA e Fish Audio para responder com app fechado.
+  Future<void> syncBackgroundVoiceConfig({
+    required String sttUrl,
+    required String sttKey,
+    required String sttModel,
+    required String sttLanguage,
+    required String aiBaseUrl,
+    required String aiKey,
+    required String aiModel,
+    required bool fishEnabled,
+    required String fishKey,
+    required String fishRefId,
+    required String fishLanguage,
+    required String fishModel,
+    required bool whisperMode,
+  }) async {
+    try {
+      await _channel.invokeMethod<bool>('syncBackgroundVoiceConfig', {
+        'sttUrl': sttUrl,
+        'sttKey': sttKey,
+        'sttModel': sttModel,
+        'sttLanguage': sttLanguage,
+        'aiBaseUrl': aiBaseUrl,
+        'aiKey': aiKey,
+        'aiModel': aiModel,
+        'fishEnabled': fishEnabled,
+        'fishKey': fishKey,
+        'fishRefId': fishRefId,
+        'fishLanguage': fishLanguage,
+        'fishModel': fishModel,
+        'whisperMode': whisperMode,
+      });
+    } catch (_) {}
+  }
+
   /// Parses direct natural-language hardware commands so they execute immediately
   /// with zero latency and even without internet/API keys.
   Future<DeviceActionResult?> tryExecuteNaturalCommand(String rawInput) async {

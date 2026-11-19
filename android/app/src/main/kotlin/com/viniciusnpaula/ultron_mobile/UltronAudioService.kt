@@ -582,7 +582,7 @@ class UltronAudioService : Service() {
                 consecutiveFailures = 0
 
                 if (detectedKeyword.isNotBlank()) {
-                    // O microfone KWS é liberado antes do reconhecimento do comando no fluxo Flutter.
+                    // O microfone KWS é liberado antes do reconhecimento do comando no fluxo Flutter/2º plano.
                     releaseRecorder(recorder)
                     recorder = null
                     captureHealthy = false
@@ -591,8 +591,12 @@ class UltronAudioService : Service() {
                     lastTriggerTimestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                     Stats.lastPhrase = detectedKeyword
                     wakeHandoffUntilMs = System.currentTimeMillis() + WAKE_HANDOFF_GUARD_MS
-                    updateNotification("Palavra \"Ultron\" detectada — aguardando comando")
-                    onWakeConfirmed("Ultron")
+                    if (MainActivity.isActivityResumed) {
+                        updateNotification("Palavra \"Ultron\" detectada — aguardando comando")
+                        onWakeConfirmed("Ultron")
+                    } else {
+                        handleBackgroundHandsFreeCommand()
+                    }
                     return
                 }
             }
@@ -603,10 +607,55 @@ class UltronAudioService : Service() {
         }
     }
 
+    private fun handleBackgroundHandsFreeCommand() {
+        try {
+            BackgroundVoiceResponder.runBackgroundTurn(
+                context = this,
+                onStatusUpdate = { status -> updateNotification(status) },
+                onReplyNotification = { heard, reply ->
+                    showBackgroundReplyNotification(heard, reply)
+                },
+            )
+            // Aguarda dissipação de eco após responder antes de reabrir o KWS.
+            wakeHandoffUntilMs = System.currentTimeMillis() + POST_SPEECH_ECHO_GUARD_MS
+            Thread.sleep(POST_SPEECH_ECHO_GUARD_MS)
+        } catch (_: InterruptedException) {
+        } catch (e: Exception) {
+            Stats.lastError = "bg voice: ${e.message}"
+        } finally {
+            if (workerActive.get() && !userPaused) {
+                updateNotification("sherpa-onnx KWS carregado — diga \"Ultron\"")
+            }
+        }
+    }
+
+    private fun showBackgroundReplyNotification(heard: String, reply: String) {
+        try {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val openIntent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pending = PendingIntent.getActivity(
+                this, 11, openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Você: ${heard.take(60)}")
+                .setContentText(reply)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(reply))
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .setContentIntent(pending)
+                .build()
+            nm.notify(WAKE_NOTIFICATION_ID, notification)
+        } catch (_: Exception) {
+        }
+    }
+
     /**
-     * Wake word confirmada: guarda o evento como pendente (nunca perdido) e, se o app não
-     * está em primeiro plano (segundo plano ou tela bloqueada), sobe a notificação full-screen.
-     * O Flutter só processa após a autenticação normal do app — o Action Gate é preservado.
+     * Wake word confirmada com app aberto: entrega o evento ao Flutter.
      */
     private fun onWakeConfirmed(phrase: String) {
         wakeHandoffUntilMs = System.currentTimeMillis() + WAKE_HANDOFF_GUARD_MS

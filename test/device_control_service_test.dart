@@ -338,4 +338,31 @@ void main() {
 
     await expectLater(service.controlMedia('invalid_cmd'), throwsArgumentError);
   });
+
+  test(
+      'syncBackgroundVoiceConfig forwards encrypted-store credentials to native channel',
+      () async {
+    final service = DeviceControlService(channel: channel);
+    await service.syncBackgroundVoiceConfig(
+      sttUrl: 'https://api.groq.com/openai/v1/audio/transcriptions',
+      sttKey: 'gsk_123',
+      sttModel: 'whisper-large-v3-turbo',
+      sttLanguage: 'pt',
+      aiBaseUrl: 'https://api.groq.com/openai/v1',
+      aiKey: 'gsk_123',
+      aiModel: 'openai/gpt-oss-120b',
+      fishEnabled: true,
+      fishKey: 'fish_key',
+      fishRefId: 'ultron_ref',
+      fishLanguage: 'pt',
+      fishModel: 's2.1-pro-free',
+      whisperMode: false,
+    );
+
+    expect(calls.last.method, 'syncBackgroundVoiceConfig');
+    final args = calls.last.arguments as Map;
+    expect(args['sttKey'], 'gsk_123');
+    expect(args['fishRefId'], 'ultron_ref');
+    expect(args['fishModel'], 's2.1-pro-free');
+  });
 }

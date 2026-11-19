@@ -611,6 +611,25 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     UltronTtsHelper.playAudioBytes(this, bytes, volume, result)
                 }
             }
+            "syncBackgroundVoiceConfig" -> {
+                val cfg = BackgroundVoiceConfig(
+                    sttUrl = call.argument<String>("sttUrl") ?: "",
+                    sttKey = call.argument<String>("sttKey") ?: "",
+                    sttModel = call.argument<String>("sttModel") ?: "whisper-large-v3-turbo",
+                    sttLanguage = call.argument<String>("sttLanguage") ?: "pt",
+                    aiBaseUrl = call.argument<String>("aiBaseUrl") ?: "https://text.pollinations.ai/openai",
+                    aiKey = call.argument<String>("aiKey") ?: "",
+                    aiModel = call.argument<String>("aiModel") ?: "openai",
+                    fishEnabled = call.argument<Boolean>("fishEnabled") ?: false,
+                    fishKey = call.argument<String>("fishKey") ?: "",
+                    fishRefId = call.argument<String>("fishRefId") ?: "",
+                    fishLanguage = call.argument<String>("fishLanguage") ?: "pt",
+                    fishModel = call.argument<String>("fishModel") ?: "s2.1-pro",
+                    whisperMode = call.argument<Boolean>("whisperMode") ?: false,
+                )
+                BackgroundVoiceConfigStore.save(this, cfg)
+                result.success(true)
+            }
             else -> result.notImplemented()
         }
     }
