@@ -18,6 +18,87 @@ class PcmEnergy {
     }
     return math.sqrt(sumSquares / sampleCount);
   }
+
+  /// Converte RMS (0..32768) para escala logarítmica dBFS limitada em `[-60.0, 0.0]`.
+  static double dbfsFromRms(double rms) {
+    if (rms <= 0.0) return -60.0;
+    final norm = (rms / 32768.0).clamp(1e-6, 1.0);
+    final db = 20.0 * (math.log(norm) / math.ln10);
+    return db.clamp(-60.0, 0.0);
+  }
+
+  /// Mede o piso de ruído ambiente em dBFS a partir de um bloco PCM16 mono.
+  static double noiseFloorDb(Uint8List pcm) => dbfsFromRms(rmsInt16(pcm));
+}
+
+/// Snapshot imutável de diagnóstico acústico em campo (Marco 3 — v1.8.0).
+class AcousticDiagnosticsSnapshot {
+  const AcousticDiagnosticsSnapshot({
+    required this.ambientNoiseDb,
+    required this.preRollMs,
+    required this.avgSttLatencyMs,
+    required this.sttSampleCount,
+    required this.kwsTriggers,
+    required this.kwsFalsePositives,
+  });
+
+  final double ambientNoiseDb;
+  final int preRollMs;
+  final int avgSttLatencyMs;
+  final int sttSampleCount;
+  final int kwsTriggers;
+  final int kwsFalsePositives;
+
+  double get falsePositiveRate =>
+      kwsTriggers <= 0 ? 0.0 : (kwsFalsePositives / kwsTriggers).clamp(0.0, 1.0);
+}
+
+/// Rastreador local de métricas acústicas (AudioRecord / VAD pré-roll 600ms / Whisper / KWS PT-BR).
+class AcousticDiagnosticsTracker {
+  AcousticDiagnosticsTracker({this.preRollMs = 600});
+
+  static final AcousticDiagnosticsTracker instance =
+      AcousticDiagnosticsTracker();
+
+  final int preRollMs;
+  double _ambientNoiseDb = -52.0;
+  int _totalSttLatencyMs = 0;
+  int _sttSamples = 0;
+  int _kwsTriggers = 0;
+  int _kwsFalsePositives = 0;
+
+  void recordPcmNoiseFrame(Uint8List pcm) {
+    _ambientNoiseDb = PcmEnergy.noiseFloorDb(pcm);
+  }
+
+  void recordSttLatency(int elapsedMs) {
+    if (elapsedMs < 0) return;
+    _totalSttLatencyMs += elapsedMs;
+    _sttSamples++;
+  }
+
+  void recordKwsTrigger({bool falsePositive = false}) {
+    _kwsTriggers++;
+    if (falsePositive) _kwsFalsePositives++;
+  }
+
+  void reset() {
+    _ambientNoiseDb = -52.0;
+    _totalSttLatencyMs = 0;
+    _sttSamples = 0;
+    _kwsTriggers = 0;
+    _kwsFalsePositives = 0;
+  }
+
+  AcousticDiagnosticsSnapshot snapshot() => AcousticDiagnosticsSnapshot(
+        ambientNoiseDb: _ambientNoiseDb,
+        preRollMs: preRollMs,
+        avgSttLatencyMs:
+            _sttSamples == 0 ? 0 : (_totalSttLatencyMs / _sttSamples).round(),
+        sttSampleCount: _sttSamples,
+        kwsTriggers: _kwsTriggers,
+        kwsFalsePositives: _kwsFalsePositives,
+      );
 }
 
 /// Fixed-capacity circular byte buffer for pre-speech audio lookback.

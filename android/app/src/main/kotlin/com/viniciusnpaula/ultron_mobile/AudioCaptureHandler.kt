@@ -49,6 +49,9 @@ class AudioCaptureHandler(
     @Volatile
     private var capturing = false
 
+    @Volatile
+    private var captureToken = 0L
+
     init {
         methodChannel.setMethodCallHandler(this)
         eventChannel.setStreamHandler(this)
@@ -121,112 +124,198 @@ class AudioCaptureHandler(
             return
         }
 
+        val token: Long
         synchronized(lock) {
             stopCaptureLocked()
+            MainActivity.isForegroundCaptureActive = true
+            token = ++captureToken
+        }
 
-            val minBuf = AudioRecord.getMinBufferSize(
-                sampleRate,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-            )
-            if (minBuf <= 0) {
-                result.error("audio_config_error", "Invalid AudioRecord buffer size: $minBuf", null)
-                return
+        Thread({
+            // Aguarda o sentinela em segundo plano liberar o microfone antes de abrir em 1º plano.
+            var waitedMs = 0
+            while (UltronAudioService.isRecorderOpen && waitedMs < 350 && captureToken == token) {
+                try {
+                    Thread.sleep(10)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                waitedMs += 10
             }
 
-            // 20ms frame = sampleRate * 2 bytes / 50; keep internal ring >= 100ms
-            val chunkSize = max(320, (sampleRate * 2) / 50)
-            val bufferSize = max(minBuf, chunkSize * 5)
+            if (captureToken != token) {
+                mainHandler.post {
+                    result.error("capture_cancelled", "Captura cancelada antes de iniciar.", null)
+                }
+                return@Thread
+            }
 
-            val record = try {
-                AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            synchronized(lock) {
+                if (captureToken != token) {
+                    mainHandler.post {
+                        result.error("capture_cancelled", "Captura cancelada antes de iniciar.", null)
+                    }
+                    return@Thread
+                }
+
+                val minBuf = AudioRecord.getMinBufferSize(
                     sampleRate,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize,
                 )
-            } catch (e: SecurityException) {
-                result.error("permission_denied", e.message, null)
-                return
-            } catch (e: IllegalArgumentException) {
-                result.error("audio_init_failed", e.message, null)
-                return
-            }
-
-            if (record.state != AudioRecord.STATE_INITIALIZED) {
-                record.release()
-                result.error("audio_init_failed", "AudioRecord failed to initialize.", null)
-                return
-            }
-
-            val sessionId = record.audioSessionId
-            var aecEnabled = false
-            var nsEnabled = false
-            var agcEnabled = false
-
-            if (AcousticEchoCanceler.isAvailable()) {
-                echoCanceler = AcousticEchoCanceler.create(sessionId)?.apply {
-                    enabled = true
-                    aecEnabled = enabled
-                }
-            }
-            if (NoiseSuppressor.isAvailable()) {
-                noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply {
-                    enabled = true
-                    nsEnabled = enabled
-                }
-            }
-            if (AutomaticGainControl.isAvailable()) {
-                gainControl = AutomaticGainControl.create(sessionId)?.apply {
-                    enabled = true
-                    agcEnabled = enabled
-                }
-            }
-
-            audioRecord = record
-            capturing = true
-            MainActivity.isForegroundCaptureActive = true
-
-            try {
-                record.startRecording()
-            } catch (e: IllegalStateException) {
-                stopCaptureLocked()
-                result.error("audio_start_failed", e.message, null)
-                return
-            }
-
-            val thread = Thread({
-                val frame = ByteArray(chunkSize)
-                while (capturing) {
-                    val read = try {
-                        record.read(frame, 0, frame.size)
-                    } catch (_: Throwable) {
-                        break
+                if (minBuf <= 0) {
+                    MainActivity.isForegroundCaptureActive = false
+                    mainHandler.post {
+                        result.error("audio_config_error", "Invalid AudioRecord buffer size: $minBuf", null)
                     }
-                    if (!capturing) break
-                    if (read > 0) {
-                        val copy = frame.copyOf(read)
+                    return@Thread
+                }
+
+                // 20ms frame = sampleRate * 2 bytes / 50; keep internal ring >= 100ms
+                val chunkSize = max(320, (sampleRate * 2) / 50)
+                val bufferSize = max(minBuf, chunkSize * 5)
+
+                val sources = listOf(
+                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    MediaRecorder.AudioSource.MIC,
+                    MediaRecorder.AudioSource.DEFAULT,
+                )
+
+                var openedRecord: AudioRecord? = null
+                var lastReason = "Nenhum microfone inicializou"
+                for (source in sources) {
+                    val candidate = try {
+                        AudioRecord(
+                            source,
+                            sampleRate,
+                            AudioFormat.CHANNEL_IN_MONO,
+                            AudioFormat.ENCODING_PCM_16BIT,
+                            bufferSize,
+                        )
+                    } catch (e: SecurityException) {
+                        MainActivity.isForegroundCaptureActive = false
                         mainHandler.post {
-                            if (capturing) {
-                                eventSink?.success(copy)
+                            result.error("permission_denied", e.message, null)
+                        }
+                        return@Thread
+                    } catch (e: IllegalArgumentException) {
+                        lastReason = "${e.javaClass.simpleName}: ${e.message}"
+                        continue
+                    }
+
+                    if (candidate.state != AudioRecord.STATE_INITIALIZED) {
+                        lastReason = "source=$source state=${candidate.state}"
+                        try {
+                            candidate.release()
+                        } catch (_: Throwable) {
+                        }
+                        continue
+                    }
+
+                    try {
+                        candidate.startRecording()
+                    } catch (e: IllegalStateException) {
+                        lastReason = "source=$source startRecording: ${e.message}"
+                        try {
+                            candidate.release()
+                        } catch (_: Throwable) {
+                        }
+                        continue
+                    }
+
+                    if (candidate.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                        lastReason = "source=$source recordingState=${candidate.recordingState}"
+                        try {
+                            candidate.release()
+                        } catch (_: Throwable) {
+                        }
+                        continue
+                    }
+
+                    openedRecord = candidate
+                    break
+                }
+
+                val record = openedRecord
+                if (record == null) {
+                    MainActivity.isForegroundCaptureActive = false
+                    mainHandler.post {
+                        result.error("audio_init_failed", "Nenhum microfone ativo disponível ($lastReason).", null)
+                    }
+                    return@Thread
+                }
+
+                val sessionId = record.audioSessionId
+                var aecEnabled = false
+                var nsEnabled = false
+                var agcEnabled = false
+
+                try {
+                    if (AcousticEchoCanceler.isAvailable()) {
+                        echoCanceler = AcousticEchoCanceler.create(sessionId)?.apply {
+                            enabled = true
+                            aecEnabled = enabled
+                        }
+                    }
+                } catch (_: Throwable) {
+                }
+                try {
+                    if (NoiseSuppressor.isAvailable()) {
+                        noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply {
+                            enabled = true
+                            nsEnabled = enabled
+                        }
+                    }
+                } catch (_: Throwable) {
+                }
+                try {
+                    if (AutomaticGainControl.isAvailable()) {
+                        gainControl = AutomaticGainControl.create(sessionId)?.apply {
+                            enabled = true
+                            agcEnabled = enabled
+                        }
+                    }
+                } catch (_: Throwable) {
+                }
+
+                audioRecord = record
+                capturing = true
+
+                val thread = Thread({
+                    val frame = ByteArray(chunkSize)
+                    while (capturing) {
+                        val read = try {
+                            record.read(frame, 0, frame.size)
+                        } catch (_: Throwable) {
+                            break
+                        }
+                        if (!capturing) break
+                        if (read > 0) {
+                            val copy = frame.copyOf(read)
+                            mainHandler.post {
+                                if (capturing) {
+                                    eventSink?.success(copy)
+                                }
                             }
                         }
                     }
-                }
-            }, "ultron-audio-capture")
-            readerThread = thread
-            thread.start()
+                }, "ultron-audio-capture")
+                readerThread = thread
+                thread.start()
 
-            result.success(
-                mapOf(
-                    "aecEnabled" to aecEnabled,
-                    "nsEnabled" to nsEnabled,
-                    "agcEnabled" to agcEnabled,
-                    "sampleRate" to sampleRate,
-                ),
-            )
-        }
+                mainHandler.post {
+                    result.success(
+                        mapOf(
+                            "aecEnabled" to aecEnabled,
+                            "nsEnabled" to nsEnabled,
+                            "agcEnabled" to agcEnabled,
+                            "sampleRate" to sampleRate,
+                        ),
+                    )
+                }
+            }
+        }, "ultron-audio-open").start()
     }
 
     fun stopCapture() {
@@ -236,6 +325,7 @@ class AudioCaptureHandler(
     }
 
     private fun stopCaptureLocked() {
+        captureToken++
         capturing = false
         MainActivity.isForegroundCaptureActive = false
 

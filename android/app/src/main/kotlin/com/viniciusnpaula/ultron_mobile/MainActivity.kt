@@ -3,10 +3,17 @@ package com.viniciusnpaula.ultron_mobile
 import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -14,38 +21,51 @@ import android.hardware.SensorManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
+import android.media.ExifInterface
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.nfc.NdefMessage
+import android.nfc.NdefRecord
+import android.nfc.NfcAdapter
+import android.nfc.Tag
+import android.nfc.tech.Ndef
+import android.nfc.tech.NdefFormatable
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.AlarmClock
+import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
+import android.util.Base64
 import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import com.google.zxing.integration.android.IntentIntegrator
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.util.TimeZone
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     companion object {
         private const val CHANNEL = "com.viniciusnpaula.ultron_mobile/device"
         private const val ACTIONS_CHANNEL = "com.viniciusnpaula.ultron_mobile/android_actions"
-        private const val SPEECH_REQUEST_CODE = 9042
+        private const val NFC_CHANNEL = "com.viniciusnpaula.ultron_mobile/nfc"
 
         @Volatile
         var isFaceDownGlobal: Boolean = false
@@ -66,6 +86,16 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         var isActivityResumed: Boolean = false
 
         private const val PENDING_WAKE_TTL_MS = 90_000L
+        private const val VISION_CAMERA_REQUEST_CODE = 9101
+        private const val VISION_GALLERY_REQUEST_CODE = 9102
+        private const val VISION_CAMERA_PERM_REQUEST_CODE = 9103
+        private const val CALENDAR_PERM_REQUEST_CODE = 9104
+        private const val PAIRING_QR_REQUEST_CODE = 9105
+        private const val PAIRING_QR_CAMERA_PERM_REQUEST_CODE = 9106
+        private const val SAF_PICK_DIR_REQUEST_CODE = 9107
+        private const val SAF_PICK_FILES_REQUEST_CODE = 9108
+        private const val VISION_MAX_DIM_PX = 1024
+        private const val VISION_JPEG_QUALITY = 82
 
         private var instance: MainActivity? = null
 
@@ -92,6 +122,66 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             pendingWakeWord = null
             return if (fresh) phrase else null
         }
+
+        /** Notifica o Flutter (se vivo em memória) que há novos turnos gravados em 2º plano. */
+        fun notifyBackgroundTurn() {
+            instance?.runOnUiThread {
+                instance?.deviceChannel?.invokeMethod("onBackgroundTurnAvailable", null)
+            }
+        }
+
+        private val pendingWorkflowIds = mutableListOf<Int>()
+
+        fun notifyWorkflowTriggered(flowId: Int) {
+            synchronized(pendingWorkflowIds) {
+                if (!pendingWorkflowIds.contains(flowId)) {
+                    pendingWorkflowIds.add(flowId)
+                }
+            }
+            instance?.runOnUiThread {
+                instance?.deviceChannel?.invokeMethod("onWorkflowTriggered", flowId)
+            }
+        }
+
+        fun consumePendingWorkflowIds(): List<Int> {
+            synchronized(pendingWorkflowIds) {
+                val copy = pendingWorkflowIds.toList()
+                pendingWorkflowIds.clear()
+                return copy
+            }
+        }
+
+        @Volatile
+        private var pendingOrbTap: Boolean = false
+
+        @Volatile
+        private var pendingOrbRequireUnlock: Boolean = false
+
+        fun notifyFloatingOrbTap(requiresUnlock: Boolean) {
+            pendingOrbTap = true
+            pendingOrbRequireUnlock = requiresUnlock
+            instance?.runOnUiThread {
+                instance?.deliverPendingFloatingOrbTap()
+            }
+        }
+
+        fun consumePendingOrbTap(): Map<String, Any>? {
+            if (!pendingOrbTap) return null
+            val req = pendingOrbRequireUnlock
+            pendingOrbTap = false
+            pendingOrbRequireUnlock = false
+            return mapOf(
+                "triggered" to true,
+                "requiresUnlock" to req,
+            )
+        }
+    }
+
+    private fun deliverPendingFloatingOrbTap() {
+        if (!isActivityResumed) return
+        val channel = deviceChannel ?: return
+        val payload = consumePendingOrbTap() ?: return
+        channel.invokeMethod("onFloatingOrbTapped", payload)
     }
 
     /** Entrega a wake word pendente ao Flutter; só consome quando a Activity está em 1º plano. */
@@ -140,7 +230,136 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 this, Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
             if (micGranted && !UltronAudioService.isRunning) startSentinelService()
+        } else if (requestCode == VISION_CAMERA_PERM_REQUEST_CODE) {
+            val camGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+            val pending = pendingVisionResult
+            if (camGranted && pending != null) {
+                startVisionCapture("camera", pending)
+            } else {
+                pendingVisionResult = null
+                pending?.error("PERMISSION_DENIED", "Permissão de câmera negada para Visão Multimodal.", null)
+            }
+        } else if (requestCode == CALENDAR_PERM_REQUEST_CODE) {
+            val readGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.READ_CALENDAR
+            ) == PackageManager.PERMISSION_GRANTED
+            val op = pendingCalendarOperation
+            val pending = pendingCalendarResult
+            pendingCalendarOperation = null
+            pendingCalendarResult = null
+            if (readGranted && op != null) {
+                op.invoke()
+            } else {
+                pending?.error("CALENDAR_PERMISSION_DENIED", "Permissão de Agenda (Calendário) negada.", null)
+            }
+        } else if (requestCode == PAIRING_QR_CAMERA_PERM_REQUEST_CODE) {
+            val camGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+            val pending = pendingQrResult
+            if (camGranted && pending != null) {
+                launchPairingQrScanner(pending)
+            } else {
+                pendingQrResult = null
+                pending?.error("PERMISSION_DENIED", "Permissão de câmera negada para ler QR Code.", null)
+            }
         }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SAF_PICK_DIR_REQUEST_CODE) {
+            val pending = pendingSafDirResult ?: return
+            pendingSafDirResult = null
+            if (resultCode != Activity.RESULT_OK) {
+                pending.success(null)
+                return
+            }
+            val treeUri = data?.data
+            val resolvedPath = resolveSafTreeUriToPath(treeUri)
+            pending.success(resolvedPath)
+            return
+        }
+        if (requestCode == SAF_PICK_FILES_REQUEST_CODE) {
+            val pending = pendingSafFilesResult ?: return
+            pendingSafFilesResult = null
+            if (resultCode != Activity.RESULT_OK || data == null) {
+                pending.success(emptyList<String>())
+                return
+            }
+            val uris = mutableListOf<Uri>()
+            val clip = data.clipData
+            if (clip != null && clip.itemCount > 0) {
+                for (i in 0 until clip.itemCount) {
+                    clip.getItemAt(i)?.uri?.let { uris.add(it) }
+                }
+            } else {
+                data.data?.let { uris.add(it) }
+            }
+            val copiedPaths = copySafUrisToBatchCache(uris)
+            pending.success(copiedPaths)
+            return
+        }
+        if (requestCode == PAIRING_QR_REQUEST_CODE) {
+            val pending = pendingQrResult ?: return
+            pendingQrResult = null
+            if (resultCode != Activity.RESULT_OK) {
+                pending.success(null)
+                return
+            }
+            val parsed = IntentIntegrator.parseActivityResult(IntentIntegrator.REQUEST_CODE, resultCode, data)
+            val contents = parsed?.contents ?: data?.getStringExtra("SCAN_RESULT")
+            pending.success(contents)
+            return
+        }
+        if (requestCode != VISION_CAMERA_REQUEST_CODE && requestCode != VISION_GALLERY_REQUEST_CODE) {
+            return
+        }
+        val pending = pendingVisionResult ?: return
+        pendingVisionResult = null
+        val source = if (requestCode == VISION_CAMERA_REQUEST_CODE) "camera" else "gallery"
+        if (resultCode != Activity.RESULT_OK) {
+            pendingVisionCameraUri = null
+            pending.success(null)
+            return
+        }
+        val uri = if (requestCode == VISION_CAMERA_REQUEST_CODE) {
+            pendingVisionCameraUri
+        } else {
+            data?.data ?: data?.clipData?.let { clip ->
+                if (clip.itemCount > 0) clip.getItemAt(0).uri else null
+            }
+        }
+        pendingVisionCameraUri = null
+        if (uri == null) {
+            pending.success(null)
+            return
+        }
+        Thread {
+            try {
+                val payload = decodeAndCompressVisionImage(uri, source)
+                runOnUiThread {
+                    if (payload == null) {
+                        pending.error("VISION_DECODE_FAILED", "Não foi possível decodificar a imagem.", null)
+                    } else {
+                        pending.success(payload)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    pending.error("VISION_ERROR", e.message ?: "Falha ao processar imagem.", null)
+                }
+            } finally {
+                if (requestCode == VISION_CAMERA_REQUEST_CODE) {
+                    safely("cleanupVisionTemp") {
+                        File(cacheDir, "vision").listFiles()?.forEach { it.delete() }
+                    }
+                }
+            }
+        }.start()
     }
 
     /** Permite abrir sobre a tela de bloqueio quando a ativação por voz acorda o app. */
@@ -157,6 +376,13 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         if (intent?.getBooleanExtra(UltronAudioService.EXTRA_WAKE_WORD, false) == true) {
             applyLockScreenMode(true)
             intent.removeExtra(UltronAudioService.EXTRA_WAKE_WORD)
+        }
+        if (intent?.getBooleanExtra(FloatingOrbService.EXTRA_ORB_VOICE_TRIGGER, false) == true) {
+            val requireUnlock = intent.getBooleanExtra(FloatingOrbService.EXTRA_ORB_REQUIRE_UNLOCK, false)
+            applyLockScreenMode(true)
+            intent.removeExtra(FloatingOrbService.EXTRA_ORB_VOICE_TRIGGER)
+            intent.removeExtra(FloatingOrbService.EXTRA_ORB_REQUIRE_UNLOCK)
+            notifyFloatingOrbTap(requireUnlock)
         }
         if (intent?.getBooleanExtra(BootReceiver.EXTRA_REARM_SENTINEL, false) == true) {
             intent.removeExtra(BootReceiver.EXTRA_REARM_SENTINEL)
@@ -180,8 +406,53 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         }
     }
 
+    private fun capturePairingIntent(intent: Intent?, notifyChannel: Boolean = false) {
+        val data = intent?.data ?: return
+        if (!data.scheme.equals("ultron", ignoreCase = true)) {
+            return
+        }
+        if (data.host.equals("pair", ignoreCase = true)) {
+            val uriString = data.toString()
+            pendingPairingUri = uriString
+            if (notifyChannel) {
+                deviceChannel?.invokeMethod("onPairingUriReceived", uriString)
+            }
+        } else if (data.host.equals("spotify-callback", ignoreCase = true)) {
+            val uriString = data.toString()
+            pendingSpotifyCallbackUri = uriString
+            if (notifyChannel) {
+                deviceChannel?.invokeMethod("onSpotifyCallbackUriReceived", uriString)
+            }
+        }
+    }
+
+    private fun captureNfcIntent(intent: Intent?, notifyChannel: Boolean = false) {
+        val action = intent?.action ?: return
+        if (action != NfcAdapter.ACTION_NDEF_DISCOVERED &&
+            action != NfcAdapter.ACTION_TECH_DISCOVERED &&
+            action != NfcAdapter.ACTION_TAG_DISCOVERED
+        ) {
+            return
+        }
+        val tag: Tag? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(NfcAdapter.EXTRA_TAG)
+        }
+        val rawId = tag?.id ?: return
+        if (rawId.isEmpty()) return
+        val uidHex = rawId.joinToString("") { b -> "%02X".format(b) }
+        pendingNfcUnlockUid = uidHex
+        if (notifyChannel) {
+            nfcChannel?.invokeMethod("onNfcTagDetected", uidHex)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         captureTileIntent(intent)
+        capturePairingIntent(intent, notifyChannel = false)
+        captureNfcIntent(intent, notifyChannel = false)
         handleWakeIntent(intent)
         super.onCreate(savedInstanceState)
     }
@@ -190,35 +461,114 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         super.onNewIntent(intent)
         setIntent(intent)
         captureTileIntent(intent)
+        capturePairingIntent(intent, notifyChannel = true)
+        captureNfcIntent(intent, notifyChannel = true)
         handleWakeIntent(intent)
     }
 
     private var audioCaptureHandler: AudioCaptureHandler? = null
     private var actionsChannel: MethodChannel? = null
     private var pendingTileAction: String? = null
-    private var torchEnabled: Boolean = false
-    private var torchCameraId: String? = null
-    private var cameraManager: CameraManager? = null
+    private var pendingPairingUri: String? = null
+    private var pendingSpotifyCallbackUri: String? = null
     private var deviceChannel: MethodChannel? = null
+    private var nfcChannel: MethodChannel? = null
     private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
     private var isFaceDown: Boolean = false
-    private var pendingSpeechResult: MethodChannel.Result? = null
-    private var inlineRecognizer: SpeechRecognizer? = null
-    private var lastPartialSpeech: String = ""
+    private var pendingVisionResult: MethodChannel.Result? = null
+    private var pendingVisionCameraUri: Uri? = null
+    private var pendingQrResult: MethodChannel.Result? = null
+    private var pendingSafDirResult: MethodChannel.Result? = null
+    private var pendingSafFilesResult: MethodChannel.Result? = null
+    private var pendingNfcUnlockUid: String? = null
+    private var nfcAdapter: NfcAdapter? = null
+    private var nfcReaderEnabled: Boolean = false
+    private var nfcWriteUnlockOnTap: Boolean = false
 
-    private val torchCallback = object : CameraManager.TorchCallback() {
-        override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
-            if (cameraId == torchCameraId) {
-                torchEnabled = enabled
+    private fun writeUnlockUriToTag(tag: Tag): Pair<Boolean, String?> {
+        val message = NdefMessage(arrayOf(NdefRecord.createUri("ultron://unlock")))
+        val ndef = Ndef.get(tag)
+        if (ndef != null) {
+            return try {
+                ndef.connect()
+                if (!ndef.isWritable) {
+                    false to "Tag NFC é somente leitura."
+                } else if (ndef.maxSize < message.toByteArray().size) {
+                    false to "Tag NFC sem espaço suficiente."
+                } else {
+                    ndef.writeNdefMessage(message)
+                    true to null
+                }
+            } catch (e: Exception) {
+                false to (e.message ?: "Falha ao gravar NDEF.")
+            } finally {
+                safely("closeNdef") { ndef.close() }
             }
         }
+        val formatable = NdefFormatable.get(tag)
+        if (formatable != null) {
+            return try {
+                formatable.connect()
+                formatable.format(message)
+                true to null
+            } catch (e: Exception) {
+                false to (e.message ?: "Falha ao formatar NDEF.")
+            } finally {
+                safely("closeNdefFormatable") { formatable.close() }
+            }
+        }
+        return false to "Tag não suporta gravação NDEF."
     }
+
+    private fun attachNfcReaderModeIfNeeded() {
+        if (!nfcReaderEnabled || !isActivityResumed) return
+        val adapter = nfcAdapter ?: NfcAdapter.getDefaultAdapter(this).also { nfcAdapter = it } ?: return
+        if (!adapter.isEnabled) return
+        safely("enableNfcReaderMode") {
+            val flags = NfcAdapter.FLAG_READER_NFC_A or
+                NfcAdapter.FLAG_READER_NFC_B or
+                NfcAdapter.FLAG_READER_NFC_F or
+                NfcAdapter.FLAG_READER_NFC_V or
+                NfcAdapter.FLAG_READER_NFC_BARCODE or
+                NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS
+            adapter.enableReaderMode(this, { tag: Tag? ->
+                val safeTag = tag ?: return@enableReaderMode
+                val rawId = safeTag.id ?: return@enableReaderMode
+                if (rawId.isEmpty()) return@enableReaderMode
+                val uidHex = rawId.joinToString("") { b -> "%02X".format(b) }
+                if (nfcWriteUnlockOnTap) {
+                    val (written, err) = writeUnlockUriToTag(safeTag)
+                    runOnUiThread {
+                        nfcChannel?.invokeMethod(
+                            "onNfcWriteResult",
+                            mapOf(
+                                "uid" to uidHex,
+                                "written" to written,
+                                "error" to err,
+                            ),
+                        )
+                    }
+                }
+                runOnUiThread {
+                    nfcChannel?.invokeMethod("onNfcTagDetected", uidHex)
+                }
+            }, flags, null)
+        }
+    }
+
+    private fun detachNfcReaderMode() {
+        safely("disableNfcReaderMode") {
+            nfcAdapter?.disableReaderMode(this)
+        }
+    }
+    private var pendingCalendarOperation: (() -> Unit)? = null
+    private var pendingCalendarResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         instance = this
-        initTorchManager()
+        DeviceHardwareHelper.initTorch(this)
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as? SensorManager
         accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
@@ -237,6 +587,58 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             activity = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
         )
+
+        nfcChannel?.setMethodCallHandler(null)
+        nfcChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            NFC_CHANNEL,
+        ).apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getNfcStatus" -> {
+                        val adapter = nfcAdapter ?: NfcAdapter.getDefaultAdapter(this@MainActivity).also { nfcAdapter = it }
+                        result.success(
+                            mapOf(
+                                "available" to (adapter != null),
+                                "enabled" to (adapter?.isEnabled == true),
+                            )
+                        )
+                    }
+                    "openNfcSettings" -> {
+                        val nfcIntent = Intent(Settings.ACTION_NFC_SETTINGS).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            startActivity(nfcIntent)
+                        } catch (_: Exception) {
+                            safely("openWirelessSettings") {
+                                startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        }
+                        result.success(true)
+                    }
+                    "startNfcReader" -> {
+                        val adapter = nfcAdapter ?: NfcAdapter.getDefaultAdapter(this@MainActivity).also { nfcAdapter = it }
+                        nfcWriteUnlockOnTap = call.argument<Boolean>("writeUnlockNdef") ?: false
+                        nfcReaderEnabled = true
+                        attachNfcReaderModeIfNeeded()
+                        result.success(adapter != null && adapter.isEnabled)
+                    }
+                    "stopNfcReader" -> {
+                        nfcWriteUnlockOnTap = false
+                        nfcReaderEnabled = false
+                        detachNfcReaderMode()
+                        result.success(true)
+                    }
+                    "consumePendingNfcUnlock" -> {
+                        val uid = pendingNfcUnlockUid
+                        pendingNfcUnlockUid = null
+                        result.success(uid)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
 
         actionsChannel?.setMethodCallHandler(null)
         actionsChannel = MethodChannel(
@@ -287,18 +689,29 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         ) {
             startSentinelService()
         }
+        if (sentinelPrefs.getBoolean(FloatingOrbService.PREF_ORB_ENABLED, false) &&
+            !FloatingOrbService.isRunning &&
+            FloatingOrbService.canDraw(this)
+        ) {
+            FloatingOrbService.start(this)
+        }
         // Entrega com pequeno atraso para o Dart já ter registrado o handler (cold start).
-        window?.decorView?.postDelayed({ deliverPendingWakeWord() }, 600L)
+        window?.decorView?.postDelayed({
+            deliverPendingWakeWord()
+            deliverPendingFloatingOrbTap()
+        }, 600L)
         try {
             accelerometer?.let {
                 sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
             }
         } catch (_: Exception) {
         }
+        attachNfcReaderModeIfNeeded()
     }
 
     override fun onPause() {
         isActivityResumed = false
+        detachNfcReaderMode()
         try {
             sensorManager?.unregisterListener(this)
         } catch (_: Exception) {
@@ -325,25 +738,6 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-    @Suppress("DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == SPEECH_REQUEST_CODE) {
-            isForegroundRecognizerActive = false
-            lastSpeechEndTimestampMs = System.currentTimeMillis()
-            val callback = pendingSpeechResult
-            pendingSpeechResult = null
-            if (callback == null) return
-            if (resultCode == Activity.RESULT_OK && data != null) {
-                val matches = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                val spoken = matches?.firstOrNull()?.trim() ?: ""
-                callback.success(spoken)
-            } else {
-                callback.success("")
-            }
-        }
-    }
-
     override fun onStop() {
         audioCaptureHandler?.stopCapture()
         // Ao sair de cena, volta ao comportamento normal da tela de bloqueio.
@@ -358,111 +752,80 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         actionsChannel = null
         audioCaptureHandler?.release()
         audioCaptureHandler = null
-        destroyInlineRecognizer()
         try {
             sensorManager?.unregisterListener(this)
-            cameraManager?.unregisterTorchCallback(torchCallback)
+            DeviceHardwareHelper.releaseTorch()
         } catch (_: Exception) {
         }
         super.onDestroy()
-    }
-
-    private fun initTorchManager() {
-        try {
-            val cm = getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return
-            cameraManager = cm
-            torchCameraId = cm.cameraIdList.firstOrNull { id ->
-                cm.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-            } ?: cm.cameraIdList.firstOrNull()
-            cm.registerTorchCallback(torchCallback, null)
-        } catch (_: Exception) {
-        }
     }
 
     private fun handleDeviceCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "setTorch" -> {
                 val enabled = call.argument<Boolean>("enabled") ?: false
-                val state = setTorchInternal(enabled)
-                result.success(state)
+                result.success(DeviceHardwareHelper.setTorch(this, enabled))
             }
             "toggleTorch" -> {
-                val state = setTorchInternal(!torchEnabled)
-                result.success(state)
+                result.success(DeviceHardwareHelper.toggleTorch(this))
             }
             "getDeviceStatus" -> {
-                result.success(readDeviceStatus())
+                result.success(DeviceHardwareHelper.readDeviceStatus(this))
             }
             "setVolume" -> {
                 val percent = (call.argument<Int>("percent") ?: 50).coerceIn(0, 100)
-                val updated = setMediaVolumePercent(percent)
-                result.success(updated)
+                result.success(DeviceHardwareHelper.setMediaVolumePercent(this, percent, showUi = true))
             }
             "adjustVolume" -> {
                 val direction = call.argument<String>("direction") ?: "up"
-                val updated = adjustMediaVolume(direction)
-                result.success(updated)
+                result.success(DeviceHardwareHelper.adjustMediaVolume(this, direction, showUi = true))
             }
             "mediaControl" -> {
                 val action = call.argument<String>("action") ?: "play_pause"
-                result.success(dispatchMediaControl(action))
+                val preferredApp = call.argument<String>("preferredApp") ?: ""
+                Thread {
+                    val res = DeviceHardwareHelper.dispatchMediaControlVerified(
+                        this,
+                        action,
+                        preferredApp,
+                    )
+                    runOnUiThread { result.success(res.toMap()) }
+                }.start()
             }
             "vibrate" -> {
                 val durationMs = (call.argument<Int>("durationMs") ?: 180).coerceIn(20, 3000)
-                triggerVibration(durationMs.toLong())
+                DeviceHardwareHelper.triggerVibration(this, durationMs.toLong())
                 result.success(true)
             }
             "openSystemSettings" -> {
                 val target = call.argument<String>("target") ?: "general"
-                val opened = openSettingsPanel(target)
-                result.success(opened)
+                result.success(DeviceHardwareHelper.openSettingsPanel(this, target))
             }
             "openApp" -> {
                 val target = call.argument<String>("target") ?: ""
-                val openedLabel = launchInstalledApp(target)
-                result.success(openedLabel)
+                result.success(DeviceHardwareHelper.launchInstalledApp(this, target))
             }
             "setAlarm" -> {
                 val hour = (call.argument<Int>("hour") ?: 7).coerceIn(0, 23)
                 val minute = (call.argument<Int>("minute") ?: 0).coerceIn(0, 59)
                 val message = call.argument<String>("message") ?: "U.L.T.R.O.N."
-                val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
-                    putExtra(AlarmClock.EXTRA_HOUR, hour)
-                    putExtra(AlarmClock.EXTRA_MINUTES, minute)
-                    putExtra(AlarmClock.EXTRA_MESSAGE, message)
-                    putExtra(AlarmClock.EXTRA_SKIP_UI, false)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
+                DeviceHardwareHelper.setAlarm(this, hour, minute, message)
                 result.success(true)
             }
             "setTimer" -> {
                 val seconds = (call.argument<Int>("seconds") ?: 60).coerceAtLeast(1)
                 val message = call.argument<String>("message") ?: "U.L.T.R.O.N. Timer"
-                val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
-                    putExtra(AlarmClock.EXTRA_LENGTH, seconds)
-                    putExtra(AlarmClock.EXTRA_MESSAGE, message)
-                    putExtra(AlarmClock.EXTRA_SKIP_UI, false)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
+                DeviceHardwareHelper.setTimer(this, seconds, message)
                 result.success(true)
             }
             "openUrl" -> {
                 val rawUrl = call.argument<String>("url") ?: ""
-                val uri = Uri.parse(rawUrl)
-                val intent = Intent(Intent.ACTION_VIEW, uri).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
+                DeviceHardwareHelper.openUrl(this, rawUrl)
                 result.success(true)
             }
             "dialNumber" -> {
-                val number = (call.argument<String>("number") ?: "").replace(Regex("[^0-9+*#]"), "")
-                val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number")).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
+                val number = call.argument<String>("number") ?: ""
+                DeviceHardwareHelper.dialNumber(this, number)
                 result.success(true)
             }
             "shareText" -> {
@@ -478,12 +841,14 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 result.success(true)
             }
             "listenVoice" -> {
-                val prompt = call.argument<String>("prompt") ?: "U.L.T.R.O.N. escutando (fale seu comando)..."
-                val locale = call.argument<String>("locale") ?: "pt-BR"
-                startVoiceCapture(locale, prompt, result)
+                result.error(
+                    "google_stt_blocked",
+                    "Reconhecimento Google desativado por regra do app. Use o microfone nativo AudioRecord.",
+                    null
+                )
             }
             "stopListeningVoice" -> {
-                stopInlineRecognizerEarly()
+                audioCaptureHandler?.stopCapture()
                 result.success(true)
             }
             "setUltronSpeaking" -> {
@@ -492,8 +857,13 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     lastSpeechEndTimestampMs = System.currentTimeMillis()
                 }
                 isUltronSpeakingGlobal = speaking
-                if (!speaking) {
+                if (speaking) {
+                    FloatingOrbService.updateState(OrbState.SPEAKING)
+                } else {
                     UltronTtsHelper.stopAll()
+                    if (FloatingOrbService.currentState == OrbState.SPEAKING) {
+                        FloatingOrbService.updateState(OrbState.IDLE)
+                    }
                 }
                 result.success(true)
             }
@@ -637,285 +1007,301 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     UltronTtsHelper.playAudioBytes(this, bytes, volume, result)
                 }
             }
+            "syncBackgroundVoiceConfig" -> {
+                val wakeProfileArg = call.argument<String>("wakeWordProfile")
+                    ?: UltronAudioService.loadStoredWakeProfile(this).id
+                val cfg = BackgroundVoiceConfig(
+                    sttUrl = call.argument<String>("sttUrl") ?: "",
+                    sttKey = call.argument<String>("sttKey") ?: "",
+                    sttModel = call.argument<String>("sttModel") ?: "whisper-large-v3-turbo",
+                    sttLanguage = call.argument<String>("sttLanguage") ?: "pt",
+                    aiBaseUrl = call.argument<String>("aiBaseUrl") ?: "https://text.pollinations.ai/openai",
+                    aiKey = call.argument<String>("aiKey") ?: "",
+                    aiModel = call.argument<String>("aiModel") ?: "openai",
+                    fishEnabled = call.argument<Boolean>("fishEnabled") ?: false,
+                    fishKey = call.argument<String>("fishKey") ?: "",
+                    fishRefId = call.argument<String>("fishRefId") ?: "",
+                    fishLanguage = call.argument<String>("fishLanguage") ?: "pt",
+                    fishModel = call.argument<String>("fishModel") ?: "s2.1-pro",
+                    whisperMode = call.argument<Boolean>("whisperMode") ?: false,
+                    wakeWordProfile = wakeProfileArg,
+                )
+                BackgroundVoiceConfigStore.save(this, cfg)
+                UltronAudioService.setWakeWordProfile(this, wakeProfileArg)
+                val historyRaw = call.argument<List<Map<String, Any?>>>("recentHistory")
+                if (historyRaw != null) {
+                    BackgroundChatStore.seedForegroundContext(this, historyRaw)
+                }
+                result.success(true)
+            }
+            "getWakeWordProfile" -> {
+                val profile = UltronAudioService.loadStoredWakeProfile(this)
+                result.success(profile.id)
+            }
+            "setWakeWordProfile" -> {
+                val profileId = call.argument<String>("profile") ?: "ultron"
+                val profile = UltronAudioService.setWakeWordProfile(this, profileId)
+                result.success(
+                    mapOf(
+                        "id" to profile.id,
+                        "label" to profile.displayName,
+                        "hotSwapped" to UltronAudioService.isRunning,
+                    ),
+                )
+            }
+            "isFloatingOrbRunning" -> {
+                result.success(FloatingOrbService.isRunning)
+            }
+            "setFloatingOrb" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                if (!enabled) {
+                    FloatingOrbService.stop(this)
+                    result.success(false)
+                } else {
+                    val started = FloatingOrbService.start(this)
+                    result.success(started)
+                }
+            }
+            "updateFloatingOrbState" -> {
+                val stateId = call.argument<String>("state") ?: "ocioso"
+                FloatingOrbService.updateStateById(stateId)
+                result.success(true)
+            }
+            "setFloatingOrbAuthState" -> {
+                val locked = call.argument<Boolean>("locked") ?: true
+                val accessLevel = call.argument<String>("accessLevel") ?: "locked"
+                FloatingOrbService.updateAuthState(locked, accessLevel)
+                result.success(true)
+            }
+            "consumePendingFloatingOrbTap" -> {
+                result.success(consumePendingOrbTap())
+            }
+            "consumePendingBackgroundTurns" -> {
+                result.success(BackgroundChatStore.consumePendingTurns(this))
+            }
+            "canDrawOverlays" -> {
+                result.success(DeviceHardwareHelper.canLaunchActivitiesFromBackground(this))
+            }
+            "requestOverlayPermission" -> {
+                if (DeviceHardwareHelper.canLaunchActivitiesFromBackground(this)) {
+                    result.success(true)
+                } else {
+                    try {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:$packageName"),
+                            ),
+                        )
+                    } catch (_: Exception) {
+                        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                    }
+                    result.success(false)
+                }
+            }
+            "captureVisionImage" -> {
+                val source = (call.argument<String>("source") ?: "camera").lowercase()
+                if (pendingVisionResult != null) {
+                    result.error("VISION_BUSY", "Já existe uma captura de imagem em andamento.", null)
+                    return
+                }
+                startVisionCapture(source, result)
+            }
+            "scanPairingQr" -> {
+                if (pendingQrResult != null) {
+                    result.error("QR_BUSY", "Já existe uma leitura de QR Code em andamento.", null)
+                    return
+                }
+                startPairingQrScanner(result)
+            }
+            "consumePendingPairingUri" -> {
+                val uri = pendingPairingUri
+                pendingPairingUri = null
+                result.success(uri)
+            }
+            "consumePendingSpotifyCallbackUri" -> {
+                val uri = pendingSpotifyCallbackUri
+                pendingSpotifyCallbackUri = null
+                result.success(uri)
+            }
+            "getCalendarEvents" -> {
+                val nowMs = System.currentTimeMillis()
+                val startMs = (call.argument<Number>("startMs")?.toLong()) ?: nowMs
+                val endMs = (call.argument<Number>("endMs")?.toLong()) ?: (startMs + 86_400_000L)
+                val limit = ((call.argument<Number>("limit")?.toInt()) ?: 20).coerceIn(1, 50)
+                ensureCalendarPermissions(writeRequired = false, result = result) {
+                    queryCalendarEvents(startMs, endMs, limit, result)
+                }
+            }
+            "createCalendarEvent" -> {
+                val title = (call.argument<String>("title") ?: "").trim()
+                if (title.isEmpty()) {
+                    result.error("INVALID_ARGUMENT", "Título do evento não pode ser vazio.", null)
+                    return
+                }
+                val startMs = call.argument<Number>("startMs")?.toLong() ?: System.currentTimeMillis()
+                val endMs = call.argument<Number>("endMs")?.toLong() ?: (startMs + 3_600_000L)
+                val description = call.argument<String>("description") ?: ""
+                val location = call.argument<String>("location") ?: ""
+                val allDay = call.argument<Boolean>("allDay") ?: false
+                ensureCalendarPermissions(writeRequired = true, result = result) {
+                    insertOrOpenCalendarEvent(
+                        title = title,
+                        startMs = startMs,
+                        endMs = endMs,
+                        description = description,
+                        location = location,
+                        allDay = allDay,
+                        result = result,
+                    )
+                }
+            }
+            "deleteCalendarEvent" -> {
+                val eventId = (call.argument<String>("eventId") ?: "").trim()
+                val title = (call.argument<String>("title") ?: "").trim()
+                if (eventId.isEmpty() && title.isEmpty()) {
+                    result.error("INVALID_ARGUMENT", "Informe o ID ou título do evento para cancelar.", null)
+                    return
+                }
+                ensureCalendarPermissions(writeRequired = true, result = result) {
+                    deleteCalendarEventByIdOrTitle(eventId = eventId, title = title, result = result)
+                }
+            }
+            "scheduleReminderAlarm" -> {
+                val id = call.argument<Number>("id")?.toInt() ?: 1
+                val title = (call.argument<String>("title") ?: "Lembrete U.L.T.R.O.N.").trim()
+                val triggerAtMs = call.argument<Number>("triggerAtMs")?.toLong()
+                    ?: (System.currentTimeMillis() + 60_000L)
+                result.success(scheduleLocalReminderAlarm(id, title, triggerAtMs))
+            }
+            "cancelReminderAlarm" -> {
+                val id = call.argument<Number>("id")?.toInt() ?: 1
+                result.success(cancelLocalReminderAlarm(id))
+            }
+            "scheduleWorkflowAlarm" -> {
+                val id = call.argument<Number>("id")?.toInt() ?: 1
+                val name = (call.argument<String>("name") ?: "Fluxo #$id").trim()
+                val triggerAtMs = call.argument<Number>("triggerAtMs")?.toLong()
+                    ?: (System.currentTimeMillis() + 60_000L)
+                val intervalMinutes = call.argument<Number>("intervalMinutes")?.toInt() ?: 0
+                result.success(scheduleLocalWorkflowAlarm(id, name, triggerAtMs, intervalMinutes))
+            }
+            "cancelWorkflowAlarm" -> {
+                val id = call.argument<Number>("id")?.toInt() ?: 1
+                result.success(cancelLocalWorkflowAlarm(id))
+            }
+            "consumePendingWorkflowIds" -> {
+                result.success(consumePendingWorkflowIds())
+            }
+            "getDefaultDownloadsPath" -> {
+                val dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                result.success(dl?.absolutePath)
+            }
+            "pickDirectorySaf" -> {
+                if (pendingSafDirResult != null) {
+                    result.error("SAF_BUSY", "Seleção de pasta SAF já em andamento.", null)
+                    return
+                }
+                try {
+                    pendingSafDirResult = result
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        addFlags(
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+                        )
+                    }
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(intent, SAF_PICK_DIR_REQUEST_CODE)
+                } catch (e: Exception) {
+                    pendingSafDirResult = null
+                    val dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    result.success(dl?.absolutePath)
+                }
+            }
+            "pickMultipleFilesSaf" -> {
+                if (pendingSafFilesResult != null) {
+                    result.error("SAF_BUSY", "Seleção múltipla de arquivos SAF já em andamento.", null)
+                    return
+                }
+                try {
+                    pendingSafFilesResult = result
+                    val rawMimes = call.argument<List<String>>("mimeTypes")
+                    val mimeArray = if (rawMimes != null && rawMimes.isNotEmpty()) {
+                        rawMimes.toTypedArray()
+                    } else {
+                        arrayOf(
+                            "application/pdf",
+                            "text/plain",
+                            "text/markdown",
+                            "text/csv",
+                            "image/*",
+                        )
+                    }
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_MIME_TYPES, mimeArray)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(intent, SAF_PICK_FILES_REQUEST_CODE)
+                } catch (e: Exception) {
+                    pendingSafFilesResult = null
+                    result.success(emptyList<String>())
+                }
+            }
+            "convertImageFileNative" -> {
+                val sourcePath = (call.argument<String>("sourcePath") ?: "").trim()
+                val destPath = (call.argument<String>("destPath") ?: "").trim()
+                val format = (call.argument<String>("format") ?: "jpg").trim().lowercase()
+                if (sourcePath.isEmpty() || destPath.isEmpty()) {
+                    result.success(false)
+                    return
+                }
+                result.success(convertImageFileOnDisk(sourcePath, destPath, format))
+            }
             else -> result.notImplemented()
         }
     }
 
-    private fun setTorchInternal(enabled: Boolean): Boolean {
-        if (cameraManager == null || torchCameraId == null) {
-            initTorchManager()
-        }
-        val cm = cameraManager ?: throw IllegalStateException("CameraManager indisponível neste aparelho.")
-        val id = torchCameraId ?: throw IllegalStateException("Flash/Lanterna não encontrado.")
-        cm.setTorchMode(id, enabled)
-        torchEnabled = enabled
-        return torchEnabled
-    }
-
-    private fun setMediaVolumePercent(percent: Int): Int {
-        val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-        val targetIndex = ((percent / 100.0) * max).roundToInt().coerceIn(0, max)
-        audio.setStreamVolume(AudioManager.STREAM_MUSIC, targetIndex, AudioManager.FLAG_SHOW_UI)
-        return ((targetIndex.toDouble() / max) * 100.0).roundToInt()
-    }
-
-    private fun adjustMediaVolume(direction: String): Int {
-        val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        when (direction.lowercase()) {
-            "up" -> audio.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_RAISE,
-                AudioManager.FLAG_SHOW_UI
-            )
-            "down" -> audio.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_LOWER,
-                AudioManager.FLAG_SHOW_UI
-            )
-            "mute" -> audio.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_MUTE,
-                AudioManager.FLAG_SHOW_UI
-            )
-            "unmute" -> audio.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_UNMUTE,
-                AudioManager.FLAG_SHOW_UI
-            )
-        }
-        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-        val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
-        return ((cur.toDouble() / max) * 100.0).roundToInt()
-    }
-
-    private fun dispatchMediaControl(action: String): Boolean {
-        val keyCode = when (action.trim().lowercase()) {
-            "play" -> KeyEvent.KEYCODE_MEDIA_PLAY
-            "pause" -> KeyEvent.KEYCODE_MEDIA_PAUSE
-            "play_pause", "toggle" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-            "next" -> KeyEvent.KEYCODE_MEDIA_NEXT
-            "previous", "prev" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
-            "stop" -> KeyEvent.KEYCODE_MEDIA_STOP
-            else -> return false
-        }
-        val audio = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
-        val eventTime = SystemClock.uptimeMillis()
-        audio.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0))
-        audio.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0))
-        return true
-    }
-
-    private fun triggerVibration(durationMs: Long) {
-        val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-            vm?.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-        }
-        if (vibrator == null || !vibrator.hasVibrator()) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(
-                VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE)
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(durationMs)
-        }
-    }
-
-    private fun openSettingsPanel(target: String): Boolean {
-        val action = when (target.lowercase()) {
-            "wifi" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                Settings.Panel.ACTION_WIFI
+    private fun resolveSafTreeUriToPath(treeUri: Uri?): String? {
+        if (treeUri == null) return null
+        return try {
+            val seg = treeUri.lastPathSegment ?: return null
+            if (seg.startsWith("primary:")) {
+                val rel = seg.removePrefix("primary:")
+                File(Environment.getExternalStorageDirectory(), rel).absolutePath
+            } else if (seg.contains(":")) {
+                val rel = seg.substringAfter(":")
+                File(Environment.getExternalStorageDirectory(), rel).absolutePath
             } else {
-                Settings.ACTION_WIFI_SETTINGS
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)?.absolutePath
             }
-            "internet", "internet_panel" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                Settings.Panel.ACTION_INTERNET_CONNECTIVITY
-            } else {
-                Settings.ACTION_WIFI_SETTINGS
-            }
-            "volume_panel" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                Settings.Panel.ACTION_VOLUME
-            } else {
-                Settings.ACTION_SOUND_SETTINGS
-            }
-            "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
-            "display", "brilho", "tela" -> Settings.ACTION_DISPLAY_SETTINGS
-            "sound", "som", "audio" -> Settings.ACTION_SOUND_SETTINGS
-            "battery", "bateria" -> Settings.ACTION_BATTERY_SAVER_SETTINGS
-            "location", "gps", "localizacao" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
-            "security", "seguranca", "biometria" -> Settings.ACTION_SECURITY_SETTINGS
-            "apps", "aplicativos" -> Settings.ACTION_APPLICATION_SETTINGS
-            else -> Settings.ACTION_SETTINGS
+        } catch (_: Exception) {
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)?.absolutePath
         }
-        val intent = Intent(action).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        startActivity(intent)
-        return true
     }
 
-    private fun launchInstalledApp(rawQuery: String): String {
-        val query = rawQuery.trim().lowercase()
-        if (query.isEmpty()) throw IllegalArgumentException("Informe o nome do aplicativo.")
-
-        // 1. Built-in system actions
-        when (query) {
-            "camera", "câmera", "foto" -> {
-                val intent = Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
-                return "Câmera"
+    private fun convertImageFileOnDisk(sourcePath: String, destPath: String, format: String): Boolean {
+        return try {
+            val bmp = BitmapFactory.decodeFile(sourcePath) ?: return false
+            val outFile = File(destPath)
+            outFile.parentFile?.mkdirs()
+            val compressFmt = if (format == "png") {
+                Bitmap.CompressFormat.PNG
+            } else {
+                Bitmap.CompressFormat.JPEG
             }
-            "configuracoes", "configurações", "ajustes", "settings" -> {
-                openSettingsPanel("general")
-                return "Configurações"
+            outFile.outputStream().use { out ->
+                bmp.compress(compressFmt, 92, out)
             }
-            "wifi", "wi-fi" -> {
-                openSettingsPanel("wifi")
-                return "Painel Wi-Fi"
-            }
-            "bluetooth" -> {
-                openSettingsPanel("bluetooth")
-                return "Bluetooth"
-            }
-            "telefone", "discador", "chamada" -> {
-                val intent = Intent(Intent.ACTION_DIAL).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
-                return "Telefone"
-            }
-            "relogio", "relógio", "alarme", "despertador" -> {
-                val intent = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
-                return "Relógio / Alarmes"
-            }
-            "navegador", "browser", "internet" -> {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com")).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
-                return "Navegador"
-            }
+            bmp.recycle()
+            outFile.exists() && outFile.length() > 0L
+        } catch (_: Exception) {
+            false
         }
-
-        // 2. Known package aliases
-        val knownPackages = mapOf(
-            "whatsapp" to listOf("com.whatsapp", "com.whatsapp.w4b"),
-            "youtube" to listOf("com.google.android.youtube"),
-            "instagram" to listOf("com.instagram.android"),
-            "chrome" to listOf("com.android.chrome"),
-            "spotify" to listOf("com.spotify.music"),
-            "gmail" to listOf("com.google.android.gm"),
-            "maps" to listOf("com.google.android.apps.maps"),
-            "mapa" to listOf("com.google.android.apps.maps"),
-            "mapas" to listOf("com.google.android.apps.maps"),
-            "telegram" to listOf("org.telegram.messenger", "org.telegram.messenger.web"),
-            "calculadora" to listOf("com.sec.android.app.popupcalculator", "com.google.android.calculator"),
-            "galeria" to listOf("com.sec.android.gallery3d", "com.google.android.apps.photos"),
-            "fotos" to listOf("com.google.android.apps.photos", "com.sec.android.gallery3d"),
-            "arquivos" to listOf("com.sec.android.app.myfiles", "com.google.android.apps.nbu.files"),
-            "play store" to listOf("com.android.vending"),
-            "tiktok" to listOf("com.zhiliaoapp.musically"),
-            "netflix" to listOf("com.netflix.mediaclient"),
-            "obsidian" to listOf("md.obsidian")
-        )
-
-        val pm = packageManager
-        knownPackages[query]?.forEach { pkg ->
-            val launch = pm.getLaunchIntentForPackage(pkg)
-            if (launch != null) {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(launch)
-                return query.replaceFirstChar { it.uppercase() }
-            }
-        }
-
-        // 3. Search all installed launcher activities by label or package name
-        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-            addCategory(Intent.CATEGORY_LAUNCHER)
-        }
-        val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
-        for (info in resolveInfos) {
-            val label = info.loadLabel(pm).toString()
-            val pkg = info.activityInfo.packageName
-            if (label.lowercase().contains(query) || pkg.lowercase().contains(query)) {
-                val launch = pm.getLaunchIntentForPackage(pkg)
-                if (launch != null) {
-                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(launch)
-                    return label
-                }
-            }
-        }
-
-        throw IllegalStateException("Aplicativo '$rawQuery' não encontrado no dispositivo.")
-    }
-
-    private fun readDeviceStatus(): Map<String, Any> {
-        // Battery
-        val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-        val batteryIntent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val level = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-            ?: batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-            ?: -1
-        val status = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-        val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-            status == BatteryManager.BATTERY_STATUS_FULL
-        val tempTenths = batteryIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
-        val tempC = tempTenths / 10.0
-
-        // Audio
-        val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val maxVol = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-        val curVol = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
-        val volumePercent = ((curVol.toDouble() / maxVol) * 100.0).roundToInt()
-        val ringerMode = when (audio.ringerMode) {
-            AudioManager.RINGER_MODE_SILENT -> "SILENCIOSO"
-            AudioManager.RINGER_MODE_VIBRATE -> "VIBRAR"
-            else -> "NORMAL"
-        }
-
-        // Memory (RAM)
-        val actManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val memInfo = ActivityManager.MemoryInfo()
-        actManager.getMemoryInfo(memInfo)
-        val ramTotalMb = (memInfo.totalMem / (1024 * 1024)).toInt()
-        val ramFreeMb = (memInfo.availMem / (1024 * 1024)).toInt()
-        val ramUsedMb = (ramTotalMb - ramFreeMb).coerceAtLeast(0)
-
-        // Connectivity
-        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val capabilities = cm?.getNetworkCapabilities(cm.activeNetwork)
-        val wifiConnected = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-        val cellularConnected = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
-
-        val manufacturer = Build.MANUFACTURER.uppercase()
-        val model = Build.MODEL
-        val deviceModel = if (model.uppercase().startsWith(manufacturer)) model else "$manufacturer $model"
-
-        return mapOf(
-            "batteryLevel" to level,
-            "isCharging" to isCharging,
-            "batteryTempC" to tempC,
-            "torchOn" to torchEnabled,
-            "volumePercent" to volumePercent,
-            "ringerMode" to ringerMode,
-            "ramUsedMb" to ramUsedMb,
-            "ramTotalMb" to ramTotalMb,
-            "ramFreeMb" to ramFreeMb,
-            "deviceModel" to deviceModel,
-            "androidVersion" to "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
-            "wifiConnected" to wifiConnected,
-            "cellularConnected" to cellularConnected
-        )
     }
 
     private fun isNotificationServiceEnabled(): Boolean {
@@ -1053,178 +1439,548 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         return "App de SMS aberto para $label com a mensagem: \"$cleanText\"."
     }
 
-    private fun startVoiceCapture(locale: String, prompt: String, result: MethodChannel.Result) {
-        // Interrompe imediatamente qualquer fala/TTS do Ultron antes de abrir o microfone
-        UltronTtsHelper.stopAll()
-        isUltronSpeakingGlobal = false
-        isForegroundRecognizerActive = true
-        destroyInlineRecognizer()
-        pendingSpeechResult?.success("")
-        pendingSpeechResult = result
-        lastPartialSpeech = ""
-
-        val hasMicPerm = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (!hasMicPerm) {
+    private fun startPairingQrScanner(result: MethodChannel.Result) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingQrResult = result
             ActivityCompat.requestPermissions(
                 this,
-                arrayOf(Manifest.permission.RECORD_AUDIO),
-                9045
+                arrayOf(Manifest.permission.CAMERA),
+                PAIRING_QR_CAMERA_PERM_REQUEST_CODE,
             )
-            launchSystemSpeechDialog(locale, prompt)
             return
         }
-
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            launchSystemSpeechDialog(locale, prompt)
-            return
-        }
-
-        try {
-            val sr = SpeechRecognizer.createSpeechRecognizer(this)
-            inlineRecognizer = sr
-            var speechStarted = false
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                )
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, locale)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-                putExtra(
-                    RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                    1800L
-                )
-                putExtra(
-                    RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                    1400L
-                )
-            }
-
-            sr.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {
-                    deviceChannel?.invokeMethod("onSpeechRms", 0.15)
-                }
-
-                override fun onBeginningOfSpeech() {
-                    speechStarted = true
-                }
-
-                override fun onRmsChanged(rmsdB: Float) {
-                    val normalized = ((rmsdB + 2.0f) / 12.0f).coerceIn(0.0f, 1.0f).toDouble()
-                    deviceChannel?.invokeMethod("onSpeechRms", normalized)
-                }
-
-                override fun onBufferReceived(buffer: ByteArray?) {}
-
-                override fun onEndOfSpeech() {
-                    deviceChannel?.invokeMethod("onSpeechRms", 0.0)
-                }
-
-                override fun onPartialResults(partialResults: Bundle?) {
-                    val partials =
-                        partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val best = partials?.firstOrNull()?.trim() ?: ""
-                    if (best.isNotEmpty()) {
-                        lastPartialSpeech = best
-                        deviceChannel?.invokeMethod("onSpeechPartial", best)
-                    }
-                }
-
-                override fun onResults(results: Bundle?) {
-                    val matches =
-                        results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val best = matches?.firstOrNull()?.trim().orEmpty().ifEmpty { lastPartialSpeech }
-                    finishInlineSpeech(best)
-                }
-
-                override fun onError(error: Int) {
-                    // Se falhou na inicialização do motor antes de começar a falar, usa o diálogo nativo de fallback
-                    if (!speechStarted && lastPartialSpeech.isEmpty() &&
-                        (error == SpeechRecognizer.ERROR_CLIENT ||
-                            error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
-                            error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY)
-                    ) {
-                        destroyInlineRecognizer()
-                        launchSystemSpeechDialog(locale, prompt)
-                        return
-                    }
-                    // Se o usuário já havia falado algo capturado nos parciais, aproveita o texto parcial!
-                    finishInlineSpeech(lastPartialSpeech)
-                }
-
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-
-            sr.startListening(intent)
-        } catch (_: Exception) {
-            destroyInlineRecognizer()
-            launchSystemSpeechDialog(locale, prompt)
-        }
+        launchPairingQrScanner(result)
     }
 
-    private fun finishInlineSpeech(spoken: String) {
-        deviceChannel?.invokeMethod("onSpeechRms", 0.0)
-        destroyInlineRecognizer()
-        isForegroundRecognizerActive = false
-        lastSpeechEndTimestampMs = System.currentTimeMillis()
-        val cb = pendingSpeechResult
-        pendingSpeechResult = null
-        cb?.success(spoken.trim())
-    }
-
-    private fun stopInlineRecognizerEarly() {
-        val sr = inlineRecognizer
-        if (sr != null) {
-            try {
-                sr.stopListening()
-            } catch (_: Exception) {
-                finishInlineSpeech(lastPartialSpeech)
-            }
-        }
-    }
-
-    private fun destroyInlineRecognizer() {
+    @Suppress("DEPRECATION")
+    private fun launchPairingQrScanner(result: MethodChannel.Result) {
         try {
-            inlineRecognizer?.cancel()
-        } catch (_: Exception) {
-        }
-        try {
-            inlineRecognizer?.destroy()
-        } catch (_: Exception) {
-        }
-        inlineRecognizer = null
-    }
-
-    private fun launchSystemSpeechDialog(locale: String, prompt: String) {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-            )
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, locale)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, locale)
-            putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        }
-        try {
-            @Suppress("DEPRECATION")
-            startActivityForResult(intent, SPEECH_REQUEST_CODE)
+            pendingQrResult = result
+            val intent = IntentIntegrator(this).apply {
+                setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                setPrompt("Aponte para o QR Code no U.L.T.R.O.N. Desktop")
+                setBeepEnabled(false)
+                setBarcodeImageEnabled(false)
+                setOrientationLocked(true)
+            }.createScanIntent()
+            startActivityForResult(intent, PAIRING_QR_REQUEST_CODE)
         } catch (e: Exception) {
-            isForegroundRecognizerActive = false
-            val cb = pendingSpeechResult
-            pendingSpeechResult = null
-            cb?.error(
-                "SPEECH_UNAVAILABLE",
-                "Reconhecimento de voz não disponível neste dispositivo (${e.message}).",
-                null
+            pendingQrResult = null
+            result.error("QR_SCANNER_UNAVAILABLE", e.message ?: "Leitor de QR Code indisponível.", null)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun startVisionCapture(source: String, result: MethodChannel.Result) {
+        if (source == "gallery") {
+            pendingVisionResult = result
+            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                addCategory(Intent.CATEGORY_OPENABLE)
+            }
+            try {
+                startActivityForResult(
+                    Intent.createChooser(intent, "Selecionar imagem para Visão"),
+                    VISION_GALLERY_REQUEST_CODE,
+                )
+            } catch (e: Exception) {
+                pendingVisionResult = null
+                result.error("GALLERY_UNAVAILABLE", e.message ?: "Galeria indisponível.", null)
+            }
+            return
+        }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingVisionResult = result
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.CAMERA),
+                VISION_CAMERA_PERM_REQUEST_CODE,
             )
+            return
+        }
+
+        try {
+            val visionDir = File(cacheDir, "vision").apply { mkdirs() }
+            val imageFile = File(visionDir, "capture_${System.currentTimeMillis()}.jpg")
+            val photoUri = FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                imageFile,
+            )
+            pendingVisionCameraUri = photoUri
+            pendingVisionResult = result
+            val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+                putExtra(MediaStore.EXTRA_OUTPUT, photoUri)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivityForResult(intent, VISION_CAMERA_REQUEST_CODE)
+        } catch (e: Exception) {
+            pendingVisionResult = null
+            pendingVisionCameraUri = null
+            result.error("CAMERA_UNAVAILABLE", e.message ?: "Câmera indisponível.", null)
+        }
+    }
+
+    private fun decodeAndCompressVisionImage(uri: Uri, source: String): Map<String, Any>? {
+        val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        // inJustDecodeBounds = true always returns null from decodeStream; return Boolean to check stream open.
+        val boundsRead = contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, boundsOpts)
+            true
+        } ?: false
+        if (!boundsRead) return null
+
+        val rawW = boundsOpts.outWidth
+        val rawH = boundsOpts.outHeight
+        if (rawW <= 0 || rawH <= 0) return null
+
+        var sampleSize = 1
+        while (max(rawW / sampleSize, rawH / sampleSize) > VISION_MAX_DIM_PX * 2) {
+            sampleSize *= 2
+        }
+        val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        val decoded = contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, decodeOpts)
+        } ?: return null
+
+        val rotated = applyExifOrientationIfNeeded(uri, decoded)
+        val longest = max(rotated.width, rotated.height)
+        val scaled = if (longest > VISION_MAX_DIM_PX) {
+            val scale = VISION_MAX_DIM_PX.toFloat() / longest.toFloat()
+            val targetW = max(1, (rotated.width * scale).roundToInt())
+            val targetH = max(1, (rotated.height * scale).roundToInt())
+            Bitmap.createScaledBitmap(rotated, targetW, targetH, true).also {
+                if (it != rotated) rotated.recycle()
+            }
+        } else {
+            rotated
+        }
+
+        val out = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.JPEG, VISION_JPEG_QUALITY, out)
+        val finalW = scaled.width
+        val finalH = scaled.height
+        scaled.recycle()
+        val bytes = out.toByteArray()
+        val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        return mapOf(
+            "base64" to encoded,
+            "mimeType" to "image/jpeg",
+            "width" to finalW,
+            "height" to finalH,
+            "byteSize" to bytes.size,
+            "source" to source,
+        )
+    }
+
+    private fun applyExifOrientationIfNeeded(uri: Uri, bitmap: Bitmap): Bitmap {
+        val orientation = try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                ExifInterface(input).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL,
+                )
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+        val degrees = when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+        if (degrees == 0f) return bitmap
+        val matrix = Matrix().apply { postRotate(degrees) }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also {
+            if (it != bitmap) bitmap.recycle()
+        }
+    }
+
+    private fun ensureCalendarPermissions(
+        writeRequired: Boolean,
+        result: MethodChannel.Result,
+        onGranted: () -> Unit,
+    ) {
+        val readOk = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.READ_CALENDAR,
+        ) == PackageManager.PERMISSION_GRANTED
+        val writeOk = !writeRequired || ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.WRITE_CALENDAR,
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (readOk && writeOk) {
+            onGranted()
+            return
+        }
+        if (pendingCalendarResult != null) {
+            result.error("CALENDAR_BUSY", "Já existe uma solicitação de agenda em andamento.", null)
+            return
+        }
+        pendingCalendarResult = result
+        pendingCalendarOperation = {
+            val writeNowOk = !writeRequired || ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.WRITE_CALENDAR,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (writeNowOk) {
+                onGranted()
+            } else {
+                result.error("CALENDAR_PERMISSION_DENIED", "Permissão de escrita na Agenda negada.", null)
+            }
+        }
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+            CALENDAR_PERM_REQUEST_CODE,
+        )
+    }
+
+    private fun queryCalendarEvents(
+        startMs: Long,
+        endMs: Long,
+        limit: Int,
+        result: MethodChannel.Result,
+    ) {
+        try {
+            val projection = arrayOf(
+                CalendarContract.Instances.EVENT_ID,
+                CalendarContract.Instances.TITLE,
+                CalendarContract.Instances.BEGIN,
+                CalendarContract.Instances.END,
+                CalendarContract.Instances.ALL_DAY,
+                CalendarContract.Instances.EVENT_LOCATION,
+                CalendarContract.Instances.CALENDAR_DISPLAY_NAME,
+                CalendarContract.Instances.DESCRIPTION,
+            )
+            val items = mutableListOf<Map<String, Any?>>()
+            CalendarContract.Instances.query(
+                contentResolver,
+                projection,
+                startMs,
+                endMs,
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndex(CalendarContract.Instances.EVENT_ID)
+                val titleIdx = cursor.getColumnIndex(CalendarContract.Instances.TITLE)
+                val beginIdx = cursor.getColumnIndex(CalendarContract.Instances.BEGIN)
+                val endIdx = cursor.getColumnIndex(CalendarContract.Instances.END)
+                val allDayIdx = cursor.getColumnIndex(CalendarContract.Instances.ALL_DAY)
+                val locIdx = cursor.getColumnIndex(CalendarContract.Instances.EVENT_LOCATION)
+                val calIdx = cursor.getColumnIndex(CalendarContract.Instances.CALENDAR_DISPLAY_NAME)
+                val descIdx = cursor.getColumnIndex(CalendarContract.Instances.DESCRIPTION)
+
+                while (cursor.moveToNext()) {
+                    val title = if (titleIdx >= 0) cursor.getString(titleIdx) ?: "" else ""
+                    if (title.isBlank()) continue
+                    val begin = if (beginIdx >= 0) cursor.getLong(beginIdx) else startMs
+                    val end = if (endIdx >= 0) cursor.getLong(endIdx) else begin
+                    items.add(
+                        mapOf(
+                            "id" to (if (idIdx >= 0) cursor.getLong(idIdx).toString() else ""),
+                            "title" to title.trim(),
+                            "startMs" to begin,
+                            "endMs" to end,
+                            "allDay" to (if (allDayIdx >= 0) cursor.getInt(allDayIdx) == 1 else false),
+                            "location" to (if (locIdx >= 0) cursor.getString(locIdx) ?: "" else ""),
+                            "calendarName" to (if (calIdx >= 0) cursor.getString(calIdx) ?: "" else ""),
+                            "description" to (if (descIdx >= 0) cursor.getString(descIdx) ?: "" else ""),
+                        ),
+                    )
+                }
+            }
+            val sorted = items.sortedBy { (it["startMs"] as? Long) ?: 0L }.take(limit)
+            result.success(sorted)
+        } catch (e: Exception) {
+            result.error("CALENDAR_READ_ERROR", e.message ?: "Falha ao ler eventos da Agenda.", null)
+        }
+    }
+
+    private fun findPrimaryWritableCalendar(): Pair<Long, String>? {
+        val projection = arrayOf(
+            CalendarContract.Calendars._ID,
+            CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
+            CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
+            CalendarContract.Calendars.VISIBLE,
+            CalendarContract.Calendars.IS_PRIMARY,
+        )
+        var fallback: Pair<Long, String>? = null
+        contentResolver.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            projection,
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val idIdx = cursor.getColumnIndex(CalendarContract.Calendars._ID)
+            val nameIdx = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME)
+            val accessIdx = cursor.getColumnIndex(CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL)
+            val visibleIdx = cursor.getColumnIndex(CalendarContract.Calendars.VISIBLE)
+            val primaryIdx = cursor.getColumnIndex(CalendarContract.Calendars.IS_PRIMARY)
+
+            while (cursor.moveToNext()) {
+                val id = if (idIdx >= 0) cursor.getLong(idIdx) else continue
+                val access = if (accessIdx >= 0) cursor.getInt(accessIdx) else 0
+                if (access < CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR) continue
+                val visible = if (visibleIdx >= 0) cursor.getInt(visibleIdx) == 1 else true
+                val primary = if (primaryIdx >= 0) cursor.getInt(primaryIdx) == 1 else false
+                val name = (if (nameIdx >= 0) cursor.getString(nameIdx) else null) ?: "Agenda"
+                val pair = Pair(id, name)
+                if (visible && primary) return pair
+                if (fallback == null && visible) {
+                    fallback = pair
+                } else if (fallback == null) {
+                    fallback = pair
+                }
+            }
+        }
+        return fallback
+    }
+
+    private fun insertOrOpenCalendarEvent(
+        title: String,
+        startMs: Long,
+        endMs: Long,
+        description: String,
+        location: String,
+        allDay: Boolean,
+        result: MethodChannel.Result,
+    ) {
+        try {
+            val writable = findPrimaryWritableCalendar()
+            if (writable != null) {
+                val values = ContentValues().apply {
+                    put(CalendarContract.Events.DTSTART, startMs)
+                    put(CalendarContract.Events.DTEND, if (endMs > startMs) endMs else startMs + 3_600_000L)
+                    put(CalendarContract.Events.TITLE, title)
+                    if (description.isNotBlank()) {
+                        put(CalendarContract.Events.DESCRIPTION, description)
+                    }
+                    if (location.isNotBlank()) {
+                        put(CalendarContract.Events.EVENT_LOCATION, location)
+                    }
+                    put(CalendarContract.Events.CALENDAR_ID, writable.first)
+                    put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+                    put(CalendarContract.Events.ALL_DAY, if (allDay) 1 else 0)
+                }
+                val uri = contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
+                if (uri != null) {
+                    val eventId = ContentUris.parseId(uri)
+                    result.success(
+                        mapOf(
+                            "created" to true,
+                            "mode" to "direct",
+                            "eventId" to eventId.toString(),
+                            "calendarName" to writable.second,
+                            "title" to title,
+                        ),
+                    )
+                    return
+                }
+            }
+
+            val intent = Intent(Intent.ACTION_INSERT).apply {
+                data = CalendarContract.Events.CONTENT_URI
+                putExtra(CalendarContract.Events.TITLE, title)
+                putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, startMs)
+                putExtra(CalendarContract.EXTRA_EVENT_END_TIME, if (endMs > startMs) endMs else startMs + 3_600_000L)
+                putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, allDay)
+                if (description.isNotBlank()) {
+                    putExtra(CalendarContract.Events.DESCRIPTION, description)
+                }
+                if (location.isNotBlank()) {
+                    putExtra(CalendarContract.Events.EVENT_LOCATION, location)
+                }
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            result.success(
+                mapOf(
+                    "created" to true,
+                    "mode" to "intent",
+                    "eventId" to "",
+                    "calendarName" to "App de Agenda",
+                    "title" to title,
+                ),
+            )
+        } catch (e: Exception) {
+            result.error("CALENDAR_WRITE_ERROR", e.message ?: "Falha ao criar evento na Agenda.", null)
+        }
+    }
+
+    private fun deleteCalendarEventByIdOrTitle(
+        eventId: String,
+        title: String,
+        result: MethodChannel.Result,
+    ) {
+        try {
+            val numericId = eventId.toLongOrNull()
+            if (numericId != null && numericId > 0) {
+                val uri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, numericId)
+                val deletedRows = contentResolver.delete(uri, null, null)
+                result.success(
+                    mapOf(
+                        "deleted" to (deletedRows > 0),
+                        "deletedCount" to deletedRows,
+                        "eventId" to numericId.toString(),
+                        "title" to title,
+                    ),
+                )
+                return
+            }
+
+            val queryTitle = title.ifEmpty { eventId }.trim()
+            var targetId: Long? = null
+            var matchedTitle = queryTitle
+            contentResolver.query(
+                CalendarContract.Events.CONTENT_URI,
+                arrayOf(
+                    CalendarContract.Events._ID,
+                    CalendarContract.Events.TITLE,
+                    CalendarContract.Events.DTSTART,
+                ),
+                "${CalendarContract.Events.DELETED} = 0 AND ${CalendarContract.Events.TITLE} LIKE ?",
+                arrayOf("%$queryTitle%"),
+                "${CalendarContract.Events.DTSTART} ASC",
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    targetId = cursor.getLong(0)
+                    matchedTitle = cursor.getString(1) ?: queryTitle
+                }
+            }
+
+            if (targetId == null) {
+                result.success(
+                    mapOf(
+                        "deleted" to false,
+                        "deletedCount" to 0,
+                        "eventId" to "",
+                        "title" to queryTitle,
+                    ),
+                )
+                return
+            }
+
+            val deleteUri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, targetId!!)
+            val deletedRows = contentResolver.delete(deleteUri, null, null)
+            result.success(
+                mapOf(
+                    "deleted" to (deletedRows > 0),
+                    "deletedCount" to deletedRows,
+                    "eventId" to targetId.toString(),
+                    "title" to matchedTitle,
+                ),
+            )
+        } catch (e: Exception) {
+            result.error("CALENDAR_DELETE_ERROR", e.message ?: "Falha ao remover evento da Agenda.", null)
+        }
+    }
+
+    private fun copySafUrisToBatchCache(uris: List<Uri>): List<String> {
+        if (uris.isEmpty()) return emptyList()
+        val batchDir = File(cacheDir, "saf_batch_${System.currentTimeMillis()}").apply {
+            mkdirs()
+        }
+        val out = mutableListOf<String>()
+        for ((idx, uri) in uris.withIndex()) {
+            try {
+                var displayName = "doc_${idx + 1}"
+                contentResolver.query(
+                    uri,
+                    arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val raw = cursor.getString(0)?.trim()
+                        if (!raw.isNullOrEmpty()) {
+                            displayName = raw.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                        }
+                    }
+                }
+                val target = File(batchDir, displayName)
+                contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                if (target.exists()) {
+                    out.add(target.absolutePath)
+                }
+            } catch (_: Exception) {
+                // Ignora item inacessível e continua o lote.
+            }
+        }
+        return out
+    }
+
+    private fun scheduleLocalReminderAlarm(
+        reminderId: Int,
+        title: String,
+        triggerAtMs: Long,
+    ): Boolean = ReminderAlarmReceiver.scheduleAlarm(this, reminderId, title, triggerAtMs)
+
+    private fun cancelLocalReminderAlarm(reminderId: Int): Boolean =
+        ReminderAlarmReceiver.cancelAlarm(this, reminderId)
+
+    private fun scheduleLocalWorkflowAlarm(
+        flowId: Int,
+        name: String,
+        triggerAtMs: Long,
+        intervalMinutes: Int,
+    ): Boolean {
+        return try {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return false
+            val intent = Intent(this, WorkflowAlarmReceiver::class.java).apply {
+                action = WorkflowAlarmReceiver.ACTION_TRIGGER_WORKFLOW
+                putExtra(WorkflowAlarmReceiver.EXTRA_WORKFLOW_ID, flowId)
+                putExtra(WorkflowAlarmReceiver.EXTRA_WORKFLOW_NAME, name)
+            }
+            val pending = PendingIntent.getBroadcast(
+                this,
+                60_000 + flowId,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val safeTrigger = max(triggerAtMs, System.currentTimeMillis() + 1_000L)
+            if (intervalMinutes > 0) {
+                alarmManager.setRepeating(
+                    AlarmManager.RTC_WAKEUP,
+                    safeTrigger,
+                    intervalMinutes * 60_000L,
+                    pending,
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, safeTrigger, pending)
+            } else {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, safeTrigger, pending)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun cancelLocalWorkflowAlarm(flowId: Int): Boolean {
+        return try {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return false
+            val intent = Intent(this, WorkflowAlarmReceiver::class.java).apply {
+                action = WorkflowAlarmReceiver.ACTION_TRIGGER_WORKFLOW
+            }
+            val pending = PendingIntent.getBroadcast(
+                this,
+                60_000 + flowId,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            alarmManager.cancel(pending)
+            pending.cancel()
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 }

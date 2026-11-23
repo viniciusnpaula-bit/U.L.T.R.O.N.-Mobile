@@ -8,12 +8,19 @@ import 'package:local_auth/local_auth.dart';
 import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
 import '../../services/conversation_history.dart';
+import '../../services/nfc_auth_service.dart';
 
 class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key, required this.gate, required this.vault});
+  const AuthScreen({
+    super.key,
+    required this.gate,
+    required this.vault,
+    this.nfcService,
+  });
 
   final AuthGate gate;
   final PinVault vault;
+  final NfcAuthService? nfcService;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -34,7 +41,14 @@ class _AuthScreenState extends State<AuthScreen> {
   int failures = 0;
   Duration lockLeft = Duration.zero;
   List<BiometricType> biometrics = const [];
+  bool hasNfcConfigured = false;
+  bool nfcHwAvailable = false;
+  bool nfcHwEnabled = false;
+  bool _nfcReaderStarted = false;
+  StreamSubscription<String>? _nfcSub;
   Timer? _lockTimer;
+
+  NfcAuthService get _nfc => widget.nfcService ?? NfcAuthService.instance;
 
   @override
   void initState() {
@@ -44,6 +58,10 @@ class _AuthScreenState extends State<AuthScreen> {
 
   @override
   void dispose() {
+    _nfcSub?.cancel();
+    if (_nfcReaderStarted) {
+      unawaited(_nfc.stopReader());
+    }
     _lockTimer?.cancel();
     super.dispose();
   }
@@ -54,25 +72,88 @@ class _AuthScreenState extends State<AuthScreen> {
       final left = await widget.vault.lockRemaining();
       final count = await widget.vault.failureCount();
       final available = await widget.gate.biometrics();
+      final nfcSet = await widget.vault.hasNfcKey;
+      final nfcSt = await _nfc.getStatus();
       if (!mounted) return;
       setState(() {
         hasPin = stored;
         lockLeft = left;
         failures = count;
         biometrics = available;
+        hasNfcConfigured = nfcSet;
+        nfcHwAvailable = nfcSt.available;
+        nfcHwEnabled = nfcSt.enabled;
         pinStatus = stored == false
             ? 'CRIE SEU PIN (4-8 DÍGITOS)'
             : left > Duration.zero
                 ? 'BLOQUEIO TEMPORÁRIO'
-                : 'AGUARDANDO PIN';
+                : 'AGUARDANDO AUTENTICAÇÃO';
       });
       _startLockTimer();
+      final pendingUid = await _nfc.consumePendingUnlockUid();
+      if (!mounted) return;
+      if (stored == true && nfcSet && pendingUid != null) {
+        await _handleNfcTag(pendingUid);
+        if (!mounted || widget.gate.isAuthenticated) return;
+      }
+      if (stored == true && nfcSet && nfcSt.available && nfcSt.enabled) {
+        await _startNfcListening();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
         hasPin = false;
         pinStatus = 'ERRO DE COFRE';
         error = 'Armazenamento seguro indisponível: $e';
+      });
+    }
+  }
+
+  Future<void> _startNfcListening() async {
+    if (_nfcReaderStarted) return;
+    _nfcReaderStarted = true;
+    await _nfc.startReader();
+    await _nfcSub?.cancel();
+    _nfcSub = _nfc.tagStream.listen(_handleNfcTag);
+  }
+
+  Future<void> _handleNfcTag(String uidHex) async {
+    if (blocked || isSetup || !hasNfcConfigured) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      busy = true;
+      error = null;
+      pinStatus = 'VERIFICANDO CHAVE NFC...';
+    });
+    try {
+      final ok = await widget.gate.authenticateNfc(
+        uidHex,
+        widget.vault.verifyNfcTag,
+      );
+      if (ok) await widget.vault.resetFailures();
+      if (!mounted) return;
+      if (ok) {
+        HapticFeedback.mediumImpact();
+        setState(() {
+          busy = false;
+          pinStatus = 'NÍVEL 2 • NFC LIBERADO';
+        });
+      } else {
+        HapticFeedback.heavyImpact();
+        await _refreshLock();
+        if (!mounted) return;
+        setState(() {
+          busy = false;
+          pinStatus = lockLeft > Duration.zero ? 'BLOQUEIO ATIVO' : 'CHAVE NFC RECUSADA';
+          error = 'Tag NFC não autorizada.';
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        busy = false;
+        pinStatus = 'ERRO NFC';
+        error = 'Falha ao validar NFC: $e';
       });
     }
   }
@@ -522,13 +603,63 @@ class _AuthScreenState extends State<AuthScreen> {
                     Text(
                       isSetup
                           ? 'USE DE 4 A 8 DÍGITOS E TOQUE EM ENTRAR'
-                          : 'TOQUE NO RETÍCULO OU DIGITE O PIN',
+                          : 'PIN (BASE) • NFC (2º ESTÁGIO) • ${_biometricLabel.toUpperCase()} (TOTAL)',
                       style: const TextStyle(
                         color: Color(0xFFA89698),
-                        fontSize: 10,
+                        fontSize: 9.5,
                       ),
                       textAlign: TextAlign.center,
                     ),
+                    if (!isSetup && hasNfcConfigured) ...[
+                      const SizedBox(height: 8),
+                      GestureDetector(
+                        onTap: nfcHwAvailable && !nfcHwEnabled
+                            ? () => _nfc.openNfcSettings()
+                            : null,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: _surface.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: nfcHwEnabled
+                                  ? const Color(0xFFFF8A9B)
+                                  : Colors.white24,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.nfc,
+                                size: 13,
+                                color: nfcHwEnabled
+                                    ? const Color(0xFFFF8A9B)
+                                    : Colors.white54,
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                nfcHwEnabled
+                                    ? 'NFC PRONTO: ENCOSTE SUA TAG NO VERSO'
+                                    : (nfcHwAvailable
+                                        ? 'NFC DESLIGADO (TOQUE P/ ATIVAR)'
+                                        : 'HARDWARE NFC INDISPONÍVEL'),
+                                style: TextStyle(
+                                  color: nfcHwEnabled
+                                      ? const Color(0xFFFFC5CE)
+                                      : Colors.white60,
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 16),
 
                     // PIN Status & Slot Display

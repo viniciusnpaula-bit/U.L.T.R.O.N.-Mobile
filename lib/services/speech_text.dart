@@ -142,25 +142,141 @@ class SpeechText {
   }
 }
 
+/// Perfis de palavra de ativação (Wake-Word) suportados pelo U.L.T.R.O.N.
+enum WakeWordProfile {
+  ultron(
+    id: 'ultron',
+    label: 'Ultron',
+    target: 'ultron',
+    minLength: 4,
+    maxLength: 8,
+  ),
+  jarvis(
+    id: 'jarvis',
+    label: 'Jarvis',
+    target: 'jarvis',
+    minLength: 4,
+    maxLength: 8,
+  ),
+  edith(
+    id: 'edith',
+    label: 'Edith',
+    target: 'edith',
+    minLength: 4,
+    maxLength: 7,
+  ),
+  visao(
+    id: 'visao',
+    label: 'Visão',
+    target: 'visao',
+    minLength: 4,
+    maxLength: 8,
+  );
+
+  const WakeWordProfile({
+    required this.id,
+    required this.label,
+    required this.target,
+    required this.minLength,
+    required this.maxLength,
+  });
+
+  final String id;
+  final String label;
+  final String target;
+  final int minLength;
+  final int maxLength;
+
+  static WakeWordProfile fromId(String? raw) {
+    final clean = WakeWord.normalize(raw ?? '');
+    for (final profile in WakeWordProfile.values) {
+      if (profile.id == clean ||
+          WakeWord.normalize(profile.label) == clean ||
+          (profile == WakeWordProfile.visao && clean == 'vision')) {
+        return profile;
+      }
+    }
+    return WakeWordProfile.ultron;
+  }
+}
+
 class WakeWord {
   WakeWord._();
 
-  /// Transcrições frequentes de "Ultron" pelo reconhecedor pt-BR.
-  static const Set<String> aliases = {
-    'ultron',
-    'ultrom',
-    'outron',
-    'oultron',
-    'uoltron',
-    'hultron',
-    'ultrón',
-    'utron',
-    'ultrao',
-    'ultrão',
+  /// Perfil de wake-word atualmente selecionado pelo operador.
+  static WakeWordProfile activeProfile = WakeWordProfile.ultron;
+
+  static void setActiveProfile(WakeWordProfile profile) {
+    activeProfile = profile;
+  }
+
+  static WakeWordProfile setActiveProfileById(String? id) {
+    activeProfile = WakeWordProfile.fromId(id);
+    return activeProfile;
+  }
+
+  /// Mapa de aliases fonéticos em pt-BR por perfil de wake-word.
+  static const Map<WakeWordProfile, Set<String>> profileAliases = {
+    WakeWordProfile.ultron: {
+      'ultron',
+      'ultrom',
+      'outron',
+      'oultron',
+      'uoltron',
+      'hultron',
+      'ultrón',
+      'utron',
+      'ultrao',
+      'ultrão',
+      'ultram',
+      'ultran',
+      'altron',
+    },
+    WakeWordProfile.jarvis: {
+      'jarvis',
+      'jarves',
+      'jarviz',
+      'djarvis',
+      'javis',
+      'jarvi',
+      'yarvis',
+      'garvis',
+      'jarbas',
+    },
+    WakeWordProfile.edith: {
+      'edith',
+      'edite',
+      'edit',
+      'editi',
+      'edid',
+      'hedith',
+      'eddy',
+    },
+    WakeWordProfile.visao: {
+      'visao',
+      'visão',
+      'vizao',
+      'vizão',
+      'vision',
+      'vison',
+      'fisao',
+      'vizaum',
+    },
   };
 
-  static final RegExp _leadingFiller =
-      RegExp(r'^(?:ei|hey|ok|oi|e ai|e aí|fala|alo|alô)[,\s]+', caseSensitive: false);
+  /// Aliases do perfil ativo (mantém compatibilidade retroativa).
+  static Set<String> get aliases => profileAliases[activeProfile]!;
+
+  /// Retorna os aliases configurados para um [profile] específico.
+  static Set<String> aliasesFor(WakeWordProfile profile) =>
+      profileAliases[profile] ?? const <String>{};
+
+  static final RegExp _leadingFiller = RegExp(
+    r'^(?:ei|hey|ok|oi|olá|ola|e ai|e aí|fala|alo|alô)[,\s]+',
+    caseSensitive: false,
+  );
+
+  static String normalize(String word) => _normalize(word);
 
   static String _normalize(String word) {
     const from = 'áàâãäéèêëíìîïóòôõöúùûüç';
@@ -174,6 +290,8 @@ class WakeWord {
     }
     return out.toString().replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
+
+  static int levenshtein(String a, String b) => _levenshtein(a, b);
 
   static int _levenshtein(String a, String b) {
     if (a == b) return 0;
@@ -193,30 +311,91 @@ class WakeWord {
     return prev[b.length];
   }
 
-  /// Verdadeiro se a palavra soa como "Ultron".
-  static bool isHotwordToken(String token) {
+  static bool _matchesSingleProfile(String normalizedToken, WakeWordProfile p) {
+    if (normalizedToken.length < p.minLength ||
+        normalizedToken.length > p.maxLength) {
+      return false;
+    }
+    final normalizedAliases = profileAliases[p]!.map(_normalize);
+    if (normalizedAliases.contains(normalizedToken)) return true;
+    return _levenshtein(normalizedToken, p.target) <= 1;
+  }
+
+  /// Verdadeiro se [token] soa como a wake-word do [profile] (ou [activeProfile]).
+  /// Se [anyProfile] for true, testa todos os perfis suportados.
+  static bool isHotwordToken(
+    String token, {
+    WakeWordProfile? profile,
+    bool anyProfile = false,
+  }) {
     final n = _normalize(token);
-    if (n.length < 4 || n.length > 8) return false;
-    if (aliases.map(_normalize).contains(n)) return true;
-    return _levenshtein(n, 'ultron') <= 1;
+    if (n.isEmpty) return false;
+    if (anyProfile) {
+      for (final p in WakeWordProfile.values) {
+        if (_matchesSingleProfile(n, p)) return true;
+      }
+      return false;
+    }
+    final targetProfile = profile ?? activeProfile;
+    return _matchesSingleProfile(n, targetProfile);
   }
 
   /// Posição (índice de palavra) da palavra de ativação, ou -1.
-  static int hotwordIndex(String phrase) {
-    final words = phrase.trim().split(RegExp(r'\s+'));
+  static int hotwordIndex(
+    String phrase, {
+    WakeWordProfile? profile,
+    bool anyProfile = false,
+  }) {
+    final trimmed = phrase.trim();
+    if (trimmed.isEmpty) return -1;
+    final words = trimmed.split(RegExp(r'\s+'));
     for (var i = 0; i < words.length && i < 4; i++) {
-      if (isHotwordToken(words[i])) return i;
+      if (isHotwordToken(words[i], profile: profile, anyProfile: anyProfile)) {
+        return i;
+      }
     }
     return -1;
   }
 
-  static bool contains(String phrase) => hotwordIndex(phrase) >= 0;
+  static bool contains(
+    String phrase, {
+    WakeWordProfile? profile,
+    bool anyProfile = false,
+  }) =>
+      hotwordIndex(phrase, profile: profile, anyProfile: anyProfile) >= 0;
 
-  /// Remove "Ei Ultron," do início e devolve só o comando (pode ser vazio).
-  static String extractCommand(String phrase) {
-    final words = phrase.trim().split(RegExp(r'\s+'));
-    final idx = hotwordIndex(phrase);
-    if (idx < 0) return phrase.trim();
+  /// Detecta qual perfil de wake-word está presente na frase, ou null.
+  static WakeWordProfile? detectProfile(String phrase) {
+    if (contains(phrase, profile: activeProfile)) {
+      return activeProfile;
+    }
+    for (final p in WakeWordProfile.values) {
+      if (p != activeProfile && contains(phrase, profile: p)) {
+        return p;
+      }
+    }
+    return null;
+  }
+
+  /// Remove a saudação + wake-word ("Ei Ultron,", "Ok Jarvis,", etc.) do início
+  /// e devolve apenas o comando (pode ser vazio).
+  static String extractCommand(
+    String phrase, {
+    WakeWordProfile? profile,
+    bool anyProfile = false,
+  }) {
+    final trimmed = phrase.trim();
+    if (trimmed.isEmpty) return '';
+    final words = trimmed.split(RegExp(r'\s+'));
+    var idx = hotwordIndex(
+      phrase,
+      profile: profile,
+      anyProfile: anyProfile,
+    );
+    if (idx < 0 && profile == null && !anyProfile) {
+      idx = hotwordIndex(phrase, anyProfile: true);
+    }
+    if (idx < 0) return trimmed;
     final rest = words.sublist(idx + 1).join(' ');
     return rest
         .replaceFirst(RegExp(r'^[,.:;!?\s]+'), '')

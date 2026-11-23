@@ -198,8 +198,7 @@ class AiProviderConfig {
   bool get hasUsableCredentials =>
       isKeylessProvider || apiKey.trim().isNotEmpty;
 
-  String get effectiveToken =>
-      apiKey.trim().isEmpty ? 'free' : apiKey.trim();
+  String get effectiveToken => apiKey.trim().isEmpty ? 'free' : apiKey.trim();
 
   AiProviderConfig copyWith({
     String? name,
@@ -317,10 +316,9 @@ class SttConfig {
       };
 
   factory SttConfig.fromJson(Map<String, dynamic> j) => SttConfig(
-        endpointUrl:
-            (j['endpointUrl'] as String?)?.trim().isNotEmpty == true
-                ? (j['endpointUrl'] as String).trim()
-                : defaultEndpointUrl,
+        endpointUrl: (j['endpointUrl'] as String?)?.trim().isNotEmpty == true
+            ? (j['endpointUrl'] as String).trim()
+            : defaultEndpointUrl,
         model: (j['model'] as String?)?.trim().isNotEmpty == true
             ? (j['model'] as String).trim()
             : defaultModel,
@@ -434,6 +432,24 @@ class AiProviderStore {
     return cleanModel.isEmpty ? 'openai/gpt-oss-120b' : cleanModel;
   }
 
+  /// Indica se o identificador de modelo suporta entrada multimodal (imagem).
+  static bool isVisionCapableModel(String model) {
+    final lower = model.trim().toLowerCase();
+    if (lower.isEmpty) return false;
+    return lower == 'openai' ||
+        lower == 'openai-large' ||
+        lower.contains('gemini-2') ||
+        lower.contains('gemini-1.5') ||
+        lower.contains('gpt-4o') ||
+        lower.contains('gpt-4.1') ||
+        lower.contains('vision') ||
+        lower.contains('-vl') ||
+        lower.contains('pixtral') ||
+        lower.contains('scout') ||
+        lower.contains('maverick') ||
+        lower.contains('llava');
+  }
+
   /// Fallback models tried automatically if the primary model on a provider
   /// is unavailable, rate-limited, or decommissioned.
   static List<String> fallbackModelsFor(
@@ -442,21 +458,21 @@ class AiProviderStore {
     bool requiresVision = false,
   }) {
     final lowerUrl = baseUrl.toLowerCase();
-    final candidates = <String>[primaryModel];
+    final candidates = <String>[
+      if (!requiresVision || isVisionCapableModel(primaryModel)) primaryModel,
+    ];
     if (lowerUrl.contains('pollinations.ai')) {
-      for (final m in const [
-        'openai',
-        'mistral',
-        'qwen-coder',
-      ]) {
+      final models = requiresVision
+          ? const ['openai', 'openai-large']
+          : const ['openai', 'mistral', 'qwen-coder'];
+      for (final m in models) {
         if (!candidates.contains(m)) candidates.add(m);
       }
     } else if (lowerUrl.contains('groq.com')) {
       final groqModels = requiresVision
           ? const [
-              'llama-3.2-11b-vision-preview',
-              'llama-3.2-90b-vision-preview',
-              'openai/gpt-oss-120b',
+              'meta-llama/llama-4-scout-17b-16e-instruct',
+              'meta-llama/llama-4-maverick-17b-128e-instruct',
             ]
           : const [
               'openai/gpt-oss-120b',
@@ -483,8 +499,8 @@ class AiProviderStore {
       final openRouterModels = requiresVision
           ? const [
               'google/gemini-2.0-flash-exp:free',
+              'qwen/qwen2.5-vl-72b-instruct:free',
               'meta-llama/llama-3.2-11b-vision-instruct:free',
-              'deepseek/deepseek-r1:free',
             ]
           : const [
               'deepseek/deepseek-r1:free',
@@ -496,17 +512,25 @@ class AiProviderStore {
       for (final m in openRouterModels) {
         if (!candidates.contains(m)) candidates.add(m);
       }
+    } else if (lowerUrl.contains('inference.ai.azure.com') ||
+        lowerUrl.contains('github')) {
+      for (final m in const ['gpt-4o-mini', 'gpt-4o']) {
+        if (!candidates.contains(m)) candidates.add(m);
+      }
     } else if (lowerUrl.contains('cerebras.ai')) {
       for (final m in const ['llama-3.3-70b', 'qwen-3-32b', 'llama3.1-8b']) {
         if (!candidates.contains(m)) candidates.add(m);
       }
     } else if (lowerUrl.contains('mistral.ai')) {
-      for (final m in const [
-        'mistral-small-latest',
-        'open-mistral-nemo',
-      ]) {
+      final mistralModels = requiresVision
+          ? const ['pixtral-12b-2409']
+          : const ['mistral-small-latest', 'open-mistral-nemo'];
+      for (final m in mistralModels) {
         if (!candidates.contains(m)) candidates.add(m);
       }
+    }
+    if (!candidates.contains(primaryModel) && primaryModel.trim().isNotEmpty) {
+      candidates.add(primaryModel);
     }
     return candidates;
   }
@@ -542,26 +566,184 @@ class AiProviderStore {
   }
 }
 
+class AiUsageInfo {
+  const AiUsageInfo({
+    required this.promptTokens,
+    required this.completionTokens,
+    required this.totalTokens,
+    required this.estimated,
+  });
+
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final bool estimated;
+}
+
+class ParsedAiReply {
+  const ParsedAiReply({
+    required this.text,
+    required this.usage,
+  });
+
+  final String text;
+  final AiUsageInfo usage;
+}
+
 class AiReply {
-  const AiReply({required this.provider, required this.text});
+  const AiReply({
+    required this.provider,
+    required this.text,
+    this.failedAttempts = 0,
+    this.elapsedMs = 0,
+    this.promptTokens = 0,
+    this.completionTokens = 0,
+    this.totalTokens = 0,
+    this.tokensEstimated = false,
+  });
+
   final String provider;
   final String text;
+  final int failedAttempts;
+  final int elapsedMs;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final bool tokensEstimated;
+
+  bool get usedFailover => failedAttempts > 0;
+}
+
+/// Telemetria acumulada da sessão ativa do cockpit (BRAIN, latência, turnos e tokens).
+class SessionTelemetry {
+  const SessionTelemetry({
+    required this.startedAt,
+    this.turns = 0,
+    this.promptTokens = 0,
+    this.completionTokens = 0,
+    this.totalTokens = 0,
+    this.hasEstimatedTokens = false,
+    this.lastProvider = 'Failover Pronto',
+    this.lastLatencyMs = 0,
+    this.lastFailedAttempts = 0,
+    this.failoverEvents = 0,
+  });
+
+  factory SessionTelemetry.initial({
+    DateTime? startedAt,
+    String initialProvider = 'Failover Pronto',
+  }) =>
+      SessionTelemetry(
+        startedAt: startedAt ?? DateTime.now(),
+        lastProvider: initialProvider,
+      );
+
+  final DateTime startedAt;
+  final int turns;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final bool hasEstimatedTokens;
+  final String lastProvider;
+  final int lastLatencyMs;
+  final int lastFailedAttempts;
+  final int failoverEvents;
+
+  bool get lastUsedFailover => lastFailedAttempts > 0;
+
+  SessionTelemetry recordReply(AiReply reply) {
+    final addedTotal = reply.totalTokens > 0
+        ? reply.totalTokens
+        : reply.promptTokens + reply.completionTokens;
+    return SessionTelemetry(
+      startedAt: startedAt,
+      turns: turns + 1,
+      promptTokens: promptTokens + reply.promptTokens,
+      completionTokens: completionTokens + reply.completionTokens,
+      totalTokens: totalTokens + addedTotal,
+      hasEstimatedTokens: hasEstimatedTokens || reply.tokensEstimated,
+      lastProvider: reply.provider,
+      lastLatencyMs: reply.elapsedMs,
+      lastFailedAttempts: reply.failedAttempts,
+      failoverEvents: failoverEvents + (reply.usedFailover ? 1 : 0),
+    );
+  }
+
+  SessionTelemetry withActiveProvider(String providerName) => SessionTelemetry(
+        startedAt: startedAt,
+        turns: turns,
+        promptTokens: promptTokens,
+        completionTokens: completionTokens,
+        totalTokens: totalTokens,
+        hasEstimatedTokens: hasEstimatedTokens,
+        lastProvider: providerName,
+        lastLatencyMs: lastLatencyMs,
+        lastFailedAttempts: lastFailedAttempts,
+        failoverEvents: failoverEvents,
+      );
+
+  static String formatCompactTokens(int tokens) {
+    if (tokens >= 1000000) {
+      return '${(tokens / 1000000).toStringAsFixed(1)}M';
+    }
+    if (tokens >= 1000) {
+      return '${(tokens / 1000).toStringAsFixed(1)}k';
+    }
+    return '$tokens';
+  }
+}
+
+class _ProviderHttpException implements Exception {
+  _ProviderHttpException(this.statusCode, this.message);
+
+  final int? statusCode;
+  final String message;
+
+  bool get isAuthFailure => statusCode == 401 || statusCode == 403;
+  bool get isRateLimited => statusCode == 429;
+  bool get skipRemainingModels => isAuthFailure || isRateLimited;
+
+  @override
+  String toString() => message;
+}
+
+class _ProviderCircuitState {
+  int failures = 0;
+  DateTime? openUntil;
 }
 
 class AiFailover {
-  AiFailover({AiProviderStore? store, HttpClient Function()? httpFactory})
-      : _store = store ?? AiProviderStore(),
-        _httpFactory = httpFactory ?? HttpClient.new;
+  AiFailover({
+    AiProviderStore? store,
+    HttpClient Function()? httpFactory,
+    this.circuitCooldown = const Duration(seconds: 45),
+    this.authCooldown = const Duration(minutes: 2),
+    this.failureThreshold = 2,
+    DateTime Function()? now,
+  })  : _store = store ?? AiProviderStore(),
+        _httpFactory = httpFactory ?? HttpClient.new,
+        _now = now ?? DateTime.now;
+
+  static final Map<String, _ProviderCircuitState> _circuits = {};
+
+  /// Limpa os circuit breakers globais (útil em testes e após editar provedores).
+  static void resetCircuitBreakers() => _circuits.clear();
 
   final AiProviderStore _store;
   final HttpClient Function() _httpFactory;
+  final Duration circuitCooldown;
+  final Duration authCooldown;
+  final int failureThreshold;
+  final DateTime Function() _now;
+
+  static String _circuitKey(AiProviderConfig p) => '${p.id}::${p.baseUrl.trim()}';
 
   Future<AiReply> ask(
     String prompt, {
     List<Map<String, String>> history = const [],
     String? systemPrompt,
     String? imageBase64,
-    Duration timeout = const Duration(seconds: 20),
+    Duration timeout = const Duration(seconds: 10),
   }) async {
     final providers = (await _store.load())
         .where((p) => p.enabled && p.hasUsableCredentials)
@@ -573,8 +755,34 @@ class AiFailover {
     }
 
     final requiresVision = imageBase64 != null && imageBase64.isNotEmpty;
-    Object? lastError;
+    final effectiveTimeout = requiresVision && timeout < const Duration(seconds: 18)
+        ? const Duration(seconds: 18)
+        : timeout;
+
+    final now = _now();
+    final activeProviders = <AiProviderConfig>[];
     for (final p in providers) {
+      final state = _circuits[_circuitKey(p)];
+      if (state?.openUntil == null || !now.isBefore(state!.openUntil!)) {
+        activeProviders.add(p);
+      }
+    }
+    if (activeProviders.isEmpty) {
+      // Todos os provedores em cooldown: tenta primeiro o que expira mais cedo (half-open).
+      final sorted = [...providers]..sort((a, b) {
+          final aUntil = _circuits[_circuitKey(a)]?.openUntil ?? now;
+          final bUntil = _circuits[_circuitKey(b)]?.openUntil ?? now;
+          return aUntil.compareTo(bUntil);
+        });
+      activeProviders.add(sorted.first);
+    }
+
+    final sw = Stopwatch()..start();
+    var failedAttempts = 0;
+    Object? lastError;
+
+    for (final p in activeProviders) {
+      final key = _circuitKey(p);
       final candidateModels = AiProviderStore.fallbackModelsFor(
         p.baseUrl,
         p.model,
@@ -583,27 +791,56 @@ class AiFailover {
       for (final candidateModel in candidateModels) {
         try {
           final candidateConfig = p.copyWith(model: candidateModel);
-          final text = await _askProvider(
+          final parsed = await _askProvider(
             candidateConfig,
             prompt,
             history,
             systemPrompt,
-            timeout,
+            effectiveTimeout,
             imageBase64: imageBase64,
           );
+          _circuits.remove(key);
+          sw.stop();
           final label = candidateModel == p.model
               ? p.name
               : '${p.name} ($candidateModel)';
-          return AiReply(provider: label, text: text);
+          return AiReply(
+            provider: label,
+            text: parsed.text,
+            failedAttempts: failedAttempts,
+            elapsedMs: sw.elapsedMilliseconds,
+            promptTokens: parsed.usage.promptTokens,
+            completionTokens: parsed.usage.completionTokens,
+            totalTokens: parsed.usage.totalTokens,
+            tokensEstimated: parsed.usage.estimated,
+          );
         } catch (err) {
+          failedAttempts++;
           lastError = err;
+          final state = _circuits.putIfAbsent(key, _ProviderCircuitState.new);
+          if (err is _ProviderHttpException && err.isAuthFailure) {
+            state.failures = failureThreshold;
+            state.openUntil = _now().add(authCooldown);
+            break;
+          }
+          if (err is _ProviderHttpException && err.isRateLimited) {
+            state.failures = failureThreshold;
+            state.openUntil = _now().add(circuitCooldown);
+            break;
+          }
+          state.failures++;
+          if (state.failures >= failureThreshold) {
+            state.openUntil = _now().add(circuitCooldown);
+            break;
+          }
         }
       }
     }
+    sw.stop();
     throw StateError('Todos os provedores falharam: $lastError');
   }
 
-  Future<String> _askProvider(
+  Future<ParsedAiReply> _askProvider(
     AiProviderConfig p,
     String prompt,
     List<Map<String, String>> history,
@@ -626,6 +863,7 @@ class AiFailover {
           {'role': 'system', 'content': systemPrompt.trim()},
         ...buildAiMessages(prompt, history, imageBase64: imageBase64),
       ];
+      final promptChars = _countPromptChars(messages);
       request.add(
         utf8.encode(
           jsonEncode({
@@ -636,21 +874,47 @@ class AiFailover {
         ),
       );
       final response = await request.close().timeout(timeout);
-      final body = await response.transform(utf8.decoder).join();
+      final body =
+          await response.transform(utf8.decoder).join().timeout(timeout);
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
+        throw _ProviderHttpException(
+          response.statusCode,
           '${p.name} (${p.model}) HTTP ${response.statusCode}: ${redactSecret(body, p.apiKey)}',
         );
       }
-      return parseAiReply(body);
+      return parseAiReplyWithUsage(body, fallbackPromptChars: promptChars);
     } catch (err) {
-      if (err is HttpException) rethrow;
-      throw HttpException(
+      if (err is _ProviderHttpException) rethrow;
+      throw _ProviderHttpException(
+        null,
         '${p.name} (${p.model}): ${redactSecret(err.toString(), p.apiKey)}',
       );
     } finally {
       client.close(force: true);
     }
+  }
+
+  static int _countPromptChars(List<Map<String, Object>> messages) {
+    var total = 0;
+    for (final msg in messages) {
+      final content = msg['content'];
+      if (content is String) {
+        total += content.length;
+      } else if (content is List) {
+        for (final part in content) {
+          if (part is Map) {
+            final text = part['text'];
+            if (text is String) {
+              total += text.length;
+            } else if (part['type'] == 'image_url') {
+              // Estimativa fixa conservadora para imagem multimodal (~256 tokens)
+              total += 1024;
+            }
+          }
+        }
+      }
+    }
+    return total;
   }
 
   static Uri _requireHttps(String rawUrl) {
@@ -699,20 +963,78 @@ List<Map<String, Object>> buildAiMessages(
   return filtered;
 }
 
-String parseAiReply(String rawBody) {
+/// Estimativa determinística de tokens (~4 caracteres por token).
+int estimateTokenCountFromChars(int charCount) {
+  if (charCount <= 0) return 0;
+  return (charCount + 3) ~/ 4;
+}
+
+int _readNonNegativeInt(Object? raw) {
+  if (raw is int && raw >= 0) return raw;
+  if (raw is num && raw >= 0) return raw.toInt();
+  if (raw is String) {
+    final parsed = int.tryParse(raw.trim());
+    if (parsed != null && parsed >= 0) return parsed;
+  }
+  return 0;
+}
+
+ParsedAiReply parseAiReplyWithUsage(
+  String rawBody, {
+  int fallbackPromptChars = 0,
+}) {
   final decoded = jsonDecode(rawBody) as Map<String, Object?>;
   final choices = decoded['choices'] as List<Object?>?;
   if (choices == null || choices.isEmpty) {
     throw const FormatException('Resposta sem choices.');
   }
-  final message =
-      (choices.first as Map<String, Object?>)['message'] as Map<String, Object?>?;
+  final message = (choices.first as Map<String, Object?>)['message']
+      as Map<String, Object?>?;
   final content = message?['content'] as String?;
   if (content == null || content.trim().isEmpty) {
     throw const FormatException('Resposta vazia do provedor.');
   }
-  return content.trim();
+  final text = content.trim();
+
+  final usageMap = decoded['usage'] as Map<String, Object?>?;
+  var promptTokens = _readNonNegativeInt(
+    usageMap?['prompt_tokens'] ?? usageMap?['input_tokens'],
+  );
+  var completionTokens = _readNonNegativeInt(
+    usageMap?['completion_tokens'] ?? usageMap?['output_tokens'],
+  );
+  var totalTokens = _readNonNegativeInt(usageMap?['total_tokens']);
+  var estimated = false;
+
+  if (promptTokens == 0 && completionTokens == 0 && totalTokens == 0) {
+    promptTokens = estimateTokenCountFromChars(fallbackPromptChars);
+    completionTokens = estimateTokenCountFromChars(text.length);
+    totalTokens = promptTokens + completionTokens;
+    estimated = true;
+  } else {
+    if (promptTokens == 0 && totalTokens > completionTokens) {
+      promptTokens = totalTokens - completionTokens;
+    }
+    if (completionTokens == 0 && totalTokens > promptTokens) {
+      completionTokens = totalTokens - promptTokens;
+    }
+    if (totalTokens == 0) {
+      totalTokens = promptTokens + completionTokens;
+    }
+  }
+
+  return ParsedAiReply(
+    text: text,
+    usage: AiUsageInfo(
+      promptTokens: promptTokens,
+      completionTokens: completionTokens,
+      totalTokens: totalTokens,
+      estimated: estimated,
+    ),
+  );
 }
+
+String parseAiReply(String rawBody) => parseAiReplyWithUsage(rawBody).text;
 
 /// Parses `/v1/models` response and filters out non-chat models (whisper, tts,
 /// guard, embeddings) while sorting modern flagship models to the top.

@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -15,17 +16,19 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.speech.SpeechRecognizer
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.KeywordSpotter
 import com.k2fsa.sherpa.onnx.KeywordSpotterConfig
 import com.k2fsa.sherpa.onnx.OnlineModelConfig
+import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -49,29 +52,73 @@ class UltronAudioService : Service() {
         const val ACTION_STOP = "com.viniciusnpaula.ultron_mobile.STOP_AUDIO_SERVICE"
         const val ACTION_SAY_TIME = "com.viniciusnpaula.ultron_mobile.SAY_TIME_OFFLINE"
         const val ACTION_TOGGLE_PAUSE = "com.viniciusnpaula.ultron_mobile.TOGGLE_PAUSE_AUDIO_SERVICE"
+        const val ACTION_RELOAD_WAKE_WORD = "com.viniciusnpaula.ultron_mobile.RELOAD_WAKE_WORD"
 
         const val ENGINE_DESCRIPTION = "sherpa-onnx Zipformer KWS (offline / CPU)"
         const val ENGINE_IS_DEDICATED_KWS = true
         private const val MODEL_DIR = "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01"
         const val EXTRA_WAKE_WORD = "ultron_wake_word_trigger"
+        const val EXTRA_WAKE_WORD_PROFILE = "wake_word_profile"
 
         const val PREFS_NAME = "ultron_sentinel_prefs"
         const val PREF_ENABLED = "sentinel_enabled"
         const val PREF_BOOT_AUTOSTART = "boot_autostart"
+        const val PREF_WAKE_WORD_PROFILE = "wake_word_profile"
+
+        @Volatile
+        var currentWakeProfile: WakeWordProfile = WakeWordProfile.ULTRON
+            private set
+
+        private val pendingKeywordHotSwap = AtomicBoolean(false)
+
+        /**
+         * Troca o perfil de wake-word ativo em memória e solicita hot-swap do stream
+         * KWS sem reiniciar o serviço em segundo plano quando já estiver rodando.
+         */
+        fun setWakeWordProfile(context: Context, profileId: String?): WakeWordProfile {
+            val resolved = BackgroundVoiceConfigStore.saveWakeWordProfileOnly(
+                context,
+                profileId ?: WakeWordProfile.ULTRON.id,
+            )
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(PREF_WAKE_WORD_PROFILE, resolved.id)
+                .apply()
+            val changed = currentWakeProfile != resolved
+            currentWakeProfile = resolved
+            if (changed && isRunning) {
+                pendingKeywordHotSwap.set(true)
+            }
+            return resolved
+        }
+
+        fun loadStoredWakeProfile(context: Context): WakeWordProfile {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val saved = prefs.getString(PREF_WAKE_WORD_PROFILE, null)
+            val resolved = if (!saved.isNullOrBlank()) {
+                WakeWordMatcher.setActiveProfileById(saved)
+            } else {
+                BackgroundVoiceConfigStore.loadWakeWordProfile(context)
+            }
+            currentWakeProfile = resolved
+            return resolved
+        }
 
         private const val SAMPLE_RATE_HZ = 16000
         private const val WINDOW_MS = 100
 
-        private const val SLEEP_SPEAKER_GUARD_MS = 400L
-        private const val SLEEP_PAUSED_STATE_MS = 1500L
+        private const val SLEEP_SPEAKER_GUARD_MS = 120L
+        private const val SLEEP_PAUSED_STATE_MS = 1200L
         private const val SLEEP_LOW_BATTERY_MS = 10000L
-        private const val POST_SPEECH_ECHO_GUARD_MS = 1100L
+        private const val SLEEP_DOZE_IDLE_MS = 3000L
+        private const val POST_SPEECH_ECHO_GUARD_MS = 550L
         private const val BATTERY_CHECK_INTERVAL_MS = 30_000L
 
         private const val INITIAL_NOISE_FLOOR = 300.0
-        private const val WAKE_HANDOFF_GUARD_MS = 4000L
+        private const val WAKE_HANDOFF_GUARD_MS = 1500L
 
         private const val SILENT_FRAMES_BEFORE_RESTART = 300 // 30 s de zeros = mic silenciado
+        private const val MAX_CONSECUTIVE_ZERO_READS = 20
         private const val MAX_RESTART_BACKOFF_MS = 30_000L
         private const val MAX_CONSECUTIVE_FAILURES = 8
 
@@ -95,6 +142,10 @@ class UltronAudioService : Service() {
         /** Pausa escolhida pelo usuário na notificação (não persiste entre execuções). */
         @Volatile
         var userPaused: Boolean = false
+            private set
+
+        @Volatile
+        var isRecorderOpen: Boolean = false
             private set
 
         /** O que a UI pode afirmar: serviço vivo, capturando de verdade e não pausado. */
@@ -122,9 +173,17 @@ class UltronAudioService : Service() {
             val hasMic = ContextCompat.checkSelfPermission(
                 context, Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            val hasMicHardware = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                (am?.getDevices(AudioManager.GET_DEVICES_INPUTS)?.isNotEmpty() == true) ||
+                    context.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
+            } else {
+                context.packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)
+            }
             val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
             val ignoringBattery = pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val profile = loadStoredWakeProfile(context)
             return mapOf(
                 "running" to isRunning,
                 "capturing" to isListeningForReal(),
@@ -132,6 +191,8 @@ class UltronAudioService : Service() {
                 "paused" to userPaused,
                 "engine" to ENGINE_DESCRIPTION,
                 "dedicatedKws" to (ENGINE_IS_DEDICATED_KWS && modelLoaded),
+                "wakeWordProfile" to profile.id,
+                "wakeWordLabel" to profile.displayName,
                 "sdk" to Build.VERSION.SDK_INT,
                 "notificationsPermission" to (
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -140,9 +201,10 @@ class UltronAudioService : Service() {
                         ) == PackageManager.PERMISSION_GRANTED
                     ),
                 "micPermission" to hasMic,
+                "overlayPermission" to DeviceHardwareHelper.canLaunchActivitiesFromBackground(context),
                 "ignoringBatteryOptimizations" to ignoringBattery,
                 "bootAutostart" to prefs.getBoolean(PREF_BOOT_AUTOSTART, false),
-                "recognitionAvailable" to SpeechRecognizer.isRecognitionAvailable(context),
+                "recognitionAvailable" to (hasMic && hasMicHardware),
                 "lastTrigger" to lastTriggerTimestamp,
                 "voiceTriggers" to Stats.voiceTriggers,
                 "detections" to Stats.detections,
@@ -165,6 +227,8 @@ class UltronAudioService : Service() {
     private val workerActive = AtomicBoolean(false)
     private var vadThread: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+    private var gainControl: AutomaticGainControl? = null
     @Volatile
     private var keywordSpotter: KeywordSpotter? = null
 
@@ -174,14 +238,36 @@ class UltronAudioService : Service() {
     private var lastBatteryCheckMs = 0L
     private var batteryCritical = false
     @Volatile
+    private var deepDozeActive: Boolean = false
+    private var dozeReceiver: BroadcastReceiver? = null
+    @Volatile
     private var consecutiveFailures = 0
 
     override fun onCreate() {
         super.onCreate()
+        loadStoredWakeProfile(this)
         createNotificationChannels()
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Ultron::EcoVadWakeLock").apply {
             setReferenceCounted(false)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            deepDozeActive = pm.isDeviceIdleMode
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    val power = getSystemService(POWER_SERVICE) as? PowerManager
+                    deepDozeActive = power?.isDeviceIdleMode == true
+                }
+            }
+            dozeReceiver = receiver
+            safely("registerDozeReceiver") {
+                ContextCompat.registerReceiver(
+                    this,
+                    receiver,
+                    IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED),
+                    ContextCompat.RECEIVER_NOT_EXPORTED
+                )
+            }
         }
     }
 
@@ -202,11 +288,21 @@ class UltronAudioService : Service() {
                 if (userPaused) captureHealthy = false
                 updateNotification(
                     if (userPaused) "Escuta PAUSADA — microfone liberado"
-                    else "Escuta contínua ativa — diga \"Ultron\""
+                    else "Escuta contínua ativa — diga \"${currentWakeProfile.displayName}\""
                 )
                 return START_STICKY
             }
+            ACTION_RELOAD_WAKE_WORD -> {
+                val requested = intent.getStringExtra(EXTRA_WAKE_WORD_PROFILE)
+                val profile = setWakeWordProfile(this, requested)
+                if (isRunning && !userPaused) {
+                    updateNotification("sherpa-onnx KWS carregado — diga \"${profile.displayName}\"")
+                }
+                return START_STICKY
+            }
         }
+
+        loadStoredWakeProfile(this)
 
         val hasMicPerm = ContextCompat.checkSelfPermission(
             this,
@@ -267,12 +363,12 @@ class UltronAudioService : Service() {
             var backoffMs = 1000L
             try {
                 try {
-                    if (keywordSpotter == null) keywordSpotter = createKeywordSpotter()
+                    if (keywordSpotter == null) keywordSpotter = createKeywordSpotter(currentWakeProfile)
                     modelLoaded = keywordSpotter != null
                     if (!modelLoaded) throw IllegalStateException("KeywordSpotter nulo")
                     Stats.lastError = "nenhum"
                     acquireWakeLockSafely()
-                    updateNotification("sherpa-onnx KWS carregado — diga \"Ultron\"")
+                    updateNotification("sherpa-onnx KWS carregado — diga \"${currentWakeProfile.displayName}\"")
                 } catch (e: Exception) {
                     modelLoaded = false
                     captureHealthy = false
@@ -392,7 +488,7 @@ class UltronAudioService : Service() {
         }
     }
 
-    private fun createKeywordSpotter(): KeywordSpotter {
+    private fun createKeywordSpotter(profile: WakeWordProfile = currentWakeProfile): KeywordSpotter {
         validateSherpaJniConfigFields()
         val modelConfig = OnlineModelConfig(
             transducer = OnlineTransducerModelConfig(
@@ -405,16 +501,34 @@ class UltronAudioService : Service() {
             provider = "cpu",
             modelType = "zipformer2",
         )
-        val config = KeywordSpotterConfig(
+        val primaryConfig = KeywordSpotterConfig(
             featConfig = FeatureConfig(sampleRate = SAMPLE_RATE_HZ, featureDim = 80),
             modelConfig = modelConfig,
-            keywordsFile = "$MODEL_DIR/keywords.txt",
-            maxActivePaths = 4,
+            keywordsFile = "$MODEL_DIR/${profile.keywordsAssetFile}",
+            maxActivePaths = 8,
             keywordsScore = 2.0f,
-            keywordsThreshold = 0.12f,
+            keywordsThreshold = 0.08f,
             numTrailingBlanks = 1,
         )
-        return KeywordSpotter(assetManager = assets, config = config)
+        return try {
+            KeywordSpotter(assetManager = assets, config = primaryConfig)
+        } catch (_: Exception) {
+            val fallbackConfig = primaryConfig.copy(keywordsFile = "$MODEL_DIR/keywords.txt")
+            KeywordSpotter(assetManager = assets, config = fallbackConfig)
+        }
+    }
+
+    private fun createProfileStream(spotter: KeywordSpotter, profile: WakeWordProfile): OnlineStream {
+        val inlineStream = try {
+            spotter.createStream(profile.sherpaInlineKeywords)
+        } catch (_: Exception) {
+            null
+        }
+        if (inlineStream != null && inlineStream.ptr != 0L) {
+            return inlineStream
+        }
+        inlineStream?.release()
+        return spotter.createStream()
     }
 
     private fun createRecorder(): AudioRecord {
@@ -423,28 +537,70 @@ class UltronAudioService : Service() {
         )
         if (minBuf <= 0) throw IllegalStateException("getMinBufferSize=$minBuf")
         val frameBytes = (SAMPLE_RATE_HZ * WINDOW_MS / 1000) * 2
-        val rec = AudioRecord(
+        val bufSize = minBuf.coerceAtLeast(frameBytes * 2)
+        // MIC prioriza sensibilidade real de hardware para tons variados/distância;
+        // VOICE_RECOGNITION e DEFAULT ficam como fallbacks.
+        val candidates = listOf(
+            MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            SAMPLE_RATE_HZ,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            minBuf.coerceAtLeast(frameBytes * 2)
+            MediaRecorder.AudioSource.DEFAULT,
         )
-        if (rec.state != AudioRecord.STATE_INITIALIZED) {
-            rec.release()
-            throw IllegalStateException("AudioRecord não inicializou (microfone ocupado?)")
+        var lastReason = "nenhum source inicializou"
+        for (source in candidates) {
+            val rec = try {
+                AudioRecord(
+                    source,
+                    SAMPLE_RATE_HZ,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufSize
+                )
+            } catch (e: Exception) {
+                lastReason = "${e.javaClass.simpleName}: ${e.message}"
+                continue
+            }
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                lastReason = "source=$source state=${rec.state}"
+                safely("AudioRecord.release") { rec.release() }
+                continue
+            }
+            try {
+                rec.startRecording()
+            } catch (e: Exception) {
+                lastReason = "source=$source startRecording: ${e.message}"
+                safely("AudioRecord.release") { rec.release() }
+                continue
+            }
+            if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                lastReason = "source=$source recordingState=${rec.recordingState}"
+                safely("AudioRecord.release") { rec.release() }
+                continue
+            }
+            val sessionId = rec.audioSessionId
+            safely("NoiseSuppressor.create") {
+                if (NoiseSuppressor.isAvailable()) {
+                    noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
+                }
+            }
+            safely("AutomaticGainControl.create") {
+                if (AutomaticGainControl.isAvailable()) {
+                    gainControl = AutomaticGainControl.create(sessionId)?.apply { enabled = true }
+                }
+            }
+            isRecorderOpen = true
+            return rec
         }
-        rec.startRecording()
-        if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-            rec.release()
-            throw IllegalStateException("AudioRecord não entrou em gravação")
-        }
-        return rec
+        throw IllegalStateException("AudioRecord não inicializou ($lastReason)")
     }
 
     private fun releaseRecorder(recorder: AudioRecord?) {
+        safely("NoiseSuppressor.release") { noiseSuppressor?.release() }
+        noiseSuppressor = null
+        safely("AutomaticGainControl.release") { gainControl?.release() }
+        gainControl = null
         safely("AudioRecord.stop") { recorder?.stop() }
         safely("AudioRecord.release") { recorder?.release() }
+        isRecorderOpen = false
     }
 
     /**
@@ -452,14 +608,16 @@ class UltronAudioService : Service() {
      * Amostras zeradas são apenas um diagnóstico de falha do microfone, nunca um gatilho.
      */
     private fun runCaptureSession() {
-        val spotter = keywordSpotter ?: throw IllegalStateException("Motor sherpa-onnx não inicializado")
+        var spotter = keywordSpotter ?: throw IllegalStateException("Motor sherpa-onnx não inicializado")
         val windowSamples = (SAMPLE_RATE_HZ * WINDOW_MS) / 1000
         val pcmBuffer = ShortArray(windowSamples)
         val floatBuffer = FloatArray(windowSamples)
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
         var recorder: AudioRecord? = null
         var silentFrames = 0
-        val stream = spotter.createStream()
+        var zeroReads = 0
+        var dozePausedNotified = false
+        var stream = createProfileStream(spotter, currentWakeProfile)
         if (stream.ptr == 0L) {
             stream.release()
             throw IllegalStateException("sherpa-onnx não criou o stream KWS")
@@ -467,6 +625,28 @@ class UltronAudioService : Service() {
 
         try {
             while (workerActive.get()) {
+                if (pendingKeywordHotSwap.compareAndSet(true, false)) {
+                    val targetProfile = currentWakeProfile
+                    var nextStream = createProfileStream(spotter, targetProfile)
+                    if (nextStream.ptr == 0L) {
+                        safely("nextStream.release") { nextStream.release() }
+                        val rebuilt = createKeywordSpotter(targetProfile)
+                        val oldSpotter = spotter
+                        keywordSpotter = rebuilt
+                        spotter = rebuilt
+                        nextStream = createProfileStream(spotter, targetProfile)
+                        safely("oldSpotter.release") { oldSpotter.release() }
+                    }
+                    if (nextStream.ptr != 0L) {
+                        val oldStream = stream
+                        stream = nextStream
+                        safely("oldStream.release") { oldStream.release() }
+                        if (!userPaused) {
+                            updateNotification("sherpa-onnx KWS carregado — diga \"${targetProfile.displayName}\"")
+                        }
+                    }
+                }
+
                 if (isBatteryCriticalUnplugged()) {
                     releaseWakeLockSafely()
                     if (!Stats.economyMode) {
@@ -481,7 +661,24 @@ class UltronAudioService : Service() {
                 }
                 if (Stats.economyMode) {
                     Stats.economyMode = false
-                    updateNotification("sherpa-onnx KWS carregado — diga \"Ultron\"")
+                    updateNotification("sherpa-onnx KWS carregado — diga \"${currentWakeProfile.displayName}\"")
+                }
+
+                if (isDeepDozeUnplugged()) {
+                    releaseWakeLockSafely()
+                    releaseRecorder(recorder)
+                    recorder = null
+                    captureHealthy = false
+                    if (!dozePausedNotified) {
+                        dozePausedNotified = true
+                        updateNotification("Modo Doze — escuta em standby econômico")
+                    }
+                    Thread.sleep(SLEEP_DOZE_IDLE_MS)
+                    continue
+                }
+                if (dozePausedNotified) {
+                    dozePausedNotified = false
+                    updateNotification("sherpa-onnx KWS carregado — diga \"${currentWakeProfile.displayName}\"")
                 }
 
                 val inCall = audioManager != null && audioManager.mode != AudioManager.MODE_NORMAL
@@ -508,7 +705,14 @@ class UltronAudioService : Service() {
                 if (recorder == null) recorder = createRecorder()
                 val readCount = recorder.read(pcmBuffer, 0, windowSamples)
                 if (readCount < 0) throw IllegalStateException("AudioRecord.read=$readCount")
-                if (readCount == 0) continue
+                if (readCount == 0) {
+                    if (++zeroReads >= MAX_CONSECUTIVE_ZERO_READS) {
+                        zeroReads = 0
+                        Thread.sleep(250L)
+                    }
+                    continue
+                }
+                zeroReads = 0
 
                 var hasNonZeroSample = false
                 for (i in 0 until readCount) {
@@ -547,7 +751,7 @@ class UltronAudioService : Service() {
                 consecutiveFailures = 0
 
                 if (detectedKeyword.isNotBlank()) {
-                    // O microfone KWS é liberado antes do reconhecimento do comando no fluxo Flutter.
+                    // O microfone KWS é liberado antes do reconhecimento do comando no fluxo Flutter/2º plano.
                     releaseRecorder(recorder)
                     recorder = null
                     captureHealthy = false
@@ -556,8 +760,13 @@ class UltronAudioService : Service() {
                     lastTriggerTimestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                     Stats.lastPhrase = detectedKeyword
                     wakeHandoffUntilMs = System.currentTimeMillis() + WAKE_HANDOFF_GUARD_MS
-                    updateNotification("Palavra \"Ultron\" detectada — aguardando comando")
-                    onWakeConfirmed("Ultron")
+                    val activeLabel = currentWakeProfile.displayName
+                    if (MainActivity.isActivityResumed) {
+                        updateNotification("Palavra \"$activeLabel\" detectada — aguardando comando")
+                        onWakeConfirmed(activeLabel)
+                    } else {
+                        handleBackgroundHandsFreeCommand()
+                    }
                     return
                 }
             }
@@ -568,10 +777,55 @@ class UltronAudioService : Service() {
         }
     }
 
+    private fun handleBackgroundHandsFreeCommand() {
+        try {
+            BackgroundVoiceResponder.runBackgroundTurn(
+                context = this,
+                onStatusUpdate = { status -> updateNotification(status) },
+                onReplyNotification = { heard, reply ->
+                    showBackgroundReplyNotification(heard, reply)
+                },
+            )
+            // Aguarda dissipação de eco após responder antes de reabrir o KWS.
+            wakeHandoffUntilMs = System.currentTimeMillis() + POST_SPEECH_ECHO_GUARD_MS
+            Thread.sleep(POST_SPEECH_ECHO_GUARD_MS)
+        } catch (_: InterruptedException) {
+        } catch (e: Exception) {
+            Stats.lastError = "bg voice: ${e.message}"
+        } finally {
+            if (workerActive.get() && !userPaused) {
+                updateNotification("sherpa-onnx KWS carregado — diga \"${currentWakeProfile.displayName}\"")
+            }
+        }
+    }
+
+    private fun showBackgroundReplyNotification(heard: String, reply: String) {
+        try {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val openIntent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pending = PendingIntent.getActivity(
+                this, 11, openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Você: ${heard.take(60)}")
+                .setContentText(reply)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(reply))
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .setContentIntent(pending)
+                .build()
+            nm.notify(WAKE_NOTIFICATION_ID, notification)
+        } catch (_: Exception) {
+        }
+    }
+
     /**
-     * Wake word confirmada: guarda o evento como pendente (nunca perdido) e, se o app não
-     * está em primeiro plano (segundo plano ou tela bloqueada), sobe a notificação full-screen.
-     * O Flutter só processa após a autenticação normal do app — o Action Gate é preservado.
+     * Wake word confirmada com app aberto: entrega o evento ao Flutter.
      */
     private fun onWakeConfirmed(phrase: String) {
         wakeHandoffUntilMs = System.currentTimeMillis() + WAKE_HANDOFF_GUARD_MS
@@ -612,6 +866,27 @@ class UltronAudioService : Service() {
         }
     }
 
+    private fun isDeviceChargingOrPlugged(): Boolean {
+        val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val plugged = intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        return plugged != 0 ||
+            status == BatteryManager.BATTERY_STATUS_CHARGING ||
+            status == BatteryManager.BATTERY_STATUS_FULL
+    }
+
+    private fun isDeepDozeUnplugged(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        val pm = getSystemService(POWER_SERVICE) as? PowerManager
+        val idle = pm?.isDeviceIdleMode ?: deepDozeActive
+        if (!idle) return false
+        return try {
+            !isDeviceChargingOrPlugged()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /** Verifica a bateria no máximo a cada 30 s (antes era a cada frame). */
     private fun isBatteryCriticalUnplugged(): Boolean {
         val now = System.currentTimeMillis()
@@ -620,11 +895,7 @@ class UltronAudioService : Service() {
         batteryCritical = try {
             val bm = getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
             val level = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 50
-            val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-            val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                status == BatteryManager.BATTERY_STATUS_FULL
-            level in 1..15 && !charging
+            level in 1..15 && !isDeviceChargingOrPlugged()
         } catch (e: Exception) {
             wakeLogW("falha ao ler status de bateria: ${e.javaClass.simpleName}")
             false
@@ -746,6 +1017,10 @@ class UltronAudioService : Service() {
         workerActive.set(false)
         isRunning = false
         vadThread?.interrupt()
+        safely("unregisterDozeReceiver") {
+            dozeReceiver?.let { unregisterReceiver(it) }
+        }
+        dozeReceiver = null
         // O worker libera o KeywordSpotter no finally, depois de soltar o stream nativo.
         releaseWakeLockSafely()
         super.onDestroy()

@@ -5,8 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ultron_mobile/ui/widgets/core_orb.dart';
 
 void main() {
-  testWidgets('CoreOrb loads compiled crimson FragmentProgram and renders without throwing', (tester) async {
-    final program = await FragmentProgram.fromAsset('shaders/crimson_core.frag');
+  testWidgets(
+      'CoreOrb loads compiled crimson FragmentProgram and renders without throwing',
+      (tester) async {
+    final program =
+        await FragmentProgram.fromAsset('shaders/crimson_core.frag');
 
     await tester.pumpWidget(
       MaterialApp(
@@ -29,7 +32,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('CoreOrb renders fallback CorePainter safely when shaderProgram is null', (tester) async {
+  testWidgets(
+      'CoreOrb renders fallback CorePainter safely when shaderProgram is null',
+      (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
@@ -48,7 +53,9 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('CoreOrb pauses Ticker when stage is hidden or app lifecycle is paused', (tester) async {
+  testWidgets(
+      'CoreOrb pauses Ticker when stage is hidden or app lifecycle is paused',
+      (tester) async {
     final tickerStates = <bool>[];
 
     await tester.pumpWidget(
@@ -94,5 +101,37 @@ void main() {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump();
     expect(tickerStates.last, isTrue);
+  });
+
+  testWidgets(
+      'CoreOrb reuses FragmentShader across multiple frames and disposes cleanly',
+      (tester) async {
+    final program =
+        await FragmentProgram.fromAsset('shaders/crimson_core.frag');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 240,
+            height: 240,
+            child: CoreOrb(
+              stage: CoreStage.center,
+              shaderProgram: program,
+              energy: 0.5,
+            ),
+          ),
+        ),
+      ),
+    );
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(tester.takeException(), isNull);
+
+    // Unmount and dispose cached shader cleanly
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
   });
 }

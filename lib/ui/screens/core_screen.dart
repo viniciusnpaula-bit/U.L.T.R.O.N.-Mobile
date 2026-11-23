@@ -1,23 +1,30 @@
 import 'dart:async';
-import 'dart:math';
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/security/action_gate.dart';
 import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
 import '../../models/chat_message.dart';
+import '../../models/tactical_mode.dart';
 import '../../services/ai_provider_service.dart';
 import '../../services/android_actions_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/audio_capture_service.dart';
+import '../../services/audio_vad_buffer.dart';
+import '../../services/audit_log_service.dart';
+import '../../services/briefing_service.dart';
+import '../../services/cognicao_service.dart';
 import '../../services/conversation_history.dart';
+import '../../services/desktop_command_listener.dart';
 import '../../services/desktop_pairing_service.dart';
 import '../../services/device_control_service.dart';
+import '../../services/nfc_auth_service.dart';
 import '../../services/obsidian_service.dart';
+import '../../services/reminder_service.dart';
 import '../../services/slash_command_parser.dart';
 import '../../services/speech_text.dart';
 import '../../services/stt_service.dart';
@@ -78,29 +85,33 @@ class CoreScreen extends StatefulWidget {
   State<CoreScreen> createState() => _CoreScreenState();
 }
 
-class _CoreScreenState extends State<CoreScreen>
-    with TickerProviderStateMixin, WidgetsBindingObserver {
+class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   static const _crimson = Color(0xFFE50914);
   static const _rose = Color(0xFFFFA0A0);
   static const _border = Color(0xFF51080D);
 
-  late final Ticker ticker;
   final commandController = TextEditingController();
   final quickNoteController = TextEditingController();
   final duressPinController = TextEditingController();
   final pcKillSwitchUrlController = TextEditingController();
+  final pcLanSecretController = TextEditingController();
   final messageTargetController = TextEditingController();
   final messageBodyController = TextEditingController();
   final scrollController = ScrollController();
-  final coreTime = ValueNotifier<double>(0);
   late final VoiceService voiceService = widget.voiceService ?? VoiceService();
   final updateService = AppUpdateService();
   final providerStore = AiProviderStore();
-  final deviceService = DeviceControlService();
+  late final DeviceControlService deviceService = DeviceControlService(
+    authGate: widget.gate,
+    onRequestElevation: _elevateSessionTo,
+  );
+  late final briefingService = BriefingService(deviceService: deviceService);
+  final cognicaoService = const CognicaoService();
   final actionGate = const ActionGate();
   late final VoicePipelineController voicePipeline;
   late final AndroidActionsService androidActions;
   final desktopPairing = DesktopPairingService();
+  late final DesktopCommandListener desktopCommandListener;
   late AppLifecycleState _lifecycleState;
 
   bool get _isForegroundActive =>
@@ -109,7 +120,6 @@ class _CoreScreenState extends State<CoreScreen>
 
   CoreStage stage = CoreStage.center;
   _ActivePanel panel = _ActivePanel.main;
-  bool active = false;
   bool sending = false;
   bool listeningVoice = false;
   bool hasUpdate = false;
@@ -123,20 +133,32 @@ class _CoreScreenState extends State<CoreScreen>
   VoiceProfile selectedVoiceProfile = VoiceProfile.grave;
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
-  String installedVersion = 'v1.4.1';
+  SessionTelemetry sessionTelemetry = SessionTelemetry.initial();
+  TacticalMode activeTacticalMode = TacticalMode.geral;
+  bool pcLanConfigured = false;
+  String installedVersion = 'v1.5.0';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
+  NfcHardwareStatus nfcStatus = const NfcHardwareStatus(
+    available: false,
+    enabled: false,
+  );
+  List<NfcTagEntry> nfcTags = const [];
   String? _lastShownPipelineError;
+  Future<void>? _pendingBgSync;
   List<MobileSkill> mobileSkills = const [];
   List<CapturedNotification> recentMessages = const [];
+  VisionAttachment? pendingVisionImage;
+  VisionAttachment? lastSessionVisionImage;
+  String? lastSessionVisionSummary;
 
   static const _defaultFeed = <_FeedEntry>[
     _FeedEntry(
       isUser: false,
       senderLabel: 'Kernel Local',
       text:
-          'U.L.T.R.O.N. Mobile v1.2.1 online. Wake Word Reliability, Action Gate tático ativo, 16 Slash Commands, Visão Multimodal e 9 Provedores Gratuitos prontos para comando!',
+          'U.L.T.R.O.N. Mobile v1.5.0 online. Wake Word KWS Multi-Perfil (Ultron/Jarvis/Edith/Visão), Orbe Flutuante Android, Obsidian CRUD + Undo, Fluxos Agendados, Spotify OAuth PKCE, Ponte LAN Desktop v3.0.0 e Utilitários SAF prontos para comando!',
       timestamp: 'ONLINE',
     ),
   ];
@@ -155,19 +177,27 @@ class _CoreScreenState extends State<CoreScreen>
       capture: widget.captureSource ?? MethodChannelAudioCaptureSource(),
       stt: widget.sttService ?? GroqWhisperSttService(),
       voiceService: voiceService,
+      vadSegmenter: VadSegmenter(
+        sampleRate: 16000,
+        silenceHangover: const Duration(milliseconds: 500),
+      ),
       corrections: VoiceCorrectionsService(),
       shortcuts: VoiceShortcutsService(),
       onConfirmShortcut: _confirmShortcut,
       onExecuteShortcut: _executeShortcut,
       onTranscript: _handleVoiceTranscript,
+      onRmsChanged: (rms) {
+        if (!mounted) return;
+        setState(() => speechRms = rms);
+      },
     )..addListener(_onVoicePipelineChanged);
     voicePipeline.handleLifecycleState(_lifecycleState);
-    ticker = createTicker((duration) {
-      coreTime.value = duration.inMicroseconds / 1000000;
-    });
-    ticker.start();
-    active = true;
     unawaited(voiceService.initialize().catchError((_) {}));
+    unawaited(
+      ReminderService.instance()
+          .then((s) => s.reschedulePendingAlarms())
+          .catchError((_) => 0),
+    );
     if (widget.announceOnline && _isForegroundActive) {
       unawaited(
         voiceService.speak(widget.onlineAnnouncement).catchError((_) {}),
@@ -202,14 +232,243 @@ class _CoreScreenState extends State<CoreScreen>
         if (!mounted) return;
         setState(() => speechRms = rms);
       },
+      onBackgroundTurn: () => unawaited(_syncPendingBackgroundTurns()),
+      onPairingUriReceived: (uri) =>
+          unawaited(_handleIncomingPairingUri(uri)),
+      onWorkflowTriggered: (_) => unawaited(_consumePendingWorkflows()),
+      onSpotifyCallbackReceived: (uri) =>
+          unawaited(_handleIncomingSpotifyCallbackUri(uri)),
+      onFloatingOrbTapped: (requiresUnlock) =>
+          unawaited(_handleFloatingOrbTap(requiresUnlock)),
     );
+    desktopCommandListener = DesktopCommandListener(
+      pairingService: desktopPairing,
+      deviceService: deviceService,
+      authGate: widget.gate,
+      actionGate: actionGate,
+      confirmAction: (sim) {
+        if (!mounted || !_isForegroundActive) return Future.value(false);
+        return _confirmActionSimulation(sim);
+      },
+      onCommandHandled: (res) {
+        if (!mounted) return;
+        final now = DateTime.now();
+        final timeStr =
+            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Desktop → Celular (${res.command})',
+          text: res.message,
+          timestamp: timeStr,
+        ));
+      },
+    );
+    widget.gate.addListener(_onAuthGateChanged);
+    _syncDesktopListenerState();
+    _syncFloatingOrbAuthState();
     _loadInitialState();
     _checkUpdate();
     // v1.2.1: wake word captada com o app fechado/bloqueado fica pendente no nativo.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _consumePendingWakeWord();
+      unawaited(_consumePendingFloatingOrbTap());
       unawaited(_consumePendingTileAction());
+      unawaited(_consumePendingPairingUri());
+      unawaited(_consumePendingNfcUnlock());
+      unawaited(_consumePendingWorkflows());
+      unawaited(_consumePendingSpotifyCallbackUri());
     });
+  }
+
+  void _syncFloatingOrbAuthState() {
+    unawaited(
+      deviceService.syncFloatingOrbAuthState(
+        locked: !widget.gate.isAuthenticated,
+        accessLevel: widget.gate.level.name,
+      ),
+    );
+  }
+
+  Future<void> _consumePendingFloatingOrbTap() async {
+    try {
+      final pending = await deviceService.consumePendingFloatingOrbTap();
+      if (pending != null && pending.triggered) {
+        await _handleFloatingOrbTap(pending.requiresUnlock);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _handleFloatingOrbTap(bool requiresUnlock) async {
+    if (!mounted) return;
+    if (requiresUnlock || !widget.gate.isAuthenticated) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '🔒 Sessão bloqueada no AuthGate. Desbloqueie ou eleve a sessão para executar comandos pelo Orbe Flutuante.',
+            style: TextStyle(fontSize: 11),
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+      if (widget.gate.isAuthenticated &&
+          !widget.gate.satisfies(AccessLevel.elevated)) {
+        final elevated = await _elevateSessionTo(
+          AccessLevel.elevated,
+          'O Orbe Flutuante solicitou elevação de sessão para ações sensíveis.',
+        );
+        if (!elevated || !mounted) return;
+      } else if (!widget.gate.isAuthenticated) {
+        return;
+      }
+    }
+    if (sending) return;
+    if (voiceService.isSpeaking) {
+      await voiceService.stop();
+      return;
+    }
+    await _startVoiceInput();
+  }
+
+  Future<void> _consumePendingSpotifyCallbackUri() async {
+    try {
+      final uri = await deviceService.consumePendingSpotifyCallbackUri();
+      if (uri != null && uri.isNotEmpty) {
+        await _handleIncomingSpotifyCallbackUri(uri);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _handleIncomingSpotifyCallbackUri(String rawUri) async {
+    if (!mounted) return;
+    try {
+      await deviceService
+          .getSpotifyService()
+          .handleAuthorizationCallbackUri(rawUri);
+      if (!mounted) return;
+      final now = DateTime.now();
+      _appendFeed(_FeedEntry(
+        isUser: false,
+        senderLabel: 'Spotify OAuth 2.0 PKCE',
+        text:
+            '✅ Conta Spotify conectada com sucesso via OAuth 2.0 PKCE! Use `/spotify estado` ou `"tocar <música> no spotify"`.',
+        timestamp: _formatTime(now),
+      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🎵 Spotify conectado com sucesso via PKCE!'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _appendFeed(_FeedEntry(
+        isUser: false,
+        senderLabel: 'Spotify OAuth 2.0 PKCE',
+        text: '⚠️ Falha no callback OAuth do Spotify: $e',
+        timestamp: _formatTime(DateTime.now()),
+      ));
+    }
+  }
+
+  Future<void> _consumePendingWorkflows() async {
+    try {
+      final ids = await deviceService.consumePendingWorkflowIds();
+      for (final id in ids) {
+        final res = await deviceService.runWorkflow(
+          '$id',
+          isBackgroundTrigger: true,
+        );
+        if (!mounted) return;
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Workflow Scheduler',
+          text: res.message,
+          timestamp: _formatTime(DateTime.now()),
+        ));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _consumePendingNfcUnlock() async {
+    try {
+      final uid = await NfcAuthService.instance.consumePendingUnlockUid();
+      if (uid == null || uid.isEmpty || !mounted) return;
+      final ok = await widget.gate.authenticateNfc(
+        uid,
+        widget.vault.verifyNfcTag,
+      );
+      if (ok && mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('🔑 Sessão elevada por NFC (${widget.gate.levelBadge})!'),
+          ),
+        );
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _consumePendingPairingUri() async {
+    try {
+      final uri = await deviceService.consumePendingPairingUri();
+      if (uri != null && uri.isNotEmpty) {
+        await _handleIncomingPairingUri(uri);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _handleIncomingPairingUri(String rawUri) async {
+    if (!mounted) return;
+    try {
+      final parsed = DesktopPairingService.parsePairingUri(rawUri);
+      final allowed = await showActionConfirmationDialog(
+        context,
+        ActionConfirmationRequest(
+          title: 'Parear com U.L.T.R.O.N. Desktop?',
+          description:
+              'URL LAN: ${parsed.config.baseUrl}\nDispositivo: ${parsed.config.deviceId}\n'
+              '${parsed.syncKillSwitch ? 'Também sincronizará o Kill Switch LAN.' : ''}',
+          actionLabel: 'Parear agora',
+          danger: false,
+        ),
+      );
+      if (!allowed || !mounted) return;
+      final config = await desktopPairing.pairFromUri(
+        rawUri,
+        onConfigureKillSwitch: (baseUrl, secret,
+            {bool allowNonPrivateHost = false}) async {
+          await deviceService.savePcKillSwitchUrl(
+            baseUrl,
+            allowNonPrivateHost: allowNonPrivateHost,
+          );
+          await deviceService.savePcLanSecret(secret);
+        },
+      );
+      if (!mounted) return;
+      desktopCommandListener.wakeUp();
+      final now = DateTime.now();
+      final timeStr =
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+      _appendFeed(_FeedEntry(
+        isUser: false,
+        senderLabel: 'Bridge Desktop LAN',
+        text: '✅ Desktop pareado com sucesso!\n'
+            '• URL: ${config.baseUrl}\n'
+            '• Dispositivo: ${config.deviceId}\n'
+            'Use `/pc status` para testar a conexão.',
+        timestamp: timeStr,
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      final now = DateTime.now();
+      final timeStr =
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+      _appendFeed(_FeedEntry(
+        isUser: false,
+        senderLabel: 'Bridge Desktop LAN',
+        text: '⚠️ Link de pareamento inválido: $e',
+        timestamp: timeStr,
+      ));
+    }
   }
 
   Future<bool> _consumePendingTileAction() async {
@@ -229,19 +488,37 @@ class _CoreScreenState extends State<CoreScreen>
 
   void _onVoicePipelineChanged() {
     if (!mounted) return;
+    final capturing =
+        voicePipeline.isSingleTurnActive || voicePipeline.isPushToTalkActive;
     final err = voicePipeline.lastError;
     if (err != null && err != _lastShownPipelineError) {
       _lastShownPipelineError = err;
+      final friendly = err == 'sem_chave_stt'
+          ? 'Configure uma chave STT (Groq gratuito ou Whisper compatível) em Config IA para transcrever o microfone do celular.'
+          : err;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(err, style: const TextStyle(fontSize: 11)),
+          content: Text(friendly, style: const TextStyle(fontSize: 11)),
           duration: const Duration(seconds: 3),
         ),
       );
     } else if (err == null) {
       _lastShownPipelineError = null;
     }
-    setState(() {});
+    setState(() {
+      listeningVoice = capturing;
+      if (!capturing) {
+        speechRms = 0.0;
+      }
+    });
+    final orbState = capturing
+        ? 'ouvindo'
+        : (voicePipeline.isTranscribing || sending)
+            ? 'processando'
+            : voiceService.isSpeaking
+                ? 'falando'
+                : 'ocioso';
+    unawaited(deviceService.updateFloatingOrbState(orbState));
   }
 
   Future<void> _handleVoiceTranscript(String transcript) async {
@@ -304,13 +581,15 @@ class _CoreScreenState extends State<CoreScreen>
       return;
     }
     if (!mounted) return;
+    final detectedProfile =
+        WakeWord.detectProfile(phrase) ?? voiceService.wakeWordProfile;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
+      SnackBar(
         content: Text(
-          '🎙️ "Ultron" detectado! Escutando seu comando…',
-          style: TextStyle(fontSize: 11),
+          '🎙️ "${detectedProfile.label}" detectado! Escutando seu comando…',
+          style: const TextStyle(fontSize: 11),
         ),
-        duration: Duration(seconds: 2),
+        duration: const Duration(seconds: 2),
       ),
     );
     await _startVoiceInput();
@@ -339,6 +618,13 @@ class _CoreScreenState extends State<CoreScreen>
           ),
         ),
         actions: [
+          if (!diag.overlayPermission)
+            TextButton(
+              onPressed: () async {
+                await deviceService.requestOverlayPermission();
+              },
+              child: const Text('SOBREPOR APPS'),
+            ),
           TextButton(
             onPressed: () async {
               await deviceService.requestIgnoreBatteryOptimizations();
@@ -361,8 +647,76 @@ class _CoreScreenState extends State<CoreScreen>
     );
   }
 
+  Future<void> _syncPendingBackgroundTurns({bool persistOnly = false}) {
+    final prev = _pendingBgSync;
+    final current = () async {
+      if (prev != null) {
+        try {
+          await prev;
+        } catch (_) {}
+      }
+      await _performBackgroundTurnSync(persistOnly: persistOnly);
+    }();
+    _pendingBgSync = current;
+    return current;
+  }
+
+  Future<void> _performBackgroundTurnSync({required bool persistOnly}) async {
+    try {
+      final turns = await deviceService.consumePendingBackgroundTurns();
+      if (turns.isEmpty) return;
+
+      final entries = <_FeedEntry>[];
+      for (final turn in turns) {
+        await ConversationHistory.instance.save(
+          ChatMessage(
+            id: null,
+            conversationId: 'default',
+            role: ChatRole.user,
+            content: turn.userText,
+            createdAt: turn.userTimestamp,
+          ),
+        );
+        await ConversationHistory.instance.save(
+          ChatMessage(
+            id: null,
+            conversationId: 'default',
+            role: ChatRole.assistant,
+            content: turn.assistantText,
+            createdAt: turn.replyTimestamp,
+          ),
+        );
+        entries.add(
+          _FeedEntry(
+            isUser: true,
+            senderLabel: 'OPERADOR',
+            text: turn.userText,
+            timestamp: _formatTime(turn.userTimestamp.toLocal()),
+          ),
+        );
+        entries.add(
+          _FeedEntry(
+            isUser: false,
+            senderLabel: turn.senderLabel,
+            text: turn.assistantText,
+            timestamp: _formatTime(turn.replyTimestamp.toLocal()),
+          ),
+        );
+      }
+
+      if (!persistOnly && mounted && entries.isNotEmpty) {
+        setState(() {
+          feed = [...feed, ...entries];
+        });
+        _scrollToBottom();
+        unawaited(_refreshDeviceStatus());
+      }
+    } catch (_) {}
+  }
+
   Future<void> _loadInitialState() async {
     try {
+      await _syncPendingBackgroundTurns(persistOnly: true);
       final saved = await ConversationHistory.instance.messages(
         conversationId: 'default',
         limit: 20,
@@ -373,7 +727,11 @@ class _CoreScreenState extends State<CoreScreen>
       final failures = await widget.vault.failureCount();
       final pinSet = await widget.vault.hasPin;
       final duressSet = await widget.vault.hasDuressPin;
+      final storedNfcTags = await widget.vault.listNfcTags();
+      final hwNfc = await NfcAuthService.instance.getStatus();
       final killUrl = await deviceService.loadPcKillSwitchUrl();
+      final lanSecret = await deviceService.loadPcLanSecret();
+      final desktopCfg = await desktopPairing.loadPairing();
       List<MobileSkill> loadedSkills = const [];
       try {
         final obsidian = await ObsidianService.openDefaultVault();
@@ -394,12 +752,18 @@ class _CoreScreenState extends State<CoreScreen>
         authFailures = failures;
         hasPinConfigured = pinSet;
         hasDuressPinConfigured = duressSet;
+        nfcTags = storedNfcTags;
+        nfcStatus = hwNfc;
         notificationSentinelEnabled = notifEnabled;
         selectedVoiceProfile = voiceService.profile;
         recentMessages = loadedMsgs;
         if (killUrl.isNotEmpty && pcKillSwitchUrlController.text.isEmpty) {
           pcKillSwitchUrlController.text = killUrl;
         }
+        if (lanSecret.isNotEmpty && pcLanSecretController.text.isEmpty) {
+          pcLanSecretController.text = lanSecret;
+        }
+        pcLanConfigured = desktopCfg != null || lanSecret.isNotEmpty;
         mobileSkills = loadedSkills;
         if (hwStatus != null) {
           deviceStatus = hwStatus;
@@ -408,6 +772,11 @@ class _CoreScreenState extends State<CoreScreen>
         activeProviderUsed = enabledProviders.isNotEmpty
             ? '${enabledProviders.first.name} (${enabledProviders.first.model})'
             : 'Failover Pronto';
+        sessionTelemetry = sessionTelemetry.withActiveProvider(
+          enabledProviders.isNotEmpty
+              ? enabledProviders.first.name
+              : 'Failover Pronto',
+        );
         feed = saved.isNotEmpty
             ? saved
                 .map(
@@ -424,6 +793,60 @@ class _CoreScreenState extends State<CoreScreen>
       });
       _applyContextSensors(hwStatus);
       _scrollToBottom();
+      unawaited(_syncBackgroundVoiceConfig(enabledProviders: enabledProviders));
+    } catch (_) {}
+  }
+
+  Future<void> _syncBackgroundVoiceConfig({
+    List<AiProviderConfig>? enabledProviders,
+  }) async {
+    try {
+      await voiceService.initialize();
+      final providers = enabledProviders ??
+          ((await providerStore.load()).where((p) => p.enabled).toList()
+            ..sort((a, b) => a.priority.compareTo(b.priority)));
+      final sttCfg = await providerStore.resolveSttConfig();
+      final primaryAi = providers.isNotEmpty
+          ? providers.first
+          : const AiProviderConfig(
+              id: 'pollinations_free',
+              name: 'Pollinations',
+              baseUrl: 'https://text.pollinations.ai/openai',
+              model: 'openai',
+              apiKey: '',
+              enabled: true,
+              priority: 0,
+            );
+      final fish = voiceService.fishConfig;
+      final recentPairs = <Map<String, String>>[];
+      for (var i = 0; i + 1 < feed.length; i++) {
+        if (feed[i].isUser && !feed[i + 1].isUser) {
+          recentPairs.add(<String, String>{
+            'userText': feed[i].text,
+            'assistantText': feed[i + 1].text,
+          });
+        }
+      }
+      final trimmedPairs = recentPairs.length > 6
+          ? recentPairs.sublist(recentPairs.length - 6)
+          : recentPairs;
+      await deviceService.syncBackgroundVoiceConfig(
+        sttUrl: sttCfg.endpointUrl,
+        sttKey: sttCfg.apiKey,
+        sttModel: sttCfg.model,
+        sttLanguage: sttCfg.language,
+        aiBaseUrl: primaryAi.baseUrl,
+        aiKey: primaryAi.apiKey,
+        aiModel: primaryAi.model,
+        fishEnabled: fish.enabled,
+        fishKey: fish.apiKey,
+        fishRefId: fish.referenceId,
+        fishLanguage: fish.language,
+        fishModel: fish.model,
+        whisperMode: nightFocusMode,
+        wakeWordProfile: voiceService.wakeWordProfile.id,
+        recentHistory: trimmedPairs.isEmpty ? null : trimmedPairs,
+      );
     } catch (_) {}
   }
 
@@ -438,7 +861,6 @@ class _CoreScreenState extends State<CoreScreen>
         criticalBatteryAlerted = true;
         stage = CoreStage.hidden;
       });
-      _syncTickerWithState();
       _appendFeed(
         _FeedEntry(
           isUser: false,
@@ -464,6 +886,7 @@ class _CoreScreenState extends State<CoreScreen>
     final next = !nightFocusMode;
     setState(() => nightFocusMode = next);
     await voiceService.setWhisperMode(next);
+    unawaited(_syncBackgroundVoiceConfig());
   }
 
   Future<void> _refreshDeviceStatus() async {
@@ -618,11 +1041,42 @@ class _CoreScreenState extends State<CoreScreen>
       );
       return;
     }
+    final actionCode = viaSms ? 'SMS' : 'WHATSAPP';
+    final sim = actionGate.simulate(
+      '$actionCode:${target.isEmpty ? 'contato' : target}:$body',
+    );
+    final approved = await _confirmActionSimulation(sim);
+    if (!approved) {
+      await deviceService.recordAudit(
+        actor: 'OPERATOR',
+        action: actionCode,
+        target: sim.targetResource,
+        status: 'DENIED',
+        detail: 'Cancelado pelo Operador no Action Gate (painel Celular)',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '🚫 Envio cancelado pelo Operador.',
+            style: TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+      return;
+    }
     HapticFeedback.mediumImpact();
     try {
       final res = viaSms
           ? await deviceService.sendSms(target: target, text: body)
           : await deviceService.sendWhatsApp(target: target, text: body);
+      await deviceService.recordAudit(
+        actor: 'OPERATOR',
+        action: actionCode,
+        target: sim.targetResource,
+        status: 'EXECUTED',
+        detail: res,
+      );
       messageBodyController.clear();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -631,6 +1085,13 @@ class _CoreScreenState extends State<CoreScreen>
         ),
       );
     } catch (e) {
+      await deviceService.recordAudit(
+        actor: 'OPERATOR',
+        action: actionCode,
+        target: sim.targetResource,
+        status: 'FAILED',
+        detail: '$e',
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -687,17 +1148,399 @@ class _CoreScreenState extends State<CoreScreen>
     });
   }
 
-  void _syncTickerWithState({AppLifecycleState? lifecycle}) {
-    final shouldRun =
-        (lifecycle == null || lifecycle == AppLifecycleState.resumed) &&
-            panel == _ActivePanel.main &&
-            stage != CoreStage.hidden;
-    if (shouldRun && !active) {
-      ticker.start();
-      active = true;
-    } else if (!shouldRun && active) {
-      ticker.stop();
-      active = false;
+  void _onAuthGateChanged() {
+    _syncDesktopListenerState();
+    _syncFloatingOrbAuthState();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _syncDesktopListenerState() {
+    if (widget.gate.hasBiometricAccess) {
+      desktopCommandListener.start();
+    } else {
+      desktopCommandListener.stop();
+    }
+  }
+
+  Future<bool> _elevateSessionTo(
+    AccessLevel requiredLevel,
+    String reason,
+  ) async {
+    if (widget.gate.satisfies(requiredLevel)) return true;
+    if (!mounted) return false;
+    final hasNfcTags = await widget.vault.hasNfcKey;
+    final hwNfc = await NfcAuthService.instance.getStatus();
+    if (!mounted) return false;
+
+    final allowNfc = requiredLevel == AccessLevel.elevated &&
+        hasNfcTags &&
+        hwNfc.available &&
+        hwNfc.enabled;
+
+    final upgraded = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) {
+        var readingStarted = false;
+        var errorMsg = '';
+        var checking = false;
+        StreamSubscription<String>? sub;
+
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            if (allowNfc && !readingStarted) {
+              readingStarted = true;
+              NfcAuthService.instance.startReader();
+              sub = NfcAuthService.instance.tagStream.listen((uidHex) async {
+                if (checking) return;
+                setDialogState(() {
+                  checking = true;
+                  errorMsg = '';
+                });
+                final ok = await widget.gate.authenticateNfc(
+                  uidHex,
+                  widget.vault.verifyNfcTag,
+                );
+                if (ok && ctx.mounted) {
+                  Navigator.of(ctx).pop(true);
+                } else if (ctx.mounted) {
+                  setDialogState(() {
+                    checking = false;
+                    errorMsg = 'Chave NFC não reconhecida.';
+                  });
+                }
+              });
+            }
+
+            final targetLabel = requiredLevel == AccessLevel.sovereign
+                ? 'NÍVEL 3 • BIOMETRIA'
+                : 'NÍVEL 2 • NFC OU BIOMETRIA';
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF140204),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(color: _crimson.withValues(alpha: 0.5)),
+              ),
+              title: const Text(
+                'Elevar Nível de Acesso',
+                style: TextStyle(color: Colors.white, fontSize: 15),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Sessão atual: ${widget.gate.levelBadge}\nExigido: $targetLabel',
+                    style: const TextStyle(
+                      color: _rose,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (reason.trim().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      reason,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                  if (allowNfc) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF2E0305),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: _crimson.withValues(alpha: 0.4)),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.nfc, color: _rose, size: 18),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Encoste sua chave NFC nas costas do celular para liberar Nível 2.',
+                              style: TextStyle(color: Colors.white, fontSize: 11),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (errorMsg.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      errorMsg,
+                      style: const TextStyle(color: _crimson, fontSize: 11),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    sub?.cancel();
+                    if (readingStarted) {
+                      NfcAuthService.instance.stopReader();
+                    }
+                    Navigator.of(ctx).pop(false);
+                  },
+                  child: const Text('Cancelar'),
+                ),
+                FilledButton.icon(
+                  onPressed: checking
+                      ? null
+                      : () async {
+                          setDialogState(() {
+                            checking = true;
+                            errorMsg = '';
+                          });
+                          final ok =
+                              await widget.gate.authenticateBiometric();
+                          if (ok && ctx.mounted) {
+                            sub?.cancel();
+                            if (readingStarted) {
+                              await NfcAuthService.instance.stopReader();
+                            }
+                            if (ctx.mounted) Navigator.of(ctx).pop(true);
+                          } else if (ctx.mounted) {
+                            setDialogState(() {
+                              checking = false;
+                              errorMsg = 'Biometria recusada ou indisponível.';
+                            });
+                          }
+                        },
+                  style: FilledButton.styleFrom(backgroundColor: _crimson),
+                  icon: const Icon(Icons.fingerprint, size: 16),
+                  label: const Text('Liberar c/ Biometria'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      if (allowNfc) {
+        unawaited(NfcAuthService.instance.stopReader());
+      }
+    });
+
+    if (mounted) {
+      setState(() {});
+    }
+    return upgraded == true && widget.gate.satisfies(requiredLevel);
+  }
+
+  Future<void> _openNfcEnrollmentWizard() async {
+    final bioOk = await _elevateSessionTo(
+      AccessLevel.sovereign,
+      'Cadastrar uma chave física NFC exige Biometria do Dono (Nível 3).',
+    );
+    if (!bioOk || !mounted) return;
+
+    final st = await NfcAuthService.instance.getStatus();
+    if (!mounted) return;
+    setState(() => nfcStatus = st);
+    if (!st.available) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Este aparelho não possui hardware NFC disponível.'),
+        ),
+      );
+      return;
+    }
+    if (!st.enabled) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF140204),
+          title: const Text('Ative o NFC no Android'),
+          content: const Text(
+            'O NFC do celular está desligado. Toque em "Abrir Ajustes NFC", ative a chave NFC e depois volte para cadastrar sua tag.',
+            style: TextStyle(fontSize: 12),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Fechar'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await NfcAuthService.instance.openNfcSettings();
+              },
+              child: const Text('Abrir Ajustes NFC'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final labelCtrl = TextEditingController(text: 'Chave NFC');
+    StreamSubscription<String>? sub;
+    StreamSubscription<NfcWriteResult>? writeSub;
+    var capturedUid = '';
+    var writeShortcut = true;
+    String? ndefStatus;
+    var readerOn = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            if (!readerOn) {
+              readerOn = true;
+              NfcAuthService.instance.startReader(
+                writeUnlockNdef: writeShortcut,
+              );
+              writeSub =
+                  NfcAuthService.instance.writeResultStream.listen((res) {
+                if (!ctx.mounted) return;
+                setDialogState(() {
+                  ndefStatus = res.written
+                      ? 'Atalho ultron://unlock gravado na tag!'
+                      : 'Tag cadastrada (sem gravação NDEF: ${res.error ?? 'somente leitura'}).';
+                });
+              });
+              sub = NfcAuthService.instance.tagStream.listen((uidHex) {
+                if (ctx.mounted && capturedUid.isEmpty) {
+                  HapticFeedback.mediumImpact();
+                  setDialogState(() => capturedUid = uidHex);
+                }
+              });
+            }
+            return AlertDialog(
+              backgroundColor: const Color(0xFF140204),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(color: _crimson.withValues(alpha: 0.5)),
+              ),
+              title: const Text(
+                'Cadastrar Chave NFC (Nível 2)',
+                style: TextStyle(fontSize: 15),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: labelCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    decoration: const InputDecoration(
+                      labelText: 'Apelido da tag (ex: Chaveiro, Cartão)',
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: writeShortcut,
+                    onChanged: capturedUid.isNotEmpty
+                        ? null
+                        : (v) {
+                            setDialogState(() => writeShortcut = v);
+                            unawaited(
+                              NfcAuthService.instance.stopReader().then(
+                                    (_) => NfcAuthService.instance.startReader(
+                                      writeUnlockNdef: v,
+                                    ),
+                                  ),
+                            );
+                          },
+                    title: const Text(
+                      'Gravar abertura direta (ultron://unlock)',
+                      style: TextStyle(fontSize: 11.5),
+                    ),
+                    subtitle: const Text(
+                      'Abre e desbloqueia o app direto ao encostar.',
+                      style: TextStyle(fontSize: 10, color: Colors.white60),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2E0305),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: capturedUid.isEmpty
+                            ? Colors.white24
+                            : const Color(0xFF5CE69C),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          capturedUid.isEmpty ? Icons.nfc : Icons.check_circle,
+                          color: capturedUid.isEmpty
+                              ? _rose
+                              : const Color(0xFF5CE69C),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            capturedUid.isEmpty
+                                ? 'Encoste sua tag, cartão ou adesivo NFC atrás do celular agora...'
+                                : 'Tag lida! Final ****${capturedUid.length >= 4 ? capturedUid.substring(capturedUid.length - 4) : capturedUid}.${ndefStatus == null ? '' : '\n$ndefStatus'}',
+                            style: const TextStyle(fontSize: 11.5),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('Cancelar'),
+                ),
+                FilledButton(
+                  onPressed: capturedUid.isEmpty
+                      ? null
+                      : () async {
+                          await widget.vault.addNfcTag(
+                            capturedUid,
+                            label: labelCtrl.text,
+                          );
+                          if (ctx.mounted) Navigator.of(ctx).pop(true);
+                        },
+                  style: FilledButton.styleFrom(backgroundColor: _crimson),
+                  child: const Text('Salvar Chave NFC'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).whenComplete(() async {
+      await writeSub?.cancel();
+      await sub?.cancel();
+      if (readerOn) {
+        await NfcAuthService.instance.stopReader();
+      }
+      labelCtrl.dispose();
+    });
+
+    if (saved == true && mounted) {
+      final list = await widget.vault.listNfcTags();
+      if (!mounted) return;
+      setState(() => nfcTags = list);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('✅ Chave NFC cadastrada com hash criptográfico!'),
+        ),
+      );
     }
   }
 
@@ -708,25 +1551,36 @@ class _CoreScreenState extends State<CoreScreen>
     if (state != AppLifecycleState.resumed) {
       voiceService.stop();
     } else {
+      unawaited(_syncPendingBackgroundTurns());
       _consumePendingWakeWord();
+      unawaited(_consumePendingFloatingOrbTap());
       unawaited(_consumePendingTileAction());
+      unawaited(_consumePendingNfcUnlock());
+      unawaited(_consumePendingWorkflows());
+      unawaited(_consumePendingSpotifyCallbackUri());
+      desktopCommandListener.wakeUp();
     }
-    _syncTickerWithState(lifecycle: state);
   }
 
   @override
   void dispose() {
+    widget.gate.removeListener(_onAuthGateChanged);
+    desktopCommandListener.stop();
     WidgetsBinding.instance.removeObserver(this);
     voicePipeline.removeListener(_onVoicePipelineChanged);
     voicePipeline.dispose();
-    deviceService.setNativeEventHandlers(onFlip: null, onWakeWord: null);
-    ticker.dispose();
-    coreTime.dispose();
+    deviceService.setNativeEventHandlers(
+      onFlip: null,
+      onWakeWord: null,
+      onBackgroundTurn: null,
+      onPairingUriReceived: null,
+    );
     voiceService.stop();
     commandController.dispose();
     quickNoteController.dispose();
     duressPinController.dispose();
     pcKillSwitchUrlController.dispose();
+    pcLanSecretController.dispose();
     messageTargetController.dispose();
     messageBodyController.dispose();
     scrollController.dispose();
@@ -739,13 +1593,11 @@ class _CoreScreenState extends State<CoreScreen>
       stage = next;
       panel = _ActivePanel.main;
     });
-    _syncTickerWithState();
   }
 
   void _setPanel(_ActivePanel next) {
     HapticFeedback.selectionClick();
     setState(() => panel = next);
-    _syncTickerWithState();
   }
 
   void _toggleAudio() {
@@ -797,6 +1649,7 @@ class _CoreScreenState extends State<CoreScreen>
       final now = DateTime.now();
       final ts = _formatTime(now);
       final file = await obsidian.appendDailyNote(now, '[$ts] $trimmed');
+      deviceService.invalidateVaultSearchCache();
       quickNoteController.clear();
       if (!mounted) return;
       final fileName = file.path.split(RegExp(r'[/\\]')).last;
@@ -837,6 +1690,7 @@ class _CoreScreenState extends State<CoreScreen>
       final now = DateTime.now();
       final ts = _formatTime(now);
       final file = await obsidian.captureToInbox(trimmed);
+      deviceService.invalidateVaultSearchCache();
       quickNoteController.clear();
       if (!mounted) return;
       final fileName = file.path.split(RegExp(r'[/\\]')).last;
@@ -898,43 +1752,49 @@ class _CoreScreenState extends State<CoreScreen>
 
   Future<void> _startVoiceInput() async {
     if (sending) return;
-    if (listeningVoice) {
+    if (voicePipeline.isSingleTurnActive) {
       HapticFeedback.selectionClick();
-      await deviceService.stopListeningVoice();
+      await voicePipeline.stopSingleTurnListening();
+      return;
+    }
+    if (voicePipeline.isPushToTalkActive) {
+      HapticFeedback.selectionClick();
+      await voicePipeline.stopPushToTalk();
       return;
     }
     HapticFeedback.mediumImpact();
+    final wasSpeaking = voiceService.isSpeaking;
     await voiceService.stop();
-    // Aguarda 280ms após cortar o TTS para dissipar qualquer eco do alto-falante antes de abrir o microfone
-    await Future<void>.delayed(const Duration(milliseconds: 280));
-    if (!mounted || sending || listeningVoice) return;
-    setState(() {
-      listeningVoice = true;
-      speechRms = 0.1;
-    });
-    try {
-      final spoken = await deviceService.listenVoice(
-        prompt: 'Fale seu comando para o U.L.T.R.O.N...',
+    if (wasSpeaking) {
+      // Aguarda dissipar eco do alto-falante somente se o TTS estava falando.
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+    }
+    if (!mounted || sending || voicePipeline.isCapturing) return;
+
+    final sttCfg = widget.sttService == null
+        ? await providerStore.resolveSttConfig()
+        : null;
+    if (!mounted) return;
+    if (sttCfg != null && sttCfg.apiKey.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Microfone nativo pronto, mas falta chave STT (Groq gratuito ou Whisper em Config IA). Google Voz desativado.',
+            style: TextStyle(fontSize: 11),
+          ),
+          duration: Duration(seconds: 4),
+        ),
       );
-      if (!mounted) return;
-      setState(() {
-        listeningVoice = false;
-        speechRms = 0.0;
-      });
-      if (spoken.isNotEmpty) {
-        commandController.text = spoken;
-        await saveCommand();
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        listeningVoice = false;
-        speechRms = 0.0;
-      });
+      return;
+    }
+
+    final ok = await voicePipeline.startSingleTurnListening();
+    if (!mounted) return;
+    if (!ok && voicePipeline.lastError != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Reconhecimento de voz indisponível: $e',
+            'Microfone nativo indisponível: ${voicePipeline.lastError}',
             style: const TextStyle(fontSize: 11),
           ),
           duration: const Duration(seconds: 3),
@@ -945,17 +1805,26 @@ class _CoreScreenState extends State<CoreScreen>
 
   Future<void> saveCommand() async {
     if (sending) return;
-    final text = commandController.text.trim();
-    if (text.isEmpty) return;
+    final attachedVision = pendingVisionImage;
+    var text = commandController.text.trim();
+    if (text.isEmpty && attachedVision == null) return;
+    if (text.isEmpty && attachedVision != null) {
+      text =
+          'Analise esta imagem em detalhes (texto/OCR, objetos, códigos QR e contexto tático).';
+    }
 
     SystemSound.play(SystemSoundType.click);
     HapticFeedback.lightImpact();
     commandController.clear();
+    if (attachedVision != null && mounted) {
+      setState(() => pendingVisionImage = null);
+    }
     final now = DateTime.now();
     final timeStr = _formatTime(now);
 
     // 1. Slash commands
-    final command = SlashCommandParser.parse(text);
+    final command =
+        attachedVision == null ? SlashCommandParser.parse(text) : null;
     if (command != null) {
       _appendFeed(
         _FeedEntry(
@@ -968,7 +1837,7 @@ class _CoreScreenState extends State<CoreScreen>
       await _runCommand(command.command, command.argument);
       return;
     }
-    if (text.startsWith('/')) {
+    if (attachedVision == null && text.startsWith('/')) {
       _appendFeed(
         _FeedEntry(
           isUser: true,
@@ -1038,8 +1907,31 @@ class _CoreScreenState extends State<CoreScreen>
       return;
     }
 
+    // 2b. Unified Morning Briefing natural trigger ("bom dia", "briefing matinal", "resumo do dia")
+    if (attachedVision == null &&
+        RegExp(
+          r'^(?:(?:ei|oi|ol[aá]|ok)\s+ultron[,\s]+)?(?:bom\s+dia(?:\s+ultron)?|briefing(?:\s+matinal|\s+do\s+dia)?|resumo\s+(?:matinal|do\s+dia)|meu\s+briefing)[!?.]*$',
+          caseSensitive: false,
+        ).hasMatch(text.trim())) {
+      _appendFeed(
+        _FeedEntry(
+          isUser: true,
+          senderLabel: 'OPERADOR',
+          text: text,
+          timestamp: timeStr,
+        ),
+      );
+      await _runMorningBriefing();
+      return;
+    }
+
     // 3. Direct Android Hardware & OS Commands (instant, works offline)
-    final deviceAction = await deviceService.tryExecuteNaturalCommand(text);
+    final deviceAction = attachedVision == null
+        ? await deviceService.tryExecuteNaturalCommand(
+            text,
+            confirmAction: _confirmActionSimulation,
+          )
+        : null;
     if (deviceAction != null && deviceAction.handled) {
       _appendFeed(
         _FeedEntry(
@@ -1065,18 +1957,23 @@ class _CoreScreenState extends State<CoreScreen>
     }
 
     // 4. AI Conversation + Failover + AI Hardware Actions
+    final userFeedText = attachedVision == null
+        ? text
+        : '📷 [Imagem ${attachedVision.width}x${attachedVision.height} · ${attachedVision.sizeKbLabel}]\n$text';
     _appendFeed(
       _FeedEntry(
         isUser: true,
         senderLabel: 'OPERADOR',
-        text: text,
+        text: userFeedText,
         timestamp: timeStr,
       ),
     );
 
+    final preAnalysis = cognicaoService.analyzePrompt(text);
+    final activeConvId = activeTacticalMode.conversationId;
     final previousMessages = await ConversationHistory.instance.messages(
-      conversationId: 'default',
-      limit: 12,
+      conversationId: activeConvId,
+      limit: preAnalysis.recommendedMaxHistory,
     );
     final aiHistory = previousMessages
         .where(
@@ -1095,7 +1992,7 @@ class _CoreScreenState extends State<CoreScreen>
     await ConversationHistory.instance.save(
       ChatMessage(
         id: null,
-        conversationId: 'default',
+        conversationId: activeConvId,
         role: ChatRole.user,
         content: text,
         createdAt: now,
@@ -1104,31 +2001,73 @@ class _CoreScreenState extends State<CoreScreen>
     if (!mounted) return;
     setState(() => sending = true);
 
+    final totalSw = Stopwatch()..start();
     try {
+      final ragSw = Stopwatch()..start();
+      final baseSystemPrompt = await deviceService.buildContextualSystemPrompt(
+        userQuery: text,
+        mode: activeTacticalMode,
+      );
+      final reusingSessionVision = attachedVision == null &&
+          lastSessionVisionImage != null &&
+          cognicaoService.looksLikeVisualFollowUp(text);
+      final effectiveVision =
+          attachedVision ?? (reusingSessionVision ? lastSessionVisionImage : null);
+      final visualMemorySection = reusingSessionVision &&
+              (lastSessionVisionSummary?.trim().isNotEmpty ?? false)
+          ? '\n\n${cognicaoService.wrapUntrustedVisualData(lastSessionVisionSummary!, sourceLabel: 'SESSAO_VISUAL_ANTERIOR')}'
+          : '';
       final contextualSystemPrompt =
-          await deviceService.buildContextualSystemPrompt();
+          '$baseSystemPrompt$visualMemorySection\n\n=== DIRETRIZ COGNITIVA DO TURNO ===\n${preAnalysis.directivePrompt}';
+      ragSw.stop();
+      final ragMs = ragSw.elapsedMilliseconds;
+
+      final llmSw = Stopwatch()..start();
       final reply = await AiFailover(store: providerStore).ask(
         text,
         history: aiHistory,
         systemPrompt: contextualSystemPrompt,
+        imageBase64: effectiveVision?.base64,
       );
-      final actionExec = await deviceService.executeAiActions(reply.text);
+      llmSw.stop();
+      final llmMs = llmSw.elapsedMilliseconds;
+
+      final actSw = Stopwatch()..start();
+      final actionExec = await deviceService.executeAiActions(
+        reply.text,
+        confirmAction: _confirmActionSimulation,
+      );
       await _refreshDeviceStatus();
+      actSw.stop();
+      final actMs = actSw.elapsedMilliseconds;
+
+      final postAudit = cognicaoService.auditResponse(
+        cleanReplyText: actionExec.cleanText,
+        executedTools: actionExec.executedLogs,
+        isUrgent: preAnalysis.isUrgent,
+      );
       final displayReply = actionExec.executedLogs.isEmpty
-          ? actionExec.cleanText
-          : '${actionExec.cleanText}\n\n[Hardware: ${actionExec.executedLogs.join(' • ')}]';
+          ? postAudit.text
+          : '${postAudit.text}\n\n[Hardware: ${actionExec.executedLogs.join(' • ')}]';
       final replyNow = DateTime.now();
       await ConversationHistory.instance.save(
         ChatMessage(
           id: null,
-          conversationId: 'default',
+          conversationId: activeConvId,
           role: ChatRole.assistant,
           content: displayReply,
           createdAt: replyNow,
         ),
       );
       if (!mounted) return;
-      setState(() => activeProviderUsed = reply.provider);
+      setState(() {
+        activeProviderUsed = reply.provider;
+        sessionTelemetry = sessionTelemetry.recordReply(reply);
+        if (attachedVision != null) {
+          lastSessionVisionImage = attachedVision;
+          lastSessionVisionSummary = postAudit.text;
+        }
+      });
       _appendFeed(
         _FeedEntry(
           isUser: false,
@@ -1137,10 +2076,25 @@ class _CoreScreenState extends State<CoreScreen>
           timestamp: _formatTime(replyNow),
         ),
       );
+      unawaited(_syncBackgroundVoiceConfig());
+      var ttsMs = 0;
       if (_isForegroundActive) {
-        await voiceService.speak(actionExec.cleanText);
+        final ttsSw = Stopwatch()..start();
+        await voiceService.speak(postAudit.speakText);
+        ttsSw.stop();
+        ttsMs = ttsSw.elapsedMilliseconds;
       }
+      totalSw.stop();
+      debugPrint(
+        '[ULTRON][LATENCY] RAG=${ragMs}ms LLM=${llmMs}ms'
+        '(provider=${reply.provider},fails=${reply.failedAttempts}) '
+        'ACT=${actMs}ms TTS=${ttsMs}ms TOTAL=${totalSw.elapsedMilliseconds}ms',
+      );
     } catch (error) {
+      totalSw.stop();
+      debugPrint(
+        '[ULTRON][LATENCY] ERROR after ${totalSw.elapsedMilliseconds}ms: $error',
+      );
       if (!mounted) return;
       _appendFeed(
         _FeedEntry(
@@ -1153,6 +2107,146 @@ class _CoreScreenState extends State<CoreScreen>
     } finally {
       if (mounted) setState(() => sending = false);
     }
+  }
+
+  Future<void> _runMorningBriefing({String? cityOverride}) async {
+    if (!mounted) return;
+    setState(() => sending = true);
+    try {
+      final briefing = await briefingService.generateBriefing(
+        cityOverride: cityOverride,
+      );
+      if (!mounted) return;
+      _appendFeed(
+        _FeedEntry(
+          isUser: false,
+          senderLabel: 'Briefing Executivo (P4)',
+          text: briefing.formattedReport,
+          timestamp: _formatTime(DateTime.now()),
+        ),
+      );
+      if (_isForegroundActive) {
+        await voiceService.speak(briefing.speakText);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _appendFeed(
+        _FeedEntry(
+          isUser: false,
+          senderLabel: 'Briefing Executivo (P4)',
+          text: '⚠️ Falha ao consolidar briefing: $e',
+          timestamp: _formatTime(DateTime.now()),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => sending = false);
+    }
+  }
+
+  Future<bool> _confirmActionSimulation(ActionSimulation sim) async {
+    if (!mounted) return false;
+    return _confirmActionGate(
+      title: '⚠️ ACTION GATE — ${sim.actionCode}',
+      message:
+          '${sim.description}\n\nImpacto: ${sim.estimatedImpact}\nAlvo: ${sim.targetResource}',
+      confirmText: 'APROVAR',
+    );
+  }
+
+  Future<void> _captureVisionImage(String source) async {
+    try {
+      final attachment = await deviceService.captureVisionImage(source: source);
+      if (!mounted) return;
+      if (attachment == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Captura de imagem cancelada.',
+              style: TextStyle(fontSize: 11),
+            ),
+          ),
+        );
+        return;
+      }
+      setState(() => pendingVisionImage = attachment);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '📷 Imagem anexada (${attachment.width}x${attachment.height} · ${attachment.sizeKbLabel}). Digite sua pergunta ou toque em enviar.',
+            style: const TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _appendFeed(_FeedEntry(
+        isUser: false,
+        senderLabel: 'Visão Multimodal',
+        text: '⚠️ Falha ao capturar imagem: $e',
+        timestamp: _formatTime(DateTime.now()),
+      ));
+    }
+  }
+
+  Future<void> _openVisionPicker() async {
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1A0204),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'VISÃO MULTIMODAL (CÂMERA / GALERIA)',
+                style: TextStyle(
+                  color: _crimson,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.photo_camera, color: _rose),
+                title: const Text(
+                  'Capturar com a Câmera',
+                  style: TextStyle(color: Colors.white, fontSize: 13),
+                ),
+                subtitle: const Text(
+                  'OCR, QR Code, placas ou diagnóstico visual',
+                  style: TextStyle(color: Color(0xFFA89698), fontSize: 11),
+                ),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  unawaited(_captureVisionImage('camera'));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: _rose),
+                title: const Text(
+                  'Escolher da Galeria',
+                  style: TextStyle(color: Colors.white, fontSize: 13),
+                ),
+                subtitle: const Text(
+                  'Prints de tela ou fotos salvas',
+                  style: TextStyle(color: Color(0xFFA89698), fontSize: 11),
+                ),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  unawaited(_captureVisionImage('gallery'));
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<bool> _confirmActionGate({
@@ -1200,6 +2294,7 @@ class _CoreScreenState extends State<CoreScreen>
         if (mounted) {
           setState(() => selectedVoiceProfile = voiceService.profile);
         }
+        unawaited(_syncBackgroundVoiceConfig());
       },
     );
   }
@@ -1207,6 +2302,9 @@ class _CoreScreenState extends State<CoreScreen>
   Future<bool> _setOfflineSentinelEnabled(bool next) async {
     if (next && voicePipeline.isContinuousEnabled) {
       await voicePipeline.stopContinuousListening();
+    }
+    if (next) {
+      unawaited(_syncBackgroundVoiceConfig());
     }
     final requested = await deviceService.setAudioSentinel(next);
     var real = false;
@@ -1234,15 +2332,34 @@ class _CoreScreenState extends State<CoreScreen>
         ),
       );
     } else if (next && real) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            '🎙️ Palavra de ativação "Ultron" ativa (1º e 2º plano).',
-            style: TextStyle(fontSize: 11),
+      final canOverlay = await deviceService.canDrawOverlays();
+      if (!mounted) return real;
+      if (!canOverlay) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              '🎙️ Sentinela ativa. Ative "Aparecer sobre outros apps" para abrir WhatsApp/apps em 2º plano.',
+              style: TextStyle(fontSize: 11),
+            ),
+            duration: const Duration(seconds: 6),
+            action: SnackBarAction(
+              label: 'ATIVAR',
+              onPressed: () =>
+                  unawaited(deviceService.requestOverlayPermission()),
+            ),
           ),
-          duration: Duration(seconds: 2),
-        ),
-      );
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '🎙️ Palavra de ativação "Ultron" ativa (1º e 2º plano).',
+              style: TextStyle(fontSize: 11),
+            ),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
     }
     return real;
   }
@@ -1257,21 +2374,7 @@ class _CoreScreenState extends State<CoreScreen>
       await voicePipeline.stopContinuousListening();
       return;
     }
-    SttConfig? dedicatedStt;
-    try {
-      dedicatedStt = await providerStore.loadSttConfig();
-    } catch (_) {
-      dedicatedStt = null;
-    }
-    if (dedicatedStt == null || dedicatedStt.apiKey.trim().isEmpty) {
-      await _setOfflineSentinelEnabled(true);
-      return;
-    }
-    final ok = await voicePipeline.startContinuousListening();
-    if (!mounted || ok || voicePipeline.lastError == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(voicePipeline.lastError!)),
-    );
+    await _setOfflineSentinelEnabled(true);
   }
 
   Future<void> _togglePushToTalk() async {
@@ -1306,11 +2409,15 @@ class _CoreScreenState extends State<CoreScreen>
         final failures = await widget.vault.failureCount();
         final pinSet = await widget.vault.hasPin;
         final duressSet = await widget.vault.hasDuressPin;
+        final storedNfc = await widget.vault.listNfcTags();
+        final hwNfc = await NfcAuthService.instance.getStatus();
         if (!mounted) return;
         setState(() {
           authFailures = failures;
           hasPinConfigured = pinSet;
           hasDuressPinConfigured = duressSet;
+          nfcTags = storedNfc;
+          nfcStatus = hwNfc;
         });
         _setPanel(_ActivePanel.security);
         break;
@@ -1326,16 +2433,25 @@ class _CoreScreenState extends State<CoreScreen>
         if (mounted) {
           setState(() => selectedVoiceProfile = voiceService.profile);
         }
+        unawaited(_syncBackgroundVoiceConfig());
         break;
       case UltronCommand.desktop:
+        final desktopAllowed = await _elevateSessionTo(
+          AccessLevel.sovereign,
+          'Acesso à aba Desktop e pareamento PC exige Biometria (Nível 3).',
+        );
+        if (!desktopAllowed || !mounted) return;
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => DesktopPairingScreen(
               pairingService: desktopPairing,
               actionsService: androidActions,
+              deviceService: deviceService,
+              onPairingChanged: () => desktopCommandListener.wakeUp(),
             ),
           ),
         );
+        desktopCommandListener.wakeUp();
         break;
       case UltronCommand.settings:
         await _openSettings();
@@ -1365,6 +2481,7 @@ class _CoreScreenState extends State<CoreScreen>
       case UltronCommand.skills:
         final res = await deviceService.tryExecuteNaturalCommand(
           argument.isEmpty ? 'listar skills' : 'executar skill $argument',
+          confirmAction: _confirmActionSimulation,
         );
         if (res != null) {
           _appendFeed(_FeedEntry(
@@ -1376,6 +2493,14 @@ class _CoreScreenState extends State<CoreScreen>
           if (res.speakText != null) {
             await voiceService.speak(res.speakText!);
           }
+        } else {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Skill Engine (.md)',
+            text:
+                '⚠️ Skill "$argument" não encontrada em Skills/. Use /skills para listar as disponíveis.',
+            timestamp: timeStr,
+          ));
         }
         break;
       case UltronCommand.note:
@@ -1392,7 +2517,9 @@ class _CoreScreenState extends State<CoreScreen>
         break;
       case UltronCommand.vault:
         final obs = await ObsidianService.openDefaultVault();
-        if (argument.isEmpty) {
+        final trimmedArg = argument.trim();
+        final lowerArg = trimmedArg.toLowerCase();
+        if (trimmedArg.isEmpty) {
           final opened = await deviceService.openObsidianVault();
           _appendFeed(_FeedEntry(
             isUser: false,
@@ -1402,6 +2529,80 @@ class _CoreScreenState extends State<CoreScreen>
                 : '📓 Cofre Segundo Cérebro: ${obs.vaultPath}\nUse /note <texto> para o Diário ou "ideia: <texto>" para o Inbox.',
             timestamp: timeStr,
           ));
+        } else if (lowerArg == 'status') {
+          final status = await deviceService.getObsidianStatus();
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Segundo Cérebro',
+            text: status.formatSummary(),
+            timestamp: timeStr,
+          ));
+        } else if (lowerArg == 'notas' || lowerArg.startsWith('notas ')) {
+          final folder = trimmedArg.length > 5
+              ? trimmedArg.substring(5).trim()
+              : '';
+          final res = await deviceService.tryExecuteNaturalCommand(
+            folder.isEmpty ? 'listar notas' : 'listar notas $folder',
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Segundo Cérebro',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+          }
+        } else if (lowerArg.startsWith('ler ')) {
+          final noteTarget = trimmedArg.substring(4).trim();
+          final res = await deviceService.tryExecuteNaturalCommand(
+            'ler nota $noteTarget',
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Segundo Cérebro',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+          }
+        } else if (lowerArg.startsWith('anexar ')) {
+          final spec = trimmedArg.substring(7).trim();
+          final res = await deviceService.tryExecuteNaturalCommand(
+            'anexar na nota $spec',
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Segundo Cérebro',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+          }
+        } else if (lowerArg == 'tarefas' || lowerArg.startsWith('tarefas ')) {
+          final sub = trimmedArg.length > 7
+              ? trimmedArg.substring(7).trim()
+              : '';
+          final phrase = sub.isEmpty
+              ? 'listar tarefas do obsidian'
+              : (sub.toLowerCase().startsWith('marcar ') ||
+                      sub.toLowerCase().startsWith('desmarcar '))
+                  ? '${sub.split(' ').first} tarefa ${sub.split(' ').skip(1).join(' ')}'
+                  : 'alternar tarefa $sub';
+          final res = await deviceService.tryExecuteNaturalCommand(
+            phrase,
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Segundo Cérebro',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+          }
         } else {
           await _saveObsidianInbox(argument);
         }
@@ -1470,8 +2671,10 @@ class _CoreScreenState extends State<CoreScreen>
             timestamp: timeStr,
           ));
         } else {
-          final res = await deviceService
-              .tryExecuteNaturalCommand('responder: $argument');
+          final res = await deviceService.tryExecuteNaturalCommand(
+            'responder: $argument',
+            confirmAction: _confirmActionSimulation,
+          );
           if (res != null) {
             _appendFeed(_FeedEntry(
               isUser: false,
@@ -1486,6 +2689,11 @@ class _CoreScreenState extends State<CoreScreen>
         }
         break;
       case UltronCommand.killswitch:
+        final ksElevated = await _elevateSessionTo(
+          AccessLevel.sovereign,
+          'Kill Switch remoto no PC exige Biometria (Nível 3) + confirmação.',
+        );
+        if (!ksElevated || !mounted) return;
         final sim = actionGate.simulate('KILL_SWITCH');
         final confirmed = await _confirmActionGate(
           title: '🚨 ${sim.description.toUpperCase()}',
@@ -1494,6 +2702,13 @@ class _CoreScreenState extends State<CoreScreen>
           confirmText: 'DISPARAR KILL SWITCH',
         );
         if (!confirmed) {
+          await deviceService.recordAudit(
+            actor: 'OPERATOR',
+            action: 'KILL_SWITCH',
+            target: sim.targetResource,
+            status: 'DENIED',
+            detail: 'Operador cancelou /killswitch no Action Gate',
+          );
           _appendFeed(_FeedEntry(
             isUser: false,
             senderLabel: 'Action Gate',
@@ -1516,6 +2731,11 @@ class _CoreScreenState extends State<CoreScreen>
         await _startVoiceInput();
         break;
       case UltronCommand.clear:
+        final clearElevated = await _elevateSessionTo(
+          AccessLevel.sovereign,
+          'Expurgo irreversível do histórico exige Biometria (Nível 3) + confirmação.',
+        );
+        if (!clearElevated || !mounted) return;
         final sim = actionGate.simulate('CLEAR_HISTORY');
         final confirmed = await _confirmActionGate(
           title: 'EXPURGAR HISTÓRICO LOCAL',
@@ -1524,11 +2744,164 @@ class _CoreScreenState extends State<CoreScreen>
           confirmText: 'EXPURGAR',
         );
         if (confirmed) {
+          await ConversationHistory.instance.clear();
+          await deviceService.recordAudit(
+            actor: 'OPERATOR',
+            action: 'CLEAR_HISTORY',
+            target: 'SQLCipher',
+            status: 'EXECUTED',
+            detail: 'Histórico local expurgado via /clear',
+          );
+          if (!mounted) return;
           setState(() => feed = _defaultFeed);
           _appendFeed(_FeedEntry(
             isUser: false,
             senderLabel: 'Memória Local',
-            text: 'Histórico da sessão purgado da memória RAM.',
+            text:
+                'Histórico da sessão expurgado (RAM + Banco Criptografado SQLCipher).',
+            timestamp: timeStr,
+          ));
+        } else {
+          await deviceService.recordAudit(
+            actor: 'OPERATOR',
+            action: 'CLEAR_HISTORY',
+            target: 'SQLCipher',
+            status: 'DENIED',
+            detail: 'Operador cancelou /clear no Action Gate',
+          );
+        }
+        break;
+      case UltronCommand.search:
+        if (argument.isEmpty) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'RAG Obsidian (FTS5)',
+            text: 'Uso: /buscar <termo ou tópico> (ex.: /buscar sensores)',
+            timestamp: timeStr,
+          ));
+        } else {
+          final hits = await deviceService.searchObsidianVault(
+            argument,
+            limit: 5,
+          );
+          if (hits.isEmpty) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'RAG Obsidian (FTS5)',
+              text: '🔍 Nenhuma nota encontrada para "$argument".',
+              timestamp: timeStr,
+            ));
+          } else {
+            final summary = hits
+                .map((h) => '• ${h.title} (${h.path})\n  ${h.snippet}')
+                .join('\n\n');
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'RAG Obsidian (FTS5)',
+              text:
+                  '🔍 ${hits.length} resultado(s) para "$argument":\n\n$summary',
+              timestamp: timeStr,
+            ));
+          }
+        }
+        break;
+      case UltronCommand.vision:
+        final argLower = argument.trim().toLowerCase();
+        final source = argLower == 'galeria' ||
+                argLower == 'gallery' ||
+                argLower.startsWith('galeria ') ||
+                argLower.startsWith('gallery ')
+            ? 'gallery'
+            : 'camera';
+        if (argument.isEmpty ||
+            argLower == 'camera' ||
+            argLower == 'galeria' ||
+            argLower == 'gallery') {
+          await _captureVisionImage(source);
+        } else {
+          final prompt = source == 'gallery'
+              ? argument.trim().replaceFirst(
+                    RegExp(r'^(?:galeria|gallery)\s*', caseSensitive: false),
+                    '',
+                  )
+              : argument.trim();
+          await _captureVisionImage(source);
+          if (pendingVisionImage != null && prompt.isNotEmpty) {
+            commandController.text = prompt;
+            await saveCommand();
+          }
+        }
+        break;
+      case UltronCommand.pc:
+        final trimmedArg = argument.trim();
+        if (trimmedArg.isEmpty) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Bridge Desktop LAN',
+            text: 'Uso de /pc (Requer Biometria • Nível 3):\n'
+                '• /pc status — ping HMAC assinado no Desktop\n'
+                '• /pc abrir <app> — solicita abertura de app no PC\n'
+                '• /pc midia <play_pause|next|previous|mute> — controle de mídia\n'
+                '• /pc copiar <texto> | /pc colar — área de transferência LAN\n'
+                '• /pc skill <nome> — executa skill no Desktop\n'
+                '• /pc termico — proteção térmica e telemetria CPU/GPU/RAM\n'
+                '• /pc energia <high_performance|balanced|power_saver> — plano de energia\n'
+                '• /pc volume_app [listar|<app> <0-100>] — mixer de volume por app\n'
+                '• /pc travados — encerrar aplicativos travados\n'
+                '• /pc backup — executar backup incremental\n'
+                '• /pc limpar_disco — limpeza de temporários e cache\n'
+                '• /pc ejetar_usb — ejetar unidade USB ociosa\n'
+                '• /pc tool <nome_ferramenta>|[ALTO/CRITICO]|{json} — despachante genérico v3.0.0\n'
+                '• Use /desktop para parear ou testar o endpoint LAN.',
+            timestamp: timeStr,
+          ));
+          break;
+        }
+        final parsedPc = DesktopPairingService.parsePcCommandInput(trimmedArg);
+        if (parsedPc == null) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Bridge Desktop LAN',
+            text: '⚠️ Subcomando /pc não reconhecido: "$trimmedArg".\n'
+                'Use: /pc status | abrir | midia | copiar | colar | skill | termico | energia | volume_app | travados | backup | limpar_disco | ejetar_usb | tool',
+            timestamp: timeStr,
+          ));
+          break;
+        }
+        final pcCmd = parsedPc.command;
+        final pcArgs = parsedPc.args;
+        try {
+          final res = await deviceService.sendDesktopBridgeCommand(
+            command: pcCmd,
+            args: pcArgs,
+            confirmAction: _confirmActionSimulation,
+            actor: 'OPERATOR',
+          );
+          final statusMsg = res.deniedByUser
+              ? '🚫 Comando /pc ($pcCmd) cancelado ou requer Biometria (Nível 3).'
+              : res.sent
+                  ? '✅ PC ($pcCmd) -> HTTP ${res.statusCode ?? 200}'
+                      '${res.verifiedSignature ? ' [HMAC resposta verificado]' : ''}'
+                      '${(res.responseBody ?? '').trim().isNotEmpty ? '\n${res.responseBody}' : ''}'
+                  : '⚠️ Falha no /pc ($pcCmd): ${res.error ?? 'HTTP ${res.statusCode}'}';
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Bridge Desktop LAN',
+            text: statusMsg,
+            timestamp: timeStr,
+          ));
+        } catch (e) {
+          await deviceService.recordAudit(
+            actor: 'OPERATOR',
+            action: pcCmd,
+            target: 'Desktop LAN',
+            status: 'FAILED',
+            detail: '$e',
+          );
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Bridge Desktop LAN',
+            text: '⚠️ Falha no comando /pc ($pcCmd): $e',
             timestamp: timeStr,
           ));
         }
@@ -1548,6 +2921,484 @@ class _CoreScreenState extends State<CoreScreen>
           ));
         }
         break;
+      case UltronCommand.calendar:
+        final argLower = argument.trim().toLowerCase();
+        if (argLower.isEmpty ||
+            argLower == 'hoje' ||
+            argLower == 'amanha' ||
+            argLower == 'amanhã' ||
+            argLower == 'semana') {
+          final queryPhrase = argLower.isEmpty
+              ? 'agenda de hoje'
+              : argLower == 'semana'
+                  ? 'agenda da semana'
+                  : 'agenda de $argLower';
+          final res = await deviceService.tryExecuteNaturalCommand(
+            queryPhrase,
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Agenda Android (CalendarContract)',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+            if (res.speakText != null && _isForegroundActive) {
+              await voiceService.speak(res.speakText!);
+            }
+          }
+        } else if (argLower.startsWith('cancelar ') ||
+            argLower.startsWith('remover ')) {
+          final target = argument
+              .trim()
+              .replaceFirst(
+                RegExp(r'^(?:cancelar|remover)\s+', caseSensitive: false),
+                '',
+              )
+              .trim();
+          final res = await deviceService.tryExecuteNaturalCommand(
+            'cancelar evento $target',
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Agenda Android (CalendarContract)',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+            if (res.speakText != null && _isForegroundActive) {
+              await voiceService.speak(res.speakText!);
+            }
+          }
+        } else {
+          final createSpec = argument.trim().replaceFirst(
+                RegExp(r'^criar\s+', caseSensitive: false),
+                '',
+              );
+          final res = await deviceService.tryExecuteNaturalCommand(
+            'agendar $createSpec',
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Agenda Android (CalendarContract)',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+            if (res.speakText != null && _isForegroundActive) {
+              await voiceService.speak(res.speakText!);
+            }
+          }
+        }
+        break;
+      case UltronCommand.briefing:
+        final argTrim = argument.trim();
+        final cityMatch = RegExp(
+          r'^(?:cidade|local|city)\s+(.+)$',
+          caseSensitive: false,
+        ).firstMatch(argTrim);
+        if (cityMatch != null) {
+          final city = cityMatch.group(1)!.trim();
+          await briefingService.savePreferredCity(city);
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Briefing Executivo (P4)',
+            text: '🌤️ Cidade padrão do Briefing salva: $city.',
+            timestamp: timeStr,
+          ));
+        } else {
+          await _runMorningBriefing(
+            cityOverride: argTrim.isEmpty ? null : argTrim,
+          );
+        }
+        break;
+      case UltronCommand.audit:
+        try {
+          final audit = await AuditLogService.instance();
+          final report = await audit.formatReport(limit: 18);
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Auditoria SHA-256 (P5)',
+            text: report,
+            timestamp: timeStr,
+          ));
+        } catch (e) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Auditoria SHA-256 (P5)',
+            text: '⚠️ Falha ao carregar trilha de auditoria: $e',
+            timestamp: timeStr,
+          ));
+        }
+        break;
+      case UltronCommand.undo:
+        final undoRes = await deviceService.undoLastObsidianMutation();
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Segundo Cérebro (UNDO)',
+          text: undoRes.message,
+          timestamp: timeStr,
+        ));
+        if (_isForegroundActive) {
+          await voiceService.speak(
+            undoRes.undone
+                ? 'Última alteração no cofre desfeita.'
+                : 'Não há alterações recentes para desfazer.',
+          );
+        }
+        break;
+      case UltronCommand.reminder:
+        final argTrim = argument.trim();
+        final argLower = argTrim.toLowerCase();
+        final String naturalPhrase;
+        if (argTrim.isEmpty ||
+            argLower == 'listar' ||
+            argLower == 'list' ||
+            argLower == 'pendentes') {
+          naturalPhrase = 'listar lembretes';
+        } else if (argLower.startsWith('cancelar ') ||
+            argLower.startsWith('remover ')) {
+          final target = argTrim.replaceFirst(
+            RegExp(r'^(?:cancelar|remover)\s+', caseSensitive: false),
+            '',
+          );
+          naturalPhrase = 'cancelar lembrete $target';
+        } else {
+          naturalPhrase = 'criar lembrete $argTrim';
+        }
+        final remRes = await deviceService.tryExecuteNaturalCommand(
+          naturalPhrase,
+          confirmAction: _confirmActionSimulation,
+        );
+        if (remRes != null) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Lembretes (AlarmManager)',
+            text: remRes.message,
+            timestamp: timeStr,
+          ));
+          if (remRes.speakText != null && _isForegroundActive) {
+            await voiceService.speak(remRes.speakText!);
+          }
+        }
+        break;
+      case UltronCommand.weather:
+        final city = argument.trim();
+        final wRes = await deviceService.tryExecuteNaturalCommand(
+          city.isEmpty ? 'clima' : 'clima em $city',
+          confirmAction: _confirmActionSimulation,
+        );
+        if (wRes != null) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Meteorologia (wttr.in)',
+            text: wRes.message,
+            timestamp: timeStr,
+          ));
+          if (wRes.speakText != null && _isForegroundActive) {
+            await voiceService.speak(wRes.speakText!);
+          }
+        }
+        break;
+      case UltronCommand.news:
+        final topic = argument.trim();
+        final nRes = await deviceService.tryExecuteNaturalCommand(
+          topic.isEmpty ? 'notícias' : 'notícias sobre $topic',
+          confirmAction: _confirmActionSimulation,
+        );
+        if (nRes != null) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Notícias RSS',
+            text: nRes.message,
+            timestamp: timeStr,
+          ));
+          if (nRes.speakText != null && _isForegroundActive) {
+            await voiceService.speak(nRes.speakText!);
+          }
+        }
+        break;
+      case UltronCommand.websearch:
+        final q = argument.trim();
+        if (q.isEmpty) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'WebInfoService',
+            text: 'Uso: /pesquisar_web <consulta> (ex.: /pesquisar_web computação quântica)',
+            timestamp: timeStr,
+          ));
+        } else {
+          final wsRes = await deviceService.tryExecuteNaturalCommand(
+            'pesquisar_web $q',
+            confirmAction: _confirmActionSimulation,
+          );
+          if (wsRes != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'WebInfoService',
+              text: wsRes.message,
+              timestamp: timeStr,
+            ));
+            if (wsRes.speakText != null && _isForegroundActive) {
+              await voiceService.speak(wsRes.speakText!);
+            }
+          }
+        }
+        break;
+      case UltronCommand.flow:
+        final argTrim = argument.trim();
+        final argLower = argTrim.toLowerCase();
+        String flowPhrase;
+        if (argTrim.isEmpty || argLower == 'listar' || argLower == 'list') {
+          flowPhrase = 'listar fluxos';
+        } else if (argLower.startsWith('criar ')) {
+          flowPhrase = 'criar fluxo ${argTrim.substring(6).trim()}';
+        } else if (argLower.startsWith('rodar ') ||
+            argLower.startsWith('executar ')) {
+          final rest = argTrim.replaceFirst(
+            RegExp(r'^(?:rodar|executar)\s+', caseSensitive: false),
+            '',
+          );
+          flowPhrase = 'executar fluxo $rest';
+        } else if (argLower.startsWith('agendar ')) {
+          flowPhrase = 'agendar fluxo ${argTrim.substring(8).trim()}';
+        } else if (argLower.startsWith('excluir ') ||
+            argLower.startsWith('remover ')) {
+          final rest = argTrim.replaceFirst(
+            RegExp(r'^(?:excluir|remover)\s+', caseSensitive: false),
+            '',
+          );
+          flowPhrase = 'excluir fluxo $rest';
+        } else {
+          flowPhrase = 'executar fluxo $argTrim';
+        }
+        final fRes = await deviceService.tryExecuteNaturalCommand(
+          flowPhrase,
+          confirmAction: _confirmActionSimulation,
+        );
+        if (fRes != null) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Workflow Scheduler',
+            text: fRes.message,
+            timestamp: timeStr,
+          ));
+          if (fRes.speakText != null && _isForegroundActive) {
+            await voiceService.speak(fRes.speakText!);
+          }
+        }
+        break;
+      case UltronCommand.spotify:
+        final argTrim = argument.trim();
+        final argLower = argTrim.toLowerCase();
+        String spPhrase;
+        if (argTrim.isEmpty ||
+            argLower == 'estado' ||
+            argLower == 'status' ||
+            argLower == 'state') {
+          spPhrase = 'spotify estado';
+        } else if (argLower == 'playlists' || argLower == 'listar playlists') {
+          spPhrase = 'spotify playlists';
+        } else if (argLower.startsWith('buscar ') ||
+            argLower.startsWith('search ')) {
+          final q = argTrim.replaceFirst(
+            RegExp(r'^(?:buscar|search)\s+', caseSensitive: false),
+            '',
+          );
+          spPhrase = 'spotify buscar $q';
+        } else if (argLower.startsWith('tocar ') ||
+            argLower.startsWith('play ')) {
+          final q = argTrim.replaceFirst(
+            RegExp(r'^(?:tocar|play)\s+', caseSensitive: false),
+            '',
+          );
+          spPhrase = 'spotify tocar $q';
+        } else if (argLower.startsWith('adicionar ')) {
+          final spec = argTrim.substring('adicionar '.length).trim();
+          spPhrase = 'spotify adicionar playlist $spec';
+        } else {
+          spPhrase = 'spotify tocar $argTrim';
+        }
+        final spRes = await deviceService.tryExecuteNaturalCommand(
+          spPhrase,
+          confirmAction: _confirmActionSimulation,
+        );
+        if (spRes != null) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Spotify Web API',
+            text: spRes.message,
+            timestamp: timeStr,
+          ));
+          if (spRes.speakText != null && _isForegroundActive) {
+            await voiceService.speak(spRes.speakText!);
+          }
+        }
+        break;
+      case UltronCommand.files:
+        final fileRes = await deviceService.executeFileUtilityCommand(
+          argument,
+          confirmAction: _confirmActionSimulation,
+        );
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Utilitários de Arquivos (SAF)',
+          text: fileRes.message,
+          timestamp: timeStr,
+        ));
+        if (fileRes.speakText != null && _isForegroundActive) {
+          await voiceService.speak(fileRes.speakText!);
+        }
+        break;
+      case UltronCommand.mode:
+        final arg = argument.trim();
+        if (arg.isEmpty || arg.toLowerCase() == 'listar' || arg.toLowerCase() == 'list') {
+          final list = TacticalMode.presets
+              .map(
+                (m) =>
+                    '• **${m.id}** (${m.label})${m.id == activeTacticalMode.id ? ' ← ATIVO' : ''}'
+                    '${m.vaultPathPrefix != null ? ' · Cofre `${m.vaultPathPrefix}/`' : ' · Cofre global'}',
+              )
+              .join('\n');
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Modos Táticos',
+            text: '🎯 **Modos Táticos Isolados:**\n$list\n\nUse `/modo <nome>` ou toque no badge `MODO` na barra de telemetria.',
+            timestamp: timeStr,
+          ));
+        } else {
+          final parsed = TacticalMode.parse(arg);
+          if (parsed == null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Modos Táticos',
+              text:
+                  '⚠️ Modo "$arg" não reconhecido. Opções: `geral`, `engenharia`, `estudos`, `treino`, `dev`.',
+              timestamp: timeStr,
+            ));
+          } else {
+            await _switchTacticalMode(parsed);
+          }
+        }
+        break;
+      case UltronCommand.eletrica:
+        final elRes = await deviceService.executeEletricaCommand(
+          argument,
+          confirmAction: _confirmActionSimulation,
+        );
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Projetista Elétrico (NBR 5410)',
+          text: elRes.message,
+          timestamp: timeStr,
+        ));
+        if (elRes.speakText != null && _isForegroundActive) {
+          await voiceService.speak(elRes.speakText!);
+        }
+        break;
+    }
+  }
+
+  Future<void> _switchTacticalMode(TacticalMode mode) async {
+    List<ChatMessage> saved = const [];
+    try {
+      saved = await ConversationHistory.instance.messages(
+        conversationId: mode.conversationId,
+        limit: 40,
+      );
+    } catch (_) {}
+    if (!mounted) return;
+    final scopeMsg = mode.vaultPathPrefix != null
+        ? 'Memória filtrada em `${mode.vaultPathPrefix}/` e histórico isolado.'
+        : 'Acesso global ao cofre Obsidian e todas as ferramentas.';
+    final entry = _FeedEntry(
+      isUser: false,
+      senderLabel: 'Modo ${mode.label}',
+      text: '🎯 Modo Tático **${mode.label}** ativado. $scopeMsg',
+      timestamp: _formatTime(DateTime.now()),
+    );
+    setState(() {
+      activeTacticalMode = mode;
+      feed = saved.isNotEmpty
+          ? [
+              ...saved.map(
+                (m) => _FeedEntry(
+                  isUser: m.role == ChatRole.user,
+                  senderLabel:
+                      m.role == ChatRole.user ? 'OPERADOR' : 'U.L.T.R.O.N.',
+                  text: m.content,
+                  timestamp: _formatTime(m.createdAt.toLocal()),
+                ),
+              ),
+              entry,
+            ]
+          : [entry];
+    });
+    _scrollToBottom();
+  }
+
+  Future<void> _showTacticalModePicker() async {
+    final chosen = await showModalBottomSheet<TacticalMode>(
+      context: context,
+      backgroundColor: const Color(0xFF140204),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'SELECIONAR MODO TÁTICO (HELPER ISOLADO)',
+                style: TextStyle(
+                  color: _crimson,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ...TacticalMode.presets.map((m) {
+                final selected = m.id == activeTacticalMode.id;
+                return ListTile(
+                  dense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 6),
+                  leading: Icon(
+                    selected ? Icons.radio_button_checked : Icons.radio_button_off,
+                    color: selected ? _crimson : const Color(0xFFA89698),
+                    size: 18,
+                  ),
+                  title: Text(
+                    m.label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    '${m.description}${m.vaultPathPrefix != null ? ' (${m.vaultPathPrefix}/)' : ''}',
+                    style: const TextStyle(
+                      color: Color(0xFFA89698),
+                      fontSize: 10,
+                    ),
+                  ),
+                  onTap: () => Navigator.of(ctx).pop(m),
+                );
+              }),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (chosen != null && chosen.id != activeTacticalMode.id) {
+      await _switchTacticalMode(chosen);
     }
   }
 
@@ -1752,6 +3603,150 @@ class _CoreScreenState extends State<CoreScreen>
     );
   }
 
+  Widget _buildTelemetryBar() {
+    final t = sessionTelemetry;
+    final tokPrefix = t.hasEstimatedTokens ? '~' : '';
+    final promptStr = SessionTelemetry.formatCompactTokens(t.promptTokens);
+    final compStr = SessionTelemetry.formatCompactTokens(t.completionTokens);
+    final latStr = t.lastLatencyMs > 0 ? '${t.lastLatencyMs}ms' : '--ms';
+    final btOn = deviceStatus?.bluetoothEnabled ?? false;
+    final lanActive = pcLanConfigured || desktopCommandListener.isRunning;
+    final voiceLabel = isAudioOn
+        ? selectedVoiceProfile.name.toUpperCase()
+        : 'MUDO';
+
+    return Container(
+      key: const Key('cockpit_telemetry_bar'),
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF140204),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _border),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GestureDetector(
+              key: const Key('cockpit_mode_chip'),
+              onTap: _showTacticalModePicker,
+              child: _telemetryChip(
+                label: 'MODO',
+                value: activeTacticalMode.shortLabel,
+                accent: activeTacticalMode.isGeneral
+                    ? _rose
+                    : const Color(0xFF64B5F6),
+              ),
+            ),
+            const SizedBox(width: 6),
+            _telemetryChip(
+              label: 'BRAIN',
+              value: t.lastProvider,
+              accent: t.lastUsedFailover
+                  ? const Color(0xFFFFB74D)
+                  : _crimson,
+              badge: t.lastUsedFailover ? 'FAILOVER' : null,
+            ),
+            const SizedBox(width: 6),
+            _telemetryChip(
+              label: 'LAT',
+              value: latStr,
+              accent: t.lastLatencyMs > 4000
+                  ? const Color(0xFFFFB74D)
+                  : const Color(0xFF5CE69C),
+            ),
+            const SizedBox(width: 6),
+            _telemetryChip(
+              label: 'TOK',
+              value: '$tokPrefix↑$promptStr ↓$compStr · T${t.turns}',
+              accent: _rose,
+            ),
+            const SizedBox(width: 6),
+            _telemetryChip(
+              label: 'LAN',
+              value: lanActive ? 'ON' : 'OFF',
+              accent: lanActive
+                  ? const Color(0xFF5CE69C)
+                  : const Color(0xFF8A7A7C),
+            ),
+            const SizedBox(width: 6),
+            _telemetryChip(
+              label: 'BT',
+              value: btOn ? 'ON' : 'OFF',
+              accent: btOn
+                  ? const Color(0xFF64B5F6)
+                  : const Color(0xFF8A7A7C),
+            ),
+            const SizedBox(width: 6),
+            _telemetryChip(
+              label: 'VOZ',
+              value: voiceLabel,
+              accent: isAudioOn ? _rose : const Color(0xFF8A7A7C),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _telemetryChip({
+    required String label,
+    required String value,
+    required Color accent,
+    String? badge,
+  }) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: const Color(0xFF210407),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: accent.withValues(alpha: 0.35)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '$label ',
+              style: TextStyle(
+                color: accent,
+                fontSize: 8.5,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'monospace',
+              ),
+            ),
+            Text(
+              value,
+              style: const TextStyle(
+                color: Color(0xFFEADCDD),
+                fontSize: 8.5,
+                fontFamily: 'monospace',
+              ),
+            ),
+            if (badge != null) ...[
+              const SizedBox(width: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFB74D).withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                child: Text(
+                  badge,
+                  style: const TextStyle(
+                    color: Color(0xFFFFB74D),
+                    fontSize: 7.5,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+
   Widget _buildMainPanel() => Column(
         children: [
           // Operational Header
@@ -1764,40 +3759,51 @@ class _CoreScreenState extends State<CoreScreen>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Expanded(
-                  child: Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 8,
-                    runSpacing: 4,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2E0305),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(
-                            color: _crimson.withValues(alpha: 0.35),
+                      GestureDetector(
+                        onTap: widget.gate.hasBiometricAccess
+                            ? null
+                            : () => _elevateSessionTo(
+                                  AccessLevel.sovereign,
+                                  'Eleve seu acesso usando NFC (Nível 2) ou Biometria (Nível 3).',
+                                ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 2,
                           ),
-                        ),
-                        child: Text(
-                          widget.gate.isAuthenticated
-                              ? 'SESSÃO: NÍVEL 02'
-                              : 'BLOQUEADO',
-                          style: const TextStyle(
-                            color: _crimson,
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2E0305),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: widget.gate.hasBiometricAccess
+                                  ? const Color(0xFF5CE69C).withValues(alpha: 0.6)
+                                  : _crimson.withValues(alpha: 0.5),
+                            ),
+                          ),
+                          child: Text(
+                            widget.gate.levelBadge,
+                            style: TextStyle(
+                              color: widget.gate.hasBiometricAccess
+                                  ? const Color(0xFF5CE69C)
+                                  : _crimson,
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ),
+                      const SizedBox(height: 3),
                       Text(
                         'PROVEDOR: $activeProviderUsed',
                         style: const TextStyle(
                           color: Color(0xFFA89698),
                           fontSize: 10,
                         ),
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
@@ -1918,6 +3924,9 @@ class _CoreScreenState extends State<CoreScreen>
             ),
           ),
 
+          // Tactical Telemetry Bar (Cockpit AMOLED Carmesim)
+          _buildTelemetryBar(),
+
           // Dynamic Center Area: Normal vs Palco vs Fullscreen
           Expanded(
             child: Padding(
@@ -1938,151 +3947,253 @@ class _CoreScreenState extends State<CoreScreen>
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: _border),
             ),
-            child: Row(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  '›',
-                  style: TextStyle(
-                    color: _crimson,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: TextField(
-                    controller: commandController,
-                    enabled: !sending,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => saveCommand(),
-                    style: const TextStyle(
-                      color: Color(0xFFF0E6E7),
-                      fontSize: 12,
+                if (pendingVisionImage != null)
+                  Container(
+                    margin: const EdgeInsets.only(top: 4, bottom: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 5,
                     ),
-                    decoration: InputDecoration(
-                      isDense: true,
-                      border: InputBorder.none,
-                      hintText: voicePipeline.isPushToTalkActive
-                          ? '🎤 Gravando Push-to-Talk…'
-                          : listeningVoice
-                              ? '🎤 Ouvindo ao vivo (toque no 🎤 para concluir)…'
-                              : sending
-                                  ? 'Consultando provedor ativo…'
-                                  : 'Comando ou toque/segure 🎤...',
-                      hintStyle: TextStyle(
-                        color:
-                            (listeningVoice || voicePipeline.isPushToTalkActive)
-                                ? _crimson
-                                : const Color(0xFF635355),
-                        fontSize: 11,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A0204),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _crimson.withValues(alpha: 0.45),
                       ),
                     ),
+                    child: Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Image.memory(
+                            base64Decode(pendingVisionImage!.base64),
+                            width: 40,
+                            height: 40,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'VISÃO MULTIMODAL ANEXADA',
+                                style: TextStyle(
+                                  color: _rose,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                '${pendingVisionImage!.width}x${pendingVisionImage!.height} · ${pendingVisionImage!.sizeKbLabel} · JPEG VLM',
+                                style: const TextStyle(
+                                  color: Color(0xFFA89698),
+                                  fontSize: 9,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Remover imagem anexada',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
+                          onPressed: () =>
+                              setState(() => pendingVisionImage = null),
+                          icon: const Icon(
+                            Icons.close,
+                            size: 16,
+                            color: _rose,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                Builder(
-                  builder: (context) {
-                    final continuousActive =
-                        voicePipeline.isContinuousEnabled ||
-                            ecoVadSentinelRunning;
-                    return Tooltip(
-                      message: continuousActive
-                          ? 'Desativar escuta contínua ("Ultron")'
-                          : 'Ativar escuta contínua ("Ultron")',
+                Row(
+                  children: [
+                    const Text(
+                      '›',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: TextField(
+                        controller: commandController,
+                        enabled: !sending,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => saveCommand(),
+                        style: const TextStyle(
+                          color: Color(0xFFF0E6E7),
+                          fontSize: 12,
+                        ),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          border: InputBorder.none,
+                          hintText: voicePipeline.isPushToTalkActive
+                              ? '🎤 Gravando Push-to-Talk…'
+                              : listeningVoice
+                                  ? '🎤 Ouvindo ao vivo (toque no 🎤 para concluir)…'
+                                  : sending
+                                      ? 'Consultando provedor ativo…'
+                                      : pendingVisionImage != null
+                                          ? 'Pergunte sobre a imagem anexada…'
+                                          : 'Comando ou toque/segure 🎤...',
+                          hintStyle: TextStyle(
+                            color: (listeningVoice ||
+                                    voicePipeline.isPushToTalkActive)
+                                ? _crimson
+                                : const Color(0xFF635355),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Tooltip(
+                      message: 'Visão Multimodal (Câmera / Galeria)',
                       child: InkWell(
-                        onTap: sending ? null : _toggleContinuousListening,
+                        onTap: sending ? null : _openVisionPicker,
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
                           padding: const EdgeInsets.all(6),
                           margin: const EdgeInsets.only(right: 5),
                           decoration: BoxDecoration(
-                            color: continuousActive
+                            color: pendingVisionImage != null
                                 ? _crimson.withValues(alpha: 0.25)
                                 : const Color(0xFF2E0305),
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
-                              color: continuousActive
+                              color: pendingVisionImage != null
                                   ? _crimson
                                   : _crimson.withValues(alpha: 0.25),
                             ),
                           ),
                           child: Icon(
-                            continuousActive
-                                ? Icons.hearing
-                                : Icons.hearing_disabled,
+                            Icons.photo_camera_outlined,
                             size: 14,
-                            color: continuousActive
+                            color: pendingVisionImage != null
                                 ? _rose
                                 : const Color(0xFF993036),
                           ),
                         ),
                       ),
-                    );
-                  },
-                ),
-                GestureDetector(
-                  onLongPressStart: sending
-                      ? null
-                      : (_) async {
-                          HapticFeedback.mediumImpact();
-                          await voicePipeline.startPushToTalk();
-                        },
-                  onLongPressEnd: (_) async {
-                    await voicePipeline.stopPushToTalk();
-                  },
-                  onLongPressCancel: () async {
-                    await voicePipeline.stopPushToTalk();
-                  },
-                  child: InkWell(
-                    onTap: sending
-                        ? null
-                        : () => voicePipeline.isPushToTalkActive
-                            ? _togglePushToTalk()
-                            : _startVoiceInput(),
-                    borderRadius: BorderRadius.circular(8),
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      margin: const EdgeInsets.only(right: 5),
-                      decoration: BoxDecoration(
-                        color:
-                            (listeningVoice || voicePipeline.isPushToTalkActive)
+                    ),
+                    Builder(
+                      builder: (context) {
+                        final continuousActive =
+                            voicePipeline.isContinuousEnabled ||
+                                ecoVadSentinelRunning;
+                        return Tooltip(
+                          message: continuousActive
+                              ? 'Desativar escuta contínua ("Ultron")'
+                              : 'Ativar escuta contínua ("Ultron")',
+                          child: InkWell(
+                            onTap: sending ? null : _toggleContinuousListening,
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              margin: const EdgeInsets.only(right: 5),
+                              decoration: BoxDecoration(
+                                color: continuousActive
+                                    ? _crimson.withValues(alpha: 0.25)
+                                    : const Color(0xFF2E0305),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: continuousActive
+                                      ? _crimson
+                                      : _crimson.withValues(alpha: 0.25),
+                                ),
+                              ),
+                              child: Icon(
+                                continuousActive
+                                    ? Icons.hearing
+                                    : Icons.hearing_disabled,
+                                size: 14,
+                                color: continuousActive
+                                    ? _rose
+                                    : const Color(0xFF993036),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    GestureDetector(
+                      onLongPressStart: sending
+                          ? null
+                          : (_) async {
+                              HapticFeedback.mediumImpact();
+                              await voicePipeline.startPushToTalk();
+                            },
+                      onLongPressEnd: (_) async {
+                        await voicePipeline.stopPushToTalk();
+                      },
+                      onLongPressCancel: () async {
+                        await voicePipeline.stopPushToTalk();
+                      },
+                      child: InkWell(
+                        onTap: sending
+                            ? null
+                            : () => voicePipeline.isPushToTalkActive
+                                ? _togglePushToTalk()
+                                : _startVoiceInput(),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          margin: const EdgeInsets.only(right: 5),
+                          decoration: BoxDecoration(
+                            color: (listeningVoice ||
+                                    voicePipeline.isPushToTalkActive)
                                 ? _crimson.withValues(alpha: 0.25)
                                 : const Color(0xFF2E0305),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: (listeningVoice ||
-                                  voicePipeline.isPushToTalkActive)
-                              ? _crimson
-                              : _crimson.withValues(alpha: 0.35),
-                        ),
-                      ),
-                      child: Icon(
-                        (listeningVoice || voicePipeline.isPushToTalkActive)
-                            ? Icons.graphic_eq
-                            : Icons.mic,
-                        size: 14,
-                        color:
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: (listeningVoice ||
+                                      voicePipeline.isPushToTalkActive)
+                                  ? _crimson
+                                  : _crimson.withValues(alpha: 0.35),
+                            ),
+                          ),
+                          child: Icon(
                             (listeningVoice || voicePipeline.isPushToTalkActive)
+                                ? Icons.graphic_eq
+                                : Icons.mic,
+                            size: 14,
+                            color: (listeningVoice ||
+                                    voicePipeline.isPushToTalkActive)
                                 ? _rose
                                 : _crimson,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                InkWell(
-                  onTap: sending ? null : saveCommand,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.all(7),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2E0305),
+                    InkWell(
+                      onTap: sending ? null : saveCommand,
                       borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.all(7),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2E0305),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(
+                          Icons.send,
+                          size: 14,
+                          color: _crimson,
+                        ),
+                      ),
                     ),
-                    child: const Icon(
-                      Icons.send,
-                      size: 14,
-                      color: _crimson,
-                    ),
-                  ),
+                  ],
                 ),
               ],
             ),
@@ -2100,31 +4211,19 @@ class _CoreScreenState extends State<CoreScreen>
                 child: SizedBox(
                   width: 210,
                   height: 210,
-                  child: widget.shaderProgram != null
-                      ? CoreOrb(
-                          stage: stage,
-                          shaderProgram: widget.shaderProgram,
-                          energy: voiceService.isSpeaking
-                              ? 0.9
-                              : (listeningVoice || voicePipeline.isCapturing)
-                                  ? 0.7
-                                  : sending
-                                      ? 0.55
-                                      : 0.2,
-                        )
-                      : ValueListenableBuilder<double>(
-                          valueListenable: coreTime,
-                          builder: (context, time, child) => CustomPaint(
-                            painter: CorePainter(
-                              time,
-                              intensity: nightFocusMode
-                                  ? 0.35
-                                  : listeningVoice
-                                      ? (1.35 + speechRms * 1.25)
-                                      : (sending ? 2.2 : 1.0),
-                            ),
-                          ),
-                        ),
+                  child: CoreOrb(
+                    stage: stage,
+                    shaderProgram: widget.shaderProgram,
+                    energy: nightFocusMode
+                        ? 0.12
+                        : voiceService.isSpeaking
+                            ? 0.95
+                            : (listeningVoice || voicePipeline.isCapturing)
+                                ? (0.55 + speechRms * 0.65).clamp(0.4, 1.2)
+                                : sending
+                                    ? 0.65
+                                    : 0.22,
+                  ),
                 ),
               ),
               Text(
@@ -2472,11 +4571,10 @@ class _CoreScreenState extends State<CoreScreen>
                 child: SizedBox(
                   width: 76,
                   height: 76,
-                  child: ValueListenableBuilder<double>(
-                    valueListenable: coreTime,
-                    builder: (context, time, child) => CustomPaint(
-                      painter: CorePainter(time, intensity: 0.9),
-                    ),
+                  child: CoreOrb(
+                    stage: stage,
+                    shaderProgram: widget.shaderProgram,
+                    energy: voiceService.isSpeaking ? 0.85 : 0.28,
                   ),
                 ),
               ),
@@ -2672,10 +4770,12 @@ class _CoreScreenState extends State<CoreScreen>
                       valueColor: const Color(0xFFFFA0A0),
                     ),
                     const SizedBox(height: 6),
-                    const _SecurityRow(
-                      label: 'Nível de Restrição:',
-                      value: 'Nível 02 (-2 Níveis Ativo)',
-                      valueColor: _rose,
+                    _SecurityRow(
+                      label: 'Estágio de Acesso:',
+                      value: widget.gate.levelBadge,
+                      valueColor: widget.gate.hasBiometricAccess
+                          ? const Color(0xFF5CE69C)
+                          : _rose,
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
@@ -2693,9 +4793,179 @@ class _CoreScreenState extends State<CoreScreen>
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
+                      label: 'Chaves NFC (Nível 2):',
+                      value: nfcTags.isEmpty
+                          ? 'Nenhuma cadastrada'
+                          : '${nfcTags.length} tag(s) ativa(s)',
+                      valueColor: nfcTags.isNotEmpty
+                          ? const Color(0xFF5CE69C)
+                          : const Color(0xFFA89698),
+                    ),
+                    const SizedBox(height: 6),
+                    _SecurityRow(
                       label: 'Tentativas Falhas:',
                       value: '$authFailures',
                       valueColor: const Color(0xFFF0E6E7),
+                    ),
+                    if (!widget.gate.hasBiometricAccess) ...[
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _elevateSessionTo(
+                            AccessLevel.sovereign,
+                            'Eleve para Nível 2 (NFC) ou Nível 3 (Biometria).',
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _rose,
+                            side: const BorderSide(color: _crimson),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          icon: const Icon(Icons.upgrade, size: 15),
+                          label: const Text(
+                            'ELEVAR ESTÁGIO DE SESSÃO',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // NFC Key Configuration Card (Estágio 2)
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2E0305),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.nfc, size: 15, color: _rose),
+                        SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'CHAVE FÍSICA NFC (NÍVEL 2) & REGRAS DOS 3 ESTÁGIOS',
+                            style: TextStyle(
+                              color: _rose,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      '• Nível 1 (PIN): Ultron Base (chat, notas, hardware local).\n'
+                      '• Nível 2 (NFC): libera WhatsApp/SMS/agenda/HTTP no celular (sem /pc e críticos).\n'
+                      '• Nível 3 (Biometria): acesso total sem popup, só confirma críticos/autodestrutivos.',
+                      style: TextStyle(
+                        color: Color(0xFFA89698),
+                        fontSize: 10,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _SecurityRow(
+                      label: 'Chip NFC Android:',
+                      value: !nfcStatus.available
+                          ? 'Indisponível neste aparelho'
+                          : (nfcStatus.enabled
+                              ? 'Ativo e pronto'
+                              : 'Desativado nas configurações'),
+                      valueColor: nfcStatus.enabled
+                          ? const Color(0xFF5CE69C)
+                          : const Color(0xFFFFA0A0),
+                    ),
+                    if (nfcStatus.available && !nfcStatus.enabled) ...[
+                      const SizedBox(height: 6),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          await NfcAuthService.instance.openNfcSettings();
+                        },
+                        icon: const Icon(Icons.settings, size: 14),
+                        label: const Text(
+                          'ATIVAR NFC NO ANDROID',
+                          style: TextStyle(fontSize: 10),
+                        ),
+                      ),
+                    ],
+                    if (nfcTags.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      for (final tag in nfcTags)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.vpn_key_outlined,
+                                size: 14,
+                                color: _rose,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  '${tag.label} (****${tag.uidSuffix})',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                tooltip: 'Remover tag NFC',
+                                onPressed: () async {
+                                  final ok = await _elevateSessionTo(
+                                    AccessLevel.sovereign,
+                                    'Remover chave NFC exige Biometria (Nível 3).',
+                                  );
+                                  if (!ok) return;
+                                  await widget.vault.removeNfcTag(tag.id);
+                                  final updated =
+                                      await widget.vault.listNfcTags();
+                                  if (!mounted) return;
+                                  setState(() => nfcTags = updated);
+                                },
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  size: 16,
+                                  color: _rose,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: _openNfcEnrollmentWizard,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _crimson,
+                          foregroundColor: Colors.white,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        icon: const Icon(Icons.nfc, size: 15),
+                        label: const Text(
+                          'CADASTRAR NOVA CHAVE NFC',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -2757,6 +5027,11 @@ class _CoreScreenState extends State<CoreScreen>
                         const SizedBox(width: 8),
                         FilledButton(
                           onPressed: () async {
+                            final bioOk = await _elevateSessionTo(
+                              AccessLevel.sovereign,
+                              'Alterar o PIN de Coação exige Biometria (Nível 3).',
+                            );
+                            if (!bioOk || !mounted) return;
                             final pin = duressPinController.text.trim();
                             try {
                               await widget.vault.setDuressPin(pin);
@@ -2773,10 +5048,12 @@ class _CoreScreenState extends State<CoreScreen>
                               );
                             } catch (e) {
                               if (!mounted) return;
+                              final errMsg =
+                                  e is ArgumentError ? '${e.message}' : '$e';
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text(
-                                    'Erro no PIN de Coação: $e',
+                                    'Erro no PIN de Coação: $errMsg',
                                     style: const TextStyle(fontSize: 11),
                                   ),
                                 ),
@@ -2802,6 +5079,11 @@ class _CoreScreenState extends State<CoreScreen>
                             visualDensity: VisualDensity.compact,
                             tooltip: 'Remover PIN de Coação',
                             onPressed: () async {
+                              final bioOk = await _elevateSessionTo(
+                                AccessLevel.sovereign,
+                                'Remover o PIN de Coação exige Biometria (Nível 3).',
+                              );
+                              if (!bioOk || !mounted) return;
                               await widget.vault.clearDuressPin();
                               if (!mounted) return;
                               setState(() => hasDuressPinConfigured = false);
@@ -2814,6 +5096,63 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                         ],
                       ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Immutable Audit Log Card (P5)
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2E0305),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'LOG IMUTÁVEL DE AUDITORIA (SHA-256 • P5)',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Cadeia criptográfica append-only de todas as ações sensíveis, Kill Switches, /pc e webhooks HTTP em Skills/*.md.',
+                      style: TextStyle(
+                        color: Color(0xFFA89698),
+                        fontSize: 10,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          _setPanel(_ActivePanel.main);
+                          unawaited(_runCommand(UltronCommand.audit, ''));
+                        },
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _rose,
+                          side: const BorderSide(color: _crimson),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        icon:
+                            const Icon(Icons.verified_user_outlined, size: 15),
+                        label: const Text(
+                          'VERIFICAR CADEIA & LOGS (/audit)',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -2871,18 +5210,37 @@ class _CoreScreenState extends State<CoreScreen>
                         const SizedBox(width: 8),
                         OutlinedButton(
                           onPressed: () async {
-                            await deviceService.savePcKillSwitchUrl(
-                              pcKillSwitchUrlController.text,
+                            final bioOk = await _elevateSessionTo(
+                              AccessLevel.sovereign,
+                              'Alterar o endpoint do Kill Switch exige Biometria (Nível 3).',
                             );
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Endpoint do Kill Switch salvo.',
-                                  style: TextStyle(fontSize: 11),
+                            if (!bioOk || !mounted) return;
+                            try {
+                              await deviceService.savePcKillSwitchUrl(
+                                pcKillSwitchUrlController.text,
+                              );
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Endpoint do Kill Switch salvo.',
+                                    style: TextStyle(fontSize: 11),
+                                  ),
                                 ),
-                              ),
-                            );
+                              );
+                            } catch (e) {
+                              if (!mounted) return;
+                              final msg =
+                                  e is ArgumentError ? '${e.message}' : '$e';
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Endpoint inválido: $msg',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                ),
+                              );
+                            }
                           },
                           style: OutlinedButton.styleFrom(
                             foregroundColor: _crimson,
@@ -2899,14 +5257,142 @@ class _CoreScreenState extends State<CoreScreen>
                         ),
                       ],
                     ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: pcLanSecretController,
+                            obscureText: true,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                            ),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              hintText: 'Chave secreta HMAC LAN (obrigatória)',
+                              hintStyle: TextStyle(
+                                color: Color(0xFF635355),
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        OutlinedButton(
+                          onPressed: () async {
+                            final bioOk = await _elevateSessionTo(
+                              AccessLevel.sovereign,
+                              'Salvar a chave HMAC LAN exige Biometria (Nível 3).',
+                            );
+                            if (!bioOk || !mounted) return;
+                            await deviceService.savePcLanSecret(
+                              pcLanSecretController.text,
+                            );
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Chave HMAC LAN salva com segurança.',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                              ),
+                            );
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _crimson,
+                            side: const BorderSide(color: _crimson),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text(
+                            'CHAVE',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        OutlinedButton(
+                          onPressed: () async {
+                            final bioOk = await _elevateSessionTo(
+                              AccessLevel.sovereign,
+                              'Gerar nova chave HMAC LAN exige Biometria (Nível 3).',
+                            );
+                            if (!bioOk || !mounted) return;
+                            final gen =
+                                await deviceService.generatePcLanSecret();
+                            pcLanSecretController.text = gen;
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Nova chave HMAC LAN gerada e salva.',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                              ),
+                            );
+                          },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: _rose,
+                            side: const BorderSide(color: _border),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          child: const Text(
+                            'GERAR',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 10),
                     SizedBox(
                       width: double.infinity,
                       child: FilledButton.icon(
                         onPressed: () async {
-                          final msg = await deviceService.triggerPcKillSwitch(
-                            reason: 'security_panel_panic',
+                          final ksBio = await _elevateSessionTo(
+                            AccessLevel.sovereign,
+                            'Disparar o Kill Switch exige Biometria (Nível 3) + confirmação.',
                           );
+                          if (!ksBio || !mounted) return;
+                          final sim = actionGate.simulate('KILL_SWITCH');
+                          final confirmed = await _confirmActionGate(
+                            title: '🚨 ${sim.description.toUpperCase()}',
+                            message:
+                                'Atenção Operador: ${sim.estimatedImpact} Alvo: ${sim.targetResource}. Confirmar execução tática?',
+                            confirmText: 'DISPARAR KILL SWITCH',
+                          );
+                          if (!confirmed) {
+                            await deviceService.recordAudit(
+                              actor: 'OPERATOR',
+                              action: 'KILL_SWITCH',
+                              target: sim.targetResource,
+                              status: 'DENIED',
+                              detail:
+                                  'Operador cancelou Kill Switch no painel Segurança',
+                            );
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  '🚫 Kill Switch cancelado pelo Operador.',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          String msg;
+                          try {
+                            msg = await deviceService.triggerPcKillSwitch(
+                              reason: 'security_panel_panic',
+                            );
+                          } catch (e) {
+                            msg = '⚠️ Erro no Kill Switch remoto: $e';
+                          }
                           if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
@@ -3449,6 +5935,80 @@ class _CoreScreenState extends State<CoreScreen>
                           ),
                         ),
                       ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 1. Agenda & Briefing Matinal (P4)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2E0305),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _crimson.withValues(alpha: 0.45),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '📅 AGENDA ANDROID & BRIEFING MATINAL (P4)',
+                      style: TextStyle(
+                        color: _crimson,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              _setPanel(_ActivePanel.main);
+                              unawaited(
+                                  _runCommand(UltronCommand.calendar, 'hoje'));
+                            },
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: _rose,
+                              side: BorderSide(
+                                color: _crimson.withValues(alpha: 0.5),
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: const Icon(Icons.calendar_today, size: 13),
+                            label: const Text(
+                              'AGENDA HOJE',
+                              style: TextStyle(fontSize: 10),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: () {
+                              _setPanel(_ActivePanel.main);
+                              unawaited(_runMorningBriefing());
+                            },
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _crimson,
+                              foregroundColor: const Color(0xFFF0E6E7),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            icon: const Icon(Icons.wb_sunny_outlined, size: 14),
+                            label: const Text(
+                              'BRIEFING',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -4848,154 +7408,6 @@ class _HelpSyntaxItem extends StatelessWidget {
           ],
         ),
       );
-}
-
-/// 4-layer Orbital Crimson Core ported from `UltronCoreCanvas` in `ultron_mobile_interface.tsx`.
-class CorePainter extends CustomPainter {
-  CorePainter(this.time, {this.intensity = 1.0});
-
-  final double time;
-  final double intensity;
-
-  static const _auraGradient = RadialGradient(
-    colors: [
-      Color(0x5975020F),
-      Color(0x2E51080D),
-      Color(0x142B0307),
-      Color(0x0019171B),
-    ],
-    stops: [0.0, 0.35, 0.70, 1.0],
-  );
-
-  static const _hotspotGradient = RadialGradient(
-    colors: [
-      Color(0xFFF0E6E7),
-      Color(0xFFFFA0A0),
-      Color(0xFFE50914),
-      Color(0x0075020F),
-    ],
-    stops: [0.0, 0.28, 0.70, 1.0],
-  );
-
-  static final _ring1Paint = Paint()
-    ..color = const Color(0xBF75020F)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1.8;
-
-  static final _nodePaint = Paint()..color = const Color(0xFFFFA0A0);
-
-  static final _ring2Paint = Paint()
-    ..color = const Color(0x8051080D)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1.3;
-
-  static final _majorTickPaint = Paint()..color = const Color(0xFFE50914);
-  static final _minorTickPaint = Paint()..color = const Color(0x5951080D);
-
-  static final _hexPaint = Paint()
-    ..color = const Color(0xBF75020F)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1.4;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.shortestSide;
-    final center = size.center(Offset.zero);
-
-    final angle1 = time * 0.96 * intensity;
-    final angle2 = -time * 1.32 * intensity;
-    final pulse = time * 2.4 * intensity;
-
-    final dynamicPulse = 1.0 + sin(pulse) * 0.07;
-    final baseR = (w * 0.23) * dynamicPulse;
-
-    // 1. Deep Crimson Radial Aura
-    final auraRadius = baseR * 1.95;
-    final auraRect = Rect.fromCircle(center: center, radius: auraRadius);
-    final auraPaint = Paint()..shader = _auraGradient.createShader(auraRect);
-    canvas.drawCircle(center, auraRadius, auraPaint);
-
-    canvas.save();
-    canvas.translate(center.dx, center.dy);
-
-    // 2A. Primary Elliptical Orbital Ring + 4 Orbital Nodes
-    canvas.save();
-    canvas.rotate(0.38 + angle1);
-    final ring1Rect = Rect.fromCenter(
-      center: Offset.zero,
-      width: baseR * 1.55 * 2,
-      height: baseR * 0.82 * 2,
-    );
-    canvas.drawOval(ring1Rect, _ring1Paint);
-
-    for (var i = 0; i < 4; i++) {
-      final th = i * pi / 2;
-      final px = cos(th) * baseR * 1.55;
-      final py = sin(th) * baseR * 0.82;
-      canvas.drawCircle(Offset(px, py), 2.5, _nodePaint);
-    }
-    canvas.restore();
-
-    // 2B. Secondary Counter-Rotating Ring + 16 Ticks
-    canvas.save();
-    canvas.rotate(-0.45 + angle2);
-    final ring2Rect = Rect.fromCenter(
-      center: Offset.zero,
-      width: baseR * 1.15 * 2,
-      height: baseR * 1.48 * 2,
-    );
-    canvas.drawOval(ring2Rect, _ring2Paint);
-
-    const ticks = 16;
-    for (var t = 0; t < ticks; t++) {
-      final theta = (t / ticks) * pi * 2;
-      final tx = cos(theta) * baseR * 1.15;
-      final ty = sin(theta) * baseR * 1.48;
-      final isMajor = t % 4 == 0;
-      canvas.drawCircle(
-        Offset(tx, ty),
-        isMajor ? 2.0 : 1.0,
-        isMajor ? _majorTickPaint : _minorTickPaint,
-      );
-    }
-    canvas.restore();
-
-    // 3. Hexagonal Wireframe Structure
-    canvas.save();
-    canvas.rotate(-angle1 * 0.7);
-    final hexPath = Path();
-    const poly = 6;
-    final rSub = baseR * 0.65;
-    for (var p = 0; p <= poly; p++) {
-      final pa = (p / poly) * pi * 2;
-      final rx = cos(pa) * rSub;
-      final ry = sin(pa) * rSub;
-      if (p == 0) {
-        hexPath.moveTo(rx, ry);
-      } else {
-        hexPath.lineTo(rx, ry);
-      }
-    }
-    hexPath.close();
-    canvas.drawPath(hexPath, _hexPaint);
-    canvas.restore();
-
-    // 4. Central Hyper-Bright Singularity Hotspot
-    final hotspotRadius = baseR * 0.38;
-    final hotspotRect = Rect.fromCircle(
-      center: Offset.zero,
-      radius: hotspotRadius,
-    );
-    final hotspotPaint = Paint()
-      ..shader = _hotspotGradient.createShader(hotspotRect);
-    canvas.drawCircle(Offset.zero, hotspotRadius, hotspotPaint);
-
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant CorePainter oldDelegate) =>
-      oldDelegate.time != time || oldDelegate.intensity != intensity;
 }
 
 class _CircularTelemetryGauge extends StatelessWidget {

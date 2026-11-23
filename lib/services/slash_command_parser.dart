@@ -18,6 +18,22 @@ enum UltronCommand {
   lock,
   status,
   vault,
+  search,
+  vision,
+  pc,
+  calendar,
+  briefing,
+  audit,
+  undo,
+  reminder,
+  weather,
+  news,
+  websearch,
+  flow,
+  spotify,
+  files,
+  mode,
+  eletrica,
 }
 
 class CommandResult {
@@ -85,6 +101,72 @@ class SlashCommandParser {
     '/obsidian': UltronCommand.vault,
     '/cerebro': UltronCommand.vault,
     '/segundocerebro': UltronCommand.vault,
+    '/obsidian_notas': UltronCommand.vault,
+    '/obsidian_ler': UltronCommand.vault,
+    '/obsidian_anexar': UltronCommand.vault,
+    '/obsidian_tarefas': UltronCommand.vault,
+    '/obsidian_status': UltronCommand.vault,
+    '/search': UltronCommand.search,
+    '/buscar': UltronCommand.search,
+    '/rag': UltronCommand.search,
+    '/visao': UltronCommand.vision,
+    '/vision': UltronCommand.vision,
+    '/camera': UltronCommand.vision,
+    '/ocr': UltronCommand.vision,
+    '/pc': UltronCommand.pc,
+    '/agenda': UltronCommand.calendar,
+    '/calendar': UltronCommand.calendar,
+    '/evento': UltronCommand.calendar,
+    '/eventos': UltronCommand.calendar,
+    '/cancelar_evento': UltronCommand.calendar,
+    '/briefing': UltronCommand.briefing,
+    '/bomdia': UltronCommand.briefing,
+    '/resumodia': UltronCommand.briefing,
+    '/audit': UltronCommand.audit,
+    '/auditoria': UltronCommand.audit,
+    '/logs': UltronCommand.audit,
+    '/desfazer': UltronCommand.undo,
+    '/undo': UltronCommand.undo,
+    '/reverter': UltronCommand.undo,
+    '/lembrete': UltronCommand.reminder,
+    '/lembretes': UltronCommand.reminder,
+    '/reminder': UltronCommand.reminder,
+    '/reminders': UltronCommand.reminder,
+    '/clima': UltronCommand.weather,
+    '/weather': UltronCommand.weather,
+    '/tempo': UltronCommand.weather,
+    '/noticias': UltronCommand.news,
+    '/noticia': UltronCommand.news,
+    '/news': UltronCommand.news,
+    '/manchetes': UltronCommand.news,
+    '/pesquisar_web': UltronCommand.websearch,
+    '/web': UltronCommand.websearch,
+    '/websearch': UltronCommand.websearch,
+    '/fluxo': UltronCommand.flow,
+    '/fluxos': UltronCommand.flow,
+    '/flow': UltronCommand.flow,
+    '/flows': UltronCommand.flow,
+    '/spotify': UltronCommand.spotify,
+    '/spotify_buscar': UltronCommand.spotify,
+    '/spotify_estado': UltronCommand.spotify,
+    '/spotify_tocar': UltronCommand.spotify,
+    '/spotify_listar_playlists': UltronCommand.spotify,
+    '/spotify_adicionar_playlist': UltronCommand.spotify,
+    '/arquivos': UltronCommand.files,
+    '/files': UltronCommand.files,
+    '/limpar_duplicados': UltronCommand.files,
+    '/converter_imagens': UltronCommand.files,
+    '/organizar_pdf_downloads': UltronCommand.files,
+    '/etl': UltronCommand.files,
+    '/lote_documentos': UltronCommand.files,
+    '/modo': UltronCommand.mode,
+    '/mode': UltronCommand.mode,
+    '/agente': UltronCommand.mode,
+    '/helper': UltronCommand.mode,
+    '/eletrica': UltronCommand.eletrica,
+    '/projetista': UltronCommand.eletrica,
+    '/cadesimu': UltronCommand.eletrica,
+    '/motor': UltronCommand.eletrica,
   };
 
   static CommandResult? parse(String input) {
@@ -94,15 +176,90 @@ class SlashCommandParser {
     final commandKey = parts.first.toLowerCase();
     final command = commands[commandKey];
     if (command == null) return null;
-    return CommandResult(command, parts.skip(1).join(' ').trim());
+    final rawArg = parts.skip(1).join(' ').trim();
+    return switch (commandKey) {
+      '/obsidian_notas' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'notas' : 'notas $rawArg',
+        ),
+      '/obsidian_ler' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'ler' : 'ler $rawArg',
+        ),
+      '/obsidian_anexar' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'anexar' : 'anexar $rawArg',
+        ),
+      '/obsidian_tarefas' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'tarefas' : 'tarefas $rawArg',
+        ),
+      '/obsidian_status' => const CommandResult(
+          UltronCommand.vault,
+          'status',
+        ),
+      '/cancelar_evento' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'cancelar' : 'cancelar $rawArg',
+        ),
+      '/spotify_buscar' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'buscar' : 'buscar $rawArg',
+        ),
+      '/spotify_estado' => const CommandResult(
+          UltronCommand.spotify,
+          'estado',
+        ),
+      '/spotify_tocar' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'tocar' : 'tocar $rawArg',
+        ),
+      '/spotify_listar_playlists' => const CommandResult(
+          UltronCommand.spotify,
+          'playlists',
+        ),
+      '/spotify_adicionar_playlist' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'adicionar' : 'adicionar $rawArg',
+        ),
+      '/limpar_duplicados' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'duplicados' : 'duplicados $rawArg',
+        ),
+      '/converter_imagens' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'converter' : 'converter $rawArg',
+        ),
+      '/organizar_pdf_downloads' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'pdfs' : 'pdfs $rawArg',
+        ),
+      '/etl' || '/lote_documentos' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'lote' : 'lote $rawArg',
+        ),
+      _ => CommandResult(command, rawArg),
+    };
   }
 
   /// Retorna lista de sintaxes disponíveis com documentação tática.
   static List<Map<String, String>> commandCatalog() => [
         {
+          'command': '/help',
+          'aliases': '/?, /ajuda',
+          'description': 'Exibe este catálogo de comandos e sintaxes táticas.',
+        },
+        {
           'command': '/device',
           'aliases': '/celular, /telemetria',
-          'description': 'Abre cockpit com telemetria circular (RAM, bateria, °C, sensores).',
+          'description':
+              'Abre cockpit com telemetria circular (RAM, bateria, °C, sensores).',
+        },
+        {
+          'command': '/status',
+          'aliases': '/diag, /saude',
+          'description':
+              'Exibe resumo instantâneo de saúde e telemetria do aparelho.',
         },
         {
           'command': '/lanterna [on|off|toggle]',
@@ -111,8 +268,9 @@ class SlashCommandParser {
         },
         {
           'command': '/note <texto>',
-          'aliases': '/nota, /anote',
-          'description': 'Quick Capture salvo em ULTRON-Vault/Diario/YYYY-MM-DD.md.',
+          'aliases': '/nota, /anote, /anotar',
+          'description':
+              'Quick Capture salvo em ULTRON-Vault/Diario/YYYY-MM-DD.md.',
         },
         {
           'command': '/skills [nome]',
@@ -122,17 +280,19 @@ class SlashCommandParser {
         {
           'command': '/models',
           'aliases': '/modelos',
-          'description': 'Auto-discovery de modelos ativos no provedor de IA conectado.',
+          'description':
+              'Auto-discovery de modelos ativos no provedor de IA conectado.',
         },
         {
           'command': '/mensagens',
-          'aliases': '/notificacoes, /ler',
+          'aliases': '/messages, /notificacoes, /ler',
           'description': 'Sentinela lê notificações recentes em voz alta.',
         },
         {
           'command': '/responder <texto>',
-          'aliases': '/reply',
-          'description': 'Responde notificação em 2º plano via RemoteInput nativo.',
+          'aliases': '/reply, /responda',
+          'description':
+              'Responde notificação em 2º plano via RemoteInput nativo.',
         },
         {
           'command': '/killswitch',
@@ -142,12 +302,37 @@ class SlashCommandParser {
         {
           'command': '/voice',
           'aliases': '/voz, /falar',
-          'description': 'Inicia captura de voz ao vivo com tolerância a ruído.',
+          'description':
+              'Inicia captura de voz ao vivo com tolerância a ruído.',
+        },
+        {
+          'command': '/memory',
+          'aliases': '/memoria',
+          'description':
+              'Gerencia correções fonéticas, atalhos de voz e preferências.',
+        },
+        {
+          'command': '/desktop',
+          'aliases': '/pc',
+          'description':
+              'Pareamento e controle bidirecional Desktop LAN via HMAC-SHA256.',
         },
         {
           'command': '/security',
           'aliases': '/seguranca, /duress',
-          'description': 'Painel de segurança, Duress PIN e bloqueio biométrico.',
+          'description': 'Painel de segurança, Duress PIN e Kill Switch LAN.',
+        },
+        {
+          'command': '/settings',
+          'aliases': '/config, /configuracoes, /ajustes',
+          'description':
+              'Abre a central de provedores de IA, chaves e modelos.',
+        },
+        {
+          'command': '/history',
+          'aliases': '/historico',
+          'description':
+              'Abre o histórico completo de conversas salvo no SQLCipher local.',
         },
         {
           'command': '/lock',
@@ -156,13 +341,116 @@ class SlashCommandParser {
         },
         {
           'command': '/clear',
-          'aliases': '/limpar',
-          'description': 'Expurga histórico da sessão de bate-papo atual.',
+          'aliases': '/limpar, /expurgar',
+          'description':
+              'Expurga permanentemente o histórico local de conversas.',
         },
         {
           'command': '/vault',
-          'aliases': '/obsidian, /cerebro',
-          'description': 'Abre o cofre Obsidian ou gerencia o Segundo Cérebro.',
+          'aliases': '/obsidian, /cerebro, /segundocerebro',
+          'description':
+              'Abre o cofre Obsidian ou salva ideia rápida no Inbox.',
+        },
+        {
+          'command': '/buscar <consulta>',
+          'aliases': '/search, /rag',
+          'description':
+              'Busca léxica local (SQLite FTS5) nas notas do ULTRON-Vault.',
+        },
+        {
+          'command': '/visao [camera|galeria]',
+          'aliases': '/vision, /camera, /ocr',
+          'description':
+              'Captura foto ou seleciona print para análise visual (OCR/QR/VLM).',
+        },
+        {
+          'command': '/pc <status|abrir|midia|clipboard|skill>',
+          'aliases': '/desktop',
+          'description':
+              'Envia comandos remotos autenticados ao PC pareado na LAN.',
+        },
+        {
+          'command': '/agenda [hoje|semana|criar <evento>]',
+          'aliases': '/calendar, /evento, /eventos',
+          'description':
+              'Lê compromissos do Android ou agenda um novo evento (CalendarContract).',
+        },
+        {
+          'command': '/briefing [cidade|cidade <nome>]',
+          'aliases': '/bomdia, /resumodia',
+          'description':
+              'Briefing matinal unificado: Agenda + Sentinela de Mensagens + Clima + Telemetria.',
+        },
+        {
+          'command': '/audit',
+          'aliases': '/auditoria, /logs',
+          'description':
+              'Verifica a cadeia SHA-256 do log imutável de auditoria e exibe ações recentes.',
+        },
+        {
+          'command': '/desfazer',
+          'aliases': '/undo, /reverter',
+          'description':
+              'Desfaz a última operação mutável realizada no cofre Obsidian.',
+        },
+        {
+          'command': '/lembrete [listar|cancelar <id>|<texto e horário>]',
+          'aliases': '/lembretes, /reminder',
+          'description':
+              'Gerencia lembretes persistentes em SQLite com notificação agendada via AlarmManager.',
+        },
+        {
+          'command': '/clima [cidade]',
+          'aliases': '/weather, /tempo',
+          'description':
+              'Consulta previsão meteorológica atual sem necessidade de chave de API.',
+        },
+        {
+          'command': '/noticias [tema]',
+          'aliases': '/news, /manchetes',
+          'description':
+              'Busca manchetes atualizadas via feeds RSS públicos em português.',
+        },
+        {
+          'command': '/pesquisar_web <consulta>',
+          'aliases': '/web, /websearch',
+          'description':
+              'Pesquisa textual resumida direto no chat sem abrir o navegador.',
+        },
+        {
+          'command':
+              '/fluxo [listar|criar <nome>|<passos>|[horario]|rodar <nome>|agendar <nome>|<horario>|excluir <nome>]',
+          'aliases': '/fluxos, /flow',
+          'description':
+              'Gerencia fluxos dinâmicos encadeando ações/skills com agendamento nativo e AuthGate.',
+        },
+        {
+          'command':
+              '/spotify [estado|buscar <termo>|tocar <faixa/uri>|playlists|adicionar <playlist>|[faixa]]',
+          'aliases': '/spotify_tocar, /spotify_buscar, /spotify_estado',
+          'description':
+              'Controla a Spotify Web API via OAuth 2.0 PKCE (estado, busca, reprodução e playlists).',
+        },
+        {
+          'command':
+              '/arquivos [duplicados [pasta]|converter [jpg|png] [pasta]|pdfs [pasta]|lote [saf|pasta]]',
+          'aliases':
+              '/limpar_duplicados, /converter_imagens, /organizar_pdf_downloads, /etl',
+          'description':
+              'Utilitários de arquivos via SAF/Downloads: limpeza SHA-256, conversão .webp/.heic, padronização de PDFs e ETL em lote para Inbox/ do Obsidian.',
+        },
+        {
+          'command': '/modo [geral|engenharia|estudos|treino|dev]',
+          'aliases': '/mode, /agente, /helper',
+          'description':
+              'Alterna entre Modos Táticos isolados com memória filtrada no Obsidian, histórico separado e ferramentas enxutas.',
+        },
+        {
+          'command':
+              '/eletrica [direta|reversao|estrela|sequencia] [X cv] [220v|380v] [cfw500|ad600m] [pc]',
+          'aliases': '/projetista, /cadesimu, /motor',
+          'description':
+              'Projetista Elétrico offline (NBR 5410, auditoria estrutural, Netlist, SVG IEC e envio ao Desktop/CADe_SIMU).',
         },
       ];
 }

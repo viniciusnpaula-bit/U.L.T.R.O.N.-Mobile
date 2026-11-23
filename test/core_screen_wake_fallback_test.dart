@@ -34,18 +34,22 @@ class _QuietTts extends FlutterTts {
 }
 
 class _NoopCapture implements AudioCaptureSource {
+  int startCalls = 0;
+
   @override
   Stream<Uint8List> get frames => const Stream.empty();
 
   @override
-  Future<bool> hasPermission() async => false;
+  Future<bool> hasPermission() async => true;
 
   @override
-  Future<bool> requestPermission() async => false;
+  Future<bool> requestPermission() async => true;
 
   @override
-  Future<AudioEffectsReport> start({int sampleRate = 16000}) async =>
-      const AudioEffectsReport();
+  Future<AudioEffectsReport> start({int sampleRate = 16000}) async {
+    startCalls += 1;
+    return const AudioEffectsReport();
+  }
 
   @override
   Future<void> stop() async {}
@@ -53,7 +57,7 @@ class _NoopCapture implements AudioCaptureSource {
 
 void main() {
   testWidgets(
-    'CoreScreen hearing button falls back to offline sherpa sentinel when no STT key is configured and handles wake event',
+    'CoreScreen hearing button falls back to offline sherpa sentinel and wake event opens native non-Google AudioCaptureSource',
     (tester) async {
       FlutterSecureStorage.setMockInitialValues(const <String, String>{});
       const deviceChannel =
@@ -101,6 +105,7 @@ void main() {
 
       final gate = AuthGate();
       await gate.authenticatePin('1234', (_) async => true);
+      final capture = _NoopCapture();
 
       await tester.pumpWidget(
         MaterialApp(
@@ -109,12 +114,12 @@ void main() {
             gate: gate,
             vault: PinVault(),
             voiceService: VoiceService(tts: _QuietTts()),
-            captureSource: _NoopCapture(),
+            captureSource: capture,
             sttService: GroqWhisperSttService(
               config: const SttConfig(
                   endpointUrl:
                       'https://api.groq.com/openai/v1/audio/transcriptions',
-                  apiKey: ''),
+                  apiKey: 'gsk-non-google'),
             ),
           ),
         ),
@@ -148,7 +153,8 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
 
-      expect(calls.any((c) => c.method == 'listenVoice'), isTrue);
+      expect(capture.startCalls, greaterThanOrEqualTo(1));
+      expect(calls.any((c) => c.method == 'listenVoice'), isFalse);
     },
   );
 }

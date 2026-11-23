@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ultron_mobile/core/security/auth_gate.dart';
 import 'package:ultron_mobile/core/security/pin_vault.dart';
@@ -98,5 +99,106 @@ void main() {
         await tempDir.delete(recursive: true);
       }
     });
+
+    test('setDuressPin validates 4..8 digits and rejects matching primary PIN',
+        () async {
+      final storage = _PinTestStorage();
+      final vault = PinVault(storage: storage);
+
+      await vault.setPin('1234');
+      await expectLater(() => vault.setDuressPin('123'), throwsArgumentError);
+      await expectLater(
+          () => vault.setDuressPin('123456789'), throwsArgumentError);
+      await expectLater(() => vault.setDuressPin('abcd'), throwsArgumentError);
+      await expectLater(() => vault.setDuressPin('1234'), throwsArgumentError);
+
+      await vault.setDuressPin('5678');
+      expect(await vault.hasDuressPin, isTrue);
+      expect(await vault.verifyWithDuress('1234'), PinAuthMode.normal);
+      expect(await vault.verifyWithDuress('5678'), PinAuthMode.duress);
+      expect(await vault.verifyWithDuress('9999'), PinAuthMode.denied);
+    });
+
+    test('PinVault NFC tag enrollment verifies hashed UID and AuthGate elevates PIN -> NFC',
+        () async {
+      final storage = _PinTestStorage();
+      final vault = PinVault(storage: storage);
+      final gate = AuthGate();
+
+      await vault.setPin('1234');
+      expect(await vault.hasNfcKey, isFalse);
+
+      final added = await vault.addNfcTag('04:A1:B2:C3:D4', label: 'Chaveiro');
+      expect(added.label, 'Chaveiro');
+      expect(added.uidSuffix, 'C3D4');
+      expect(await vault.hasNfcKey, isTrue);
+
+      expect(await vault.verifyNfcTag('04a1b2c3d4'), isTrue);
+      expect(await vault.verifyNfcTag('DEADBEEF99'), isFalse);
+
+      await gate.authenticatePin('1234', vault.verify);
+      expect(gate.level, AccessLevel.basic);
+      expect(gate.hasNfcOrHigher, isFalse);
+
+      final nfcOk = await gate.authenticateNfc('04A1B2C3D4', vault.verifyNfcTag);
+      expect(nfcOk, isTrue);
+      expect(gate.level, AccessLevel.elevated);
+      expect(gate.hasNfcOrHigher, isTrue);
+      expect(gate.hasBiometricAccess, isFalse);
+
+      // Re-entering PIN must not downgrade elevated session
+      await gate.authenticatePin('1234', vault.verify);
+      expect(gate.level, AccessLevel.elevated);
+
+      await vault.removeNfcTag(added.id);
+      expect(await vault.hasNfcKey, isFalse);
+    });
   });
+}
+
+class _PinTestStorage extends FlutterSecureStorage {
+  final Map<String, String> _data = <String, String>{};
+
+  @override
+  Future<String?> read({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async =>
+      _data[key];
+
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (value == null) {
+      _data.remove(key);
+    } else {
+      _data[key] = value;
+    }
+  }
+
+  @override
+  Future<void> delete({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    _data.remove(key);
+  }
 }

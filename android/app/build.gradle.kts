@@ -78,6 +78,7 @@ flutter {
 
 dependencies {
     implementation(files("libs/sherpa-onnx-1.13.8.aar"))
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     testImplementation("junit:junit:4.13.2")
 }

@@ -159,7 +159,8 @@ void main() {
     expect(capture.startCalls, 0);
   });
 
-  test('stops capture immediately on lifecycle pause/inactive or gate.lock()', () async {
+  test('stops capture immediately on lifecycle pause/inactive or gate.lock()',
+      () async {
     final gate = await _unlockedGate();
     final capture = _FakeAudioCaptureSource();
     final stt = GroqWhisperSttService(
@@ -195,7 +196,8 @@ void main() {
     expect(capture.isRunning, isFalse);
   });
 
-  test('Push-to-Talk captures frames while held and transcribes on release', () async {
+  test('Push-to-Talk captures frames while held and transcribes on release',
+      () async {
     final gate = await _unlockedGate();
     final capture = _FakeAudioCaptureSource();
 
@@ -241,7 +243,107 @@ void main() {
     expect(transcripts, ['Ligar modo silencioso']);
   });
 
-  test('continuous mode enforces selective barge-in while TTS is speaking', () async {
+  test(
+      'Single-Turn mode captures native AudioRecord frames, emits RMS, and auto-completes on VAD end-of-speech',
+      () async {
+    final gate = await _unlockedGate();
+    final capture = _FakeAudioCaptureSource();
+
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((req) async {
+      await req.drain<void>();
+      req.response
+        ..statusCode = 200
+        ..headers.contentType = ContentType.json
+        ..write(jsonEncode({'text': 'Que horas são'}));
+      await req.response.close();
+    });
+
+    final stt = GroqWhisperSttService(
+      config: SttConfig(
+        endpointUrl: 'http://127.0.0.1:${server.port}/transcriptions',
+        apiKey: 'gsk_test',
+      ),
+    );
+    final voice = VoiceService(tts: _FakeTts());
+    final transcripts = <String>[];
+    final rmsValues = <double>[];
+    final controller = VoicePipelineController(
+      gate: gate,
+      capture: capture,
+      stt: stt,
+      voiceService: voice,
+      vadSegmenter: VadSegmenter(
+        sampleRate: 16000,
+        speechThreshold: 50.0,
+        preSpeechDuration: const Duration(milliseconds: 20),
+        silenceHangover: const Duration(milliseconds: 20),
+      ),
+      onTranscript: transcripts.add,
+      onRmsChanged: rmsValues.add,
+    );
+    addTearDown(() async {
+      controller.dispose();
+      await capture.close();
+    });
+
+    expect(await controller.startSingleTurnListening(), isTrue);
+    expect(controller.isSingleTurnActive, isTrue);
+
+    capture.emitFrame(_pcmFrame(samples: 320, amplitude: 700));
+    capture.emitFrame(_pcmFrame(samples: 320, amplitude: 700));
+    capture.emitFrame(_pcmFrame(samples: 320, amplitude: 0));
+    capture.emitFrame(_pcmFrame(samples: 320, amplitude: 0));
+
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+
+    expect(controller.isSingleTurnActive, isFalse);
+    expect(capture.isRunning, isFalse);
+    expect(rmsValues.any((r) => r > 0.0), isTrue);
+    expect(rmsValues.last, 0.0);
+    expect(transcripts, ['Que horas são']);
+  });
+
+  test(
+      'single-turn mode auto-stops after singleTurnIdleTimeout when no speech arrives',
+      () async {
+    final gate = await _unlockedGate();
+    final capture = _FakeAudioCaptureSource();
+    final stt = GroqWhisperSttService(
+      config: const SttConfig(
+        endpointUrl: 'http://127.0.0.1:1/transcriptions',
+        apiKey: 'gsk_test',
+      ),
+    );
+    final voice = VoiceService(tts: _FakeTts());
+    final modeChanges = <VoicePipelineMode>[];
+    final controller = VoicePipelineController(
+      gate: gate,
+      capture: capture,
+      stt: stt,
+      voiceService: voice,
+      singleTurnIdleTimeout: const Duration(milliseconds: 60),
+    );
+    controller.addListener(() => modeChanges.add(controller.mode));
+    addTearDown(() async {
+      controller.dispose();
+      await capture.close();
+    });
+
+    expect(await controller.startSingleTurnListening(), isTrue);
+    expect(controller.isSingleTurnActive, isTrue);
+
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+
+    expect(controller.isSingleTurnActive, isFalse);
+    expect(controller.mode, VoicePipelineMode.idle);
+    expect(capture.isRunning, isFalse);
+    expect(modeChanges, [VoicePipelineMode.singleTurn, VoicePipelineMode.idle]);
+  });
+
+  test('continuous mode enforces selective barge-in while TTS is speaking',
+      () async {
     final gate = await _unlockedGate();
     final capture = _FakeAudioCaptureSource();
     final responses = <String>[
@@ -320,7 +422,9 @@ void main() {
     expect(BargeInMatcher.isBargeInPhrase('Qual é a previsão'), isFalse);
   });
 
-  test('continuous mode opens configurable continuity window after TTS completes', () async {
+  test(
+      'continuous mode opens configurable continuity window after TTS completes',
+      () async {
     final gate = await _unlockedGate();
     final capture = _FakeAudioCaptureSource();
     var currentTime = DateTime.utc(2026, 11, 16, 12, 0, 0);
@@ -387,7 +491,9 @@ void main() {
     expect(transcripts, ['Qual a próxima reunião?']);
   });
 
-  test('aborts in-flight start when gate locks or lifecycle pauses before start resolves', () async {
+  test(
+      'aborts in-flight start when gate locks or lifecycle pauses before start resolves',
+      () async {
     final gate = await _unlockedGate();
     final capture = _FakeAudioCaptureSource()..startGate = Completer<void>();
     final stt = GroqWhisperSttService(
@@ -419,7 +525,8 @@ void main() {
     expect(capture.isRunning, isFalse);
   });
 
-  test('cancels in-flight Push-to-Talk start when stopPushToTalk fires early', () async {
+  test('cancels in-flight Push-to-Talk start when stopPushToTalk fires early',
+      () async {
     final gate = await _unlockedGate();
     final capture = _FakeAudioCaptureSource()..startGate = Completer<void>();
     final stt = GroqWhisperSttService(
