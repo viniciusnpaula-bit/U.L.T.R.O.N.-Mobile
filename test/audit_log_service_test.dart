@@ -81,4 +81,59 @@ void main() {
     final report = await audit.formatReport();
     expect(report, contains('ADULTERAÇÃO DETECTADA no registro #1'));
   });
+
+  test('Marco 2: classifies confirmed/uncertain/failed outcomes and summarizes receipts',
+      () async {
+    expect(
+      AuditLogService.classifyActionOutcome('TORCH_ON', succeeded: true),
+      ExecutionOutcome.confirmed,
+    );
+    expect(
+      AuditLogService.classifyActionOutcome('WHATSAPP', succeeded: true),
+      ExecutionOutcome.uncertain,
+    );
+    expect(
+      AuditLogService.classifyActionOutcome('OPEN_APP', succeeded: true),
+      ExecutionOutcome.uncertain,
+    );
+    expect(
+      AuditLogService.classifyActionOutcome(
+        'OBSIDIAN_READ',
+        succeeded: true,
+        detail: 'Não encontrei a nota solicitada',
+      ),
+      ExecutionOutcome.failed,
+    );
+
+    final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+    final audit = await AuditLogService.open(database: db);
+    addTearDown(audit.close);
+
+    await audit.recordReceipt(
+      actor: 'OPERATOR',
+      action: 'TORCH_ON',
+      outcome: ExecutionOutcome.confirmed,
+    );
+    await audit.recordReceipt(
+      actor: 'OPERATOR',
+      action: 'WHATSAPP',
+      outcome: ExecutionOutcome.uncertain,
+    );
+    await audit.recordReceipt(
+      actor: 'OPERATOR',
+      action: 'PC_EXEC_TOOL',
+      outcome: ExecutionOutcome.failed,
+    );
+
+    final summary = await audit.summarizeOutcomes();
+    expect(summary.confirmed, 1);
+    expect(summary.uncertain, 1);
+    expect(summary.failed, 1);
+    expect((await audit.verifyChain()).valid, isTrue);
+
+    final report = await audit.formatReport();
+    expect(report, contains('1 confirmados'));
+    expect(report, contains('1 incertos'));
+    expect(report, contains('1 falhos'));
+  });
 }

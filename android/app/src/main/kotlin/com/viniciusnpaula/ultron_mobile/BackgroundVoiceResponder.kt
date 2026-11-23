@@ -43,72 +43,83 @@ object BackgroundVoiceResponder {
         val senderLabel: String,
     )
 
+    @JvmOverloads
     fun runBackgroundTurn(
         context: Context,
         onStatusUpdate: (String) -> Unit,
         onReplyNotification: (String, String) -> Unit,
+        onRequireUnlock: (() -> Unit)? = null,
     ) {
         val cfg = BackgroundVoiceConfigStore.load(context)
 
-        playReadyBeep()
-        onStatusUpdate("Ouvindo comando em segundo plano…")
+        try {
+            playReadyBeep()
+            FloatingOrbService.updateState(OrbState.LISTENING)
+            onStatusUpdate("Ouvindo comando em segundo plano…")
 
-        val pcm = captureCommandPcm()
-        if (pcm == null || pcm.isEmpty()) {
-            return
-        }
-
-        if (!cfg.hasStt) {
-            val msg = "Operador, configure uma chave Groq nas configurações de IA para comandos em segundo plano."
-            onReplyNotification("Chave STT necessária", msg)
-            UltronTtsHelper.speakBlocking(context, msg)
-            return
-        }
-
-        onStatusUpdate("Transcrevendo comando…")
-        val wav = buildWav(pcm, SAMPLE_RATE_HZ)
-        val transcript = transcribeWhisper(cfg, wav)?.trim().orEmpty()
-        if (transcript.length < 2) {
-            return
-        }
-
-        val userTs = System.currentTimeMillis()
-        val result = tryLocalAction(context, transcript) ?: run {
-            onStatusUpdate("Consultando U.L.T.R.O.N…")
-            val rawReply = queryAi(context, cfg, transcript)
-            if (rawReply.isNullOrBlank()) {
-                val fallback = "Não consegui consultar o provedor de inteligência artificial agora, operador."
-                BackgroundTurnResult(
-                    speakText = fallback,
-                    displayText = fallback,
-                    senderLabel = "U.L.T.R.O.N. (2º plano)",
-                )
-            } else {
-                executeAiActionTags(context, rawReply, cfg.aiModel)
+            val pcm = captureCommandPcm()
+            if (pcm == null || pcm.isEmpty()) {
+                return
             }
+
+            if (!cfg.hasStt) {
+                val msg = "Operador, configure uma chave Groq nas configurações de IA para comandos em segundo plano."
+                onReplyNotification("Chave STT necessária", msg)
+                FloatingOrbService.updateState(OrbState.SPEAKING)
+                UltronTtsHelper.speakBlocking(context, msg)
+                return
+            }
+
+            FloatingOrbService.updateState(OrbState.PROCESSING)
+            onStatusUpdate("Transcrevendo comando…")
+            val wav = buildWav(pcm, SAMPLE_RATE_HZ)
+            val transcript = transcribeWhisper(cfg, wav)?.trim().orEmpty()
+            if (transcript.length < 2) {
+                return
+            }
+
+            val userTs = System.currentTimeMillis()
+            val result = tryLocalAction(context, transcript) ?: run {
+                FloatingOrbService.updateState(OrbState.PROCESSING)
+                onStatusUpdate("Consultando U.L.T.R.O.N…")
+                val rawReply = queryAi(context, cfg, transcript)
+                if (rawReply.isNullOrBlank()) {
+                    val fallback = "Não consegui consultar o provedor de inteligência artificial agora, operador."
+                    BackgroundTurnResult(
+                        speakText = fallback,
+                        displayText = fallback,
+                        senderLabel = "U.L.T.R.O.N. (2º plano)",
+                    )
+                } else {
+                    executeAiActionTags(context, rawReply, cfg.aiModel, onRequireUnlock)
+                }
+            }
+
+            val cleanSpeech = sanitizeForSpeech(result.speakText)
+            val replyTs = System.currentTimeMillis()
+            if (result.displayText.isNotBlank()) {
+                BackgroundChatStore.enqueueTurn(
+                    context,
+                    BackgroundChatTurn(
+                        userText = transcript,
+                        assistantText = result.displayText,
+                        senderLabel = result.senderLabel,
+                        userTimestampMs = userTs,
+                        replyTimestampMs = replyTs,
+                    ),
+                )
+                MainActivity.notifyBackgroundTurn()
+            }
+
+            if (cleanSpeech.isEmpty()) return
+
+            onReplyNotification(transcript, cleanSpeech)
+            FloatingOrbService.updateState(OrbState.SPEAKING)
+            onStatusUpdate("Respondendo…")
+            speakReply(context, cfg, cleanSpeech)
+        } finally {
+            FloatingOrbService.updateState(OrbState.IDLE)
         }
-
-        val cleanSpeech = sanitizeForSpeech(result.speakText)
-        val replyTs = System.currentTimeMillis()
-        if (result.displayText.isNotBlank()) {
-            BackgroundChatStore.enqueueTurn(
-                context,
-                BackgroundChatTurn(
-                    userText = transcript,
-                    assistantText = result.displayText,
-                    senderLabel = result.senderLabel,
-                    userTimestampMs = userTs,
-                    replyTimestampMs = replyTs,
-                ),
-            )
-            MainActivity.notifyBackgroundTurn()
-        }
-
-        if (cleanSpeech.isEmpty()) return
-
-        onReplyNotification(transcript, cleanSpeech)
-        onStatusUpdate("Respondendo…")
-        speakReply(context, cfg, cleanSpeech)
     }
 
     private fun playReadyBeep() {
@@ -333,13 +344,13 @@ object BackgroundVoiceResponder {
             .trimEnd('.', '!', '?', ',', ';', ':')
             .trim()
         val leadingPatterns = listOf(
-            Regex("""^(?:(?:ei|oi|ol[aá]|ok|e\s*a[ií]|fala)\s+)?ultron[,\s]+""", RegexOption.IGNORE_CASE),
+            Regex("""^(?:(?:ei|oi|ol[aá]|ok|e\s*a[ií]|fala)\s+)?(?:ultron|jarvis|edith|edite|vis[aã]o|viz[aã]o|vision)[,\s]+""", RegexOption.IGNORE_CASE),
             Regex("""^(?:por\s+favor|pfv|por\s+gentileza)[,\s]+""", RegexOption.IGNORE_CASE),
             Regex("""^(?:voc[eê]|vc)\s+(?:pode|poderia|consegue)\s+""", RegexOption.IGNORE_CASE),
             Regex("""^(?:pode|poderia|consegue|tem\s+como|faz\s+o\s+favor\s+de|quero\s+que(?:\s+voc[eê]|\s+vc)?)\s+""", RegexOption.IGNORE_CASE),
         )
         val trailingPattern = Regex(
-            """(?:\s+(?:para\s+mim|pra\s+mim|por\s+favor|por\s+gentileza|pfv|aqui|a[ií]|agora|r[aá]pido|logo|se\s+puder|se\s+conseguir|por\s+obs[eé]quio|ok|t[aá]|viu|ultron))+$""",
+            """(?:\s+(?:para\s+mim|pra\s+mim|por\s+favor|por\s+gentileza|pfv|aqui|a[ií]|agora|r[aá]pido|logo|se\s+puder|se\s+conseguir|por\s+obs[eé]quio|ok|t[aá]|viu|ultron|jarvis|edith|vis[aã]o))+$""",
             RegexOption.IGNORE_CASE,
         )
         var prev: String
@@ -350,6 +361,9 @@ object BackgroundVoiceResponder {
             }
             current = trailingPattern.replace(current, "").trim()
         } while (current != prev && current.isNotEmpty())
+        if (WakeWordMatcher.hotwordIndex(current, anyProfile = true) == 0) {
+            current = WakeWordMatcher.extractCommand(current, anyProfile = true)
+        }
         return current
     }
 
@@ -445,8 +459,44 @@ object BackgroundVoiceResponder {
             else -> null
         }
         if (mediaAction != null) {
-            DeviceHardwareHelper.dispatchMediaControl(context, mediaAction.first)
-            return actionTurn(mediaAction.second, mediaAction.third)
+            val prefApp = when {
+                lower.contains("spotify") -> "spotify"
+                lower.contains("youtube") -> "youtube"
+                else -> ""
+            }
+            val mediaRes = DeviceHardwareHelper.dispatchMediaControlVerified(
+                context,
+                mediaAction.first,
+                prefApp,
+            )
+            return when (mediaRes.status) {
+                "confirmed" -> if (mediaRes.launchedApp.isNotEmpty()) {
+                    actionTurn(
+                        "Abri o ${mediaRes.launchedApp} e retomei a reprodução.",
+                        "▶️ ${mediaRes.launchedApp} aberto e tocando",
+                    )
+                } else {
+                    actionTurn(mediaAction.second, mediaAction.third)
+                }
+                "opened_needs_play" -> {
+                    val appName = mediaRes.launchedApp.ifEmpty { "aplicativo de música" }
+                    actionTurn(
+                        "O $appName estava fechado, então abri o aplicativo para você. Toque em play para continuar.",
+                        "📱 $appName aberto (aguardando play)",
+                    )
+                }
+                "no_active_session" -> {
+                    val appHint = if (prefApp.isNotEmpty()) prefApp.replaceFirstChar { it.uppercase() } else "player de mídia"
+                    actionTurn(
+                        "Não há nenhuma reprodução ativa no $appHint.",
+                        "⚠️ Sem sessão de mídia ativa ($appHint)",
+                    )
+                }
+                else -> actionTurn(
+                    "Enviei o comando de mídia, mas não consegui confirmar se o player respondeu.",
+                    "❔ Comando de mídia enviado (efeito não confirmado)",
+                )
+            }
         }
 
         // 5. Bateria e status do aparelho
@@ -513,7 +563,7 @@ object BackgroundVoiceResponder {
         }
 
         // 10. Abrir aplicativos e configurações (se não achar app literal, deixa a IA entender o contexto)
-        Regex("""^(?:abrir|iniciar|abre|abra|executar)\s+(.+)$""").find(lower)?.let { m ->
+        Regex("""^(?:(?:ei|ok|oi)\s+)?(?:ultron\s*[,\s]+)?(?:(?:aqui\s+)?no\s+(?:meu\s+)?celular\s*[,\s]+)?(?:(?:por\s+favor|pfv|pode|poderia|quero)\s+)*(?:abrir|iniciar|abre|abra|executar)\s+(.+)$""").find(lower)?.let { m ->
             val target = DeviceHardwareHelper.sanitizeAppQuery(m.groupValues[1])
             val wordCount = target.split(Regex("""\s+""")).count { it.isNotBlank() }
             if (target.isNotEmpty() && wordCount <= 3 && target != "palco" && target != "documento") {
@@ -554,9 +604,11 @@ object BackgroundVoiceResponder {
                 ""
             }
 
+            val nowFmt = SimpleDateFormat("yyyy-MM-dd (EEEE) HH:mm:ss Z", Locale("pt", "BR")).format(Date())
             val systemPrompt = "Você é o U.L.T.R.O.N., assistente pessoal tático Android em português do Brasil, respondendo em 2º plano (mãos-livres). " +
                 "Entenda linguagem natural, pedidos indiretos, gírias, ordens compostas e o contexto das mensagens anteriores da conversa. " +
                 "Responda de forma natural em no máximo 2 ou 3 frases diretas, sem markdown ou emojis. " +
+                "DATA/HORA ATUAL DO CELULAR: $nowFmt (use este horário real para calcular alarmes relativos, timers e datas sem perguntar a hora ao operador). " +
                 "TELEMETRIA: Bateria $bat% ($charging) | Lanterna $torch | Volume $vol% | Tela ${if (locked) "BLOQUEADA" else "DESBLOQUEADA"}$appsHint. " +
                 "Sempre que o operador pedir ou sugerir uma ação (mesmo de forma indireta, ex: 'tá escuro' -> ligar lanterna), inclua as tags exatas no final: " +
                 "[ACTION:TORCH_ON], [ACTION:TORCH_OFF], [ACTION:TORCH_TOGGLE], " +
@@ -625,11 +677,13 @@ object BackgroundVoiceResponder {
         context: Context,
         rawReply: String,
         aiModel: String,
+        onRequireUnlock: (() -> Unit)? = null,
     ): BackgroundTurnResult {
         val pattern = Regex("""\[ACTION:([^\]]+)\]""", RegexOption.IGNORE_CASE)
         val matches = pattern.findAll(rawReply).toList()
         val logs = mutableListOf<String>()
-        val locked = isDeviceLocked(context)
+        val locked = isDeviceLocked(context) || FloatingOrbService.isSessionLocked
+        var requestedUnlock = false
 
         for (match in matches) {
             val content = match.groupValues[1].trim()
@@ -638,6 +692,15 @@ object BackgroundVoiceResponder {
             val arg1 = parts.getOrNull(1)?.trim().orEmpty()
             val arg2 = parts.getOrNull(2)?.trim().orEmpty()
             val arg3 = if (parts.size > 3) parts.drop(3).joinToString(":").trim() else ""
+
+            if (FloatingOrbService.requiresUnlockForBackgroundAction(context, cmd)) {
+                logs.add("🔒 Desbloqueio AuthGate exigido para $cmd")
+                if (!requestedUnlock) {
+                    requestedUnlock = true
+                    onRequireUnlock?.invoke()
+                }
+                continue
+            }
 
             try {
                 when (cmd) {
@@ -669,29 +732,36 @@ object BackgroundVoiceResponder {
                         DeviceHardwareHelper.adjustMediaVolume(context, "mute")
                         logs.add("🔇 Áudio silenciado")
                     }
-                    "MEDIA_PLAY" -> {
-                        DeviceHardwareHelper.dispatchMediaControl(context, "play")
-                        logs.add("▶️ Reprodução retomada")
-                    }
-                    "MEDIA_PAUSE" -> {
-                        DeviceHardwareHelper.dispatchMediaControl(context, "pause")
-                        logs.add("⏸️ Mídia pausada")
-                    }
-                    "MEDIA_PLAY_PAUSE" -> {
-                        DeviceHardwareHelper.dispatchMediaControl(context, "play_pause")
-                        logs.add("⏯️ Play/Pause enviado")
-                    }
-                    "MEDIA_NEXT" -> {
-                        DeviceHardwareHelper.dispatchMediaControl(context, "next")
-                        logs.add("⏭️ Próxima faixa")
-                    }
-                    "MEDIA_PREVIOUS" -> {
-                        DeviceHardwareHelper.dispatchMediaControl(context, "previous")
-                        logs.add("⏮️ Faixa anterior")
-                    }
-                    "MEDIA_STOP" -> {
-                        DeviceHardwareHelper.dispatchMediaControl(context, "stop")
-                        logs.add("⏹️ Mídia parada")
+                    "MEDIA_PLAY", "MEDIA_PAUSE", "MEDIA_PLAY_PAUSE", "MEDIA_NEXT", "MEDIA_PREVIOUS", "MEDIA_STOP" -> {
+                        val actionName = when (cmd) {
+                            "MEDIA_PLAY" -> "play"
+                            "MEDIA_PAUSE" -> "pause"
+                            "MEDIA_PLAY_PAUSE" -> "play_pause"
+                            "MEDIA_NEXT" -> "next"
+                            "MEDIA_PREVIOUS" -> "previous"
+                            else -> "stop"
+                        }
+                        val okLabel = when (cmd) {
+                            "MEDIA_PLAY" -> "▶️ Reprodução retomada"
+                            "MEDIA_PAUSE" -> "⏸️ Mídia pausada"
+                            "MEDIA_PLAY_PAUSE" -> "⏯️ Play/Pause confirmado"
+                            "MEDIA_NEXT" -> "⏭️ Próxima faixa"
+                            "MEDIA_PREVIOUS" -> "⏮️ Faixa anterior"
+                            else -> "⏹️ Mídia parada"
+                        }
+                        val mRes = DeviceHardwareHelper.dispatchMediaControlVerified(context, actionName)
+                        logs.add(
+                            when (mRes.status) {
+                                "confirmed" -> if (mRes.launchedApp.isNotEmpty()) {
+                                    "▶️ ${mRes.launchedApp} aberto e reprodução retomada"
+                                } else {
+                                    okLabel
+                                }
+                                "opened_needs_play" -> "📱 ${mRes.launchedApp.ifEmpty { "Player" }} estava fechado e foi aberto (aguardando play)"
+                                "no_active_session" -> "⚠️ Sem player/sessão de mídia ativa (ação não concluída)"
+                                else -> "❔ Comando de mídia enviado (não confirmado)"
+                            }
+                        )
                     }
                     "OPEN_CAMERA" -> {
                         val res = DeviceHardwareHelper.launchInstalledAppWithStatus(context, "camera")

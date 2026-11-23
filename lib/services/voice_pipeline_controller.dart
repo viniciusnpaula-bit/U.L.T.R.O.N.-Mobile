@@ -35,6 +35,22 @@ class BargeInMatcher {
     'ultrom',
     'altron',
     'outron',
+    'jarvis',
+    'ei jarvis',
+    'ok jarvis',
+    'oi jarvis',
+    'jarves',
+    'edith',
+    'ei edith',
+    'ok edith',
+    'oi edith',
+    'edite',
+    'visao',
+    'ei visao',
+    'ok visao',
+    'oi visao',
+    'vizao',
+    'vision',
   ];
 
   static const List<String> _stopOnlyWords = <String>[
@@ -57,6 +73,22 @@ class BargeInMatcher {
     'ultrom',
     'altron',
     'outron',
+    'ei jarvis',
+    'ok jarvis',
+    'oi jarvis',
+    'jarvis',
+    'jarves',
+    'ei edith',
+    'ok edith',
+    'oi edith',
+    'edith',
+    'edite',
+    'ei visao',
+    'ok visao',
+    'oi visao',
+    'visao',
+    'vizao',
+    'vision',
   ];
 
   static String normalize(String text) =>
@@ -589,10 +621,16 @@ class VoicePipelineController extends ChangeNotifier {
     _notifySafely();
     try {
       final prompt = await _effectivePrompt();
+      final sttSw = Stopwatch()..start();
       final result = await _stt.transcribe(
         segment,
         sampleRate: sampleRate,
         prompt: prompt,
+      );
+      sttSw.stop();
+      debugPrint(
+        '[ULTRON][LATENCY] STT=${sttSw.elapsedMilliseconds}ms '
+        'bytes=${segment.length} ok=${result.hasText}',
       );
       if (_disposed ||
           sessionGen != _sessionGeneration ||
@@ -648,10 +686,16 @@ class VoicePipelineController extends ChangeNotifier {
     _notifySafely();
     try {
       final prompt = await _effectivePrompt();
+      final sttSw = Stopwatch()..start();
       final result = await _stt.transcribe(
         pcm,
         sampleRate: sampleRate,
         prompt: prompt,
+      );
+      sttSw.stop();
+      debugPrint(
+        '[ULTRON][LATENCY] STT=${sttSw.elapsedMilliseconds}ms '
+        'bytes=${pcm.length} ok=${result.hasText}',
       );
       if (result.error != null) {
         _lastError = result.error;

@@ -64,14 +64,23 @@ class VaultSearchService {
     required this.vaultRoot,
     required Database db,
     required VaultSearchEngine engine,
+    DateTime Function()? now,
   })  : _db = db,
-        _engine = engine;
+        _engine = engine,
+        _now = now ?? DateTime.now;
 
   final Directory vaultRoot;
   final Database _db;
   final VaultSearchEngine _engine;
+  final DateTime Function() _now;
+  DateTime? _lastSyncAt;
+  VaultSyncStats? _lastSyncStats;
 
   VaultSearchEngine get engine => _engine;
+
+  void invalidateSyncCache() {
+    _lastSyncAt = null;
+  }
 
   static const _stopwords = <String>{
     'a',
@@ -151,6 +160,7 @@ class VaultSearchService {
     required Directory vaultRoot,
     Database? database,
     String? dbPath,
+    DateTime Function()? now,
   }) async {
     late final Database db;
     if (database != null) {
@@ -187,6 +197,7 @@ class VaultSearchService {
       vaultRoot: vaultRoot,
       db: db,
       engine: engine,
+      now: now,
     );
   }
 
@@ -256,7 +267,22 @@ class VaultSearchService {
   }
 
   /// Sincroniza incrementalmente arquivos `.md` de [vaultRoot] no índice SQLite.
-  Future<VaultSyncStats> sync() async {
+  Future<VaultSyncStats> sync({
+    bool force = false,
+    Duration? minInterval,
+  }) async {
+    final now = _now();
+    if (!force &&
+        minInterval != null &&
+        _lastSyncAt != null &&
+        now.difference(_lastSyncAt!) < minInterval) {
+      return VaultSyncStats(
+        indexed: 0,
+        updated: 0,
+        removed: 0,
+        totalDocuments: _lastSyncStats?.totalDocuments ?? 0,
+      );
+    }
     final diskFiles = await _scanMarkdownFiles();
     final existingRows = await _db.query(
       'vault_docs',
@@ -359,12 +385,15 @@ class VaultSearchService {
     }
 
     final total = existingMap.length + inserted - removedPaths.length;
-    return VaultSyncStats(
+    final stats = VaultSyncStats(
       indexed: inserted,
       updated: updated,
       removed: removedPaths.length,
       totalDocuments: total,
     );
+    _lastSyncAt = _now();
+    _lastSyncStats = stats;
+    return stats;
   }
 
   Future<Map<String, File>> _scanMarkdownFiles() async {
@@ -402,34 +431,71 @@ class VaultSearchService {
     return p.basenameWithoutExtension(relPath);
   }
 
+  /// Normaliza o prefixo de pasta para filtro escopado (ex.: `Memoria/Engenharia/` → `Memoria/Engenharia`).
+  static String? normalizePathPrefix(String? rawPrefix) {
+    if (rawPrefix == null) return null;
+    final clean = rawPrefix
+        .trim()
+        .replaceAll(r'\', '/')
+        .replaceAll(RegExp(r'^/+|/+$'), '');
+    return clean.isEmpty ? null : clean;
+  }
+
+  static bool matchesPathPrefix(String docPath, String? normalizedPrefix) {
+    if (normalizedPrefix == null || normalizedPrefix.isEmpty) return true;
+    final docLower = docPath.replaceAll(r'\', '/').toLowerCase();
+    final prefLower = normalizedPrefix.toLowerCase();
+    return docLower == prefLower || docLower.startsWith('$prefLower/');
+  }
+
   /// Executa busca ranqueada nas notas indexadas usando o melhor motor disponível.
-  Future<List<VaultSearchHit>> search(String query, {int limit = 3}) async {
+  /// Quando [pathPrefix] é fornecido, restringe os resultados àquela subpasta do cofre.
+  Future<List<VaultSearchHit>> search(
+    String query, {
+    int limit = 3,
+    String? pathPrefix,
+  }) async {
     if (limit <= 0) return const [];
     final terms = extractQueryTerms(query);
     if (terms.isEmpty) return const [];
+    final prefix = normalizePathPrefix(pathPrefix);
 
     if (_engine == VaultSearchEngine.fts5) {
-      final ftsHits = await _searchFts5(terms, limit: limit);
+      final ftsHits = await _searchFts5(terms, limit: limit, pathPrefix: prefix);
       if (ftsHits.isNotEmpty) return ftsHits;
     } else if (_engine == VaultSearchEngine.fts4) {
-      final fts4Hits = await _searchFts4(terms, limit: limit);
+      final fts4Hits = await _searchFts4(terms, limit: limit, pathPrefix: prefix);
       if (fts4Hits.isNotEmpty) return fts4Hits;
     }
 
     // Fallback léxico (ou se FTS não cobrir alguma variação sem acento)
     final allRows = await _db.query('vault_docs');
     final docs = allRows.map(_rowToRecord).toList();
-    return rankLexicalDocuments(docs, query, limit: limit);
+    return rankLexicalDocuments(docs, query, limit: limit, pathPrefix: prefix);
   }
 
   Future<List<VaultSearchHit>> _searchFts5(
     List<String> terms, {
     required int limit,
+    String? pathPrefix,
   }) async {
     final ftsQuery = _buildFtsMatchQuery(terms);
     try {
+      final hasPrefix = pathPrefix != null && pathPrefix.isNotEmpty;
+      final prefixLower = pathPrefix?.toLowerCase() ?? '';
       final rows = await _db.rawQuery(
+        hasPrefix
+            ? '''
+        SELECT d.path, d.folder, d.title, d.content, d.modified_ms,
+               bm25(vault_fts, 0.0, 2.0, 1.0) AS rank
+        FROM vault_fts
+        JOIN vault_docs d ON vault_fts.path = d.path
+        WHERE vault_fts MATCH ?
+          AND (LOWER(d.path) = ? OR LOWER(d.path) LIKE ?)
+        ORDER BY rank ASC, d.modified_ms DESC
+        LIMIT ?
         '''
+            : '''
         SELECT d.path, d.folder, d.title, d.content, d.modified_ms,
                bm25(vault_fts, 0.0, 2.0, 1.0) AS rank
         FROM vault_fts
@@ -438,7 +504,9 @@ class VaultSearchService {
         ORDER BY rank ASC, d.modified_ms DESC
         LIMIT ?
         ''',
-        [ftsQuery, limit],
+        hasPrefix
+            ? [ftsQuery, prefixLower, '$prefixLower/%', limit]
+            : [ftsQuery, limit],
       );
       return rows.map((row) {
         final content = row['content'] as String;
@@ -462,21 +530,40 @@ class VaultSearchService {
   Future<List<VaultSearchHit>> _searchFts4(
     List<String> terms, {
     required int limit,
+    String? pathPrefix,
   }) async {
     final ftsQuery = _buildFtsMatchQuery(terms);
     try {
+      final hasPrefix = pathPrefix != null && pathPrefix.isNotEmpty;
+      final prefixLower = pathPrefix?.toLowerCase() ?? '';
       final rows = await _db.rawQuery(
+        hasPrefix
+            ? '''
+        SELECT d.path, d.folder, d.title, d.content, d.modified_ms
+        FROM vault_fts
+        JOIN vault_docs d ON vault_fts.path = d.path
+        WHERE vault_fts MATCH ?
+          AND (LOWER(d.path) = ? OR LOWER(d.path) LIKE ?)
+        LIMIT ?
         '''
+            : '''
         SELECT d.path, d.folder, d.title, d.content, d.modified_ms
         FROM vault_fts
         JOIN vault_docs d ON vault_fts.path = d.path
         WHERE vault_fts MATCH ?
         LIMIT ?
         ''',
-        [ftsQuery, limit * 4],
+        hasPrefix
+            ? [ftsQuery, prefixLower, '$prefixLower/%', limit * 4]
+            : [ftsQuery, limit * 4],
       );
       final docs = rows.map(_rowToRecord).toList();
-      return rankLexicalDocuments(docs, terms.join(' '), limit: limit);
+      return rankLexicalDocuments(
+        docs,
+        terms.join(' '),
+        limit: limit,
+        pathPrefix: pathPrefix,
+      );
     } catch (_) {
       return const [];
     }
@@ -497,8 +584,9 @@ class VaultSearchService {
     String query, {
     int limit = 3,
     int maxChars = 1400,
+    String? pathPrefix,
   }) async {
-    final hits = await search(query, limit: limit);
+    final hits = await search(query, limit: limit, pathPrefix: pathPrefix);
     if (hits.isEmpty) return '';
 
     final buffer = StringBuffer();
@@ -523,13 +611,20 @@ class VaultSearchService {
     List<VaultDocumentRecord> docs,
     String query, {
     int limit = 3,
+    String? pathPrefix,
   }) {
     if (limit <= 0 || docs.isEmpty) return const [];
     final terms = extractQueryTerms(query);
     if (terms.isEmpty) return const [];
+    final prefix = normalizePathPrefix(pathPrefix);
+
+    final filteredDocs = prefix == null
+        ? docs
+        : docs.where((d) => matchesPathPrefix(d.path, prefix)).toList();
+    if (filteredDocs.isEmpty) return const [];
 
     final scored = <VaultSearchHit>[];
-    for (final doc in docs) {
+    for (final doc in filteredDocs) {
       final normTitle = normalizeText(doc.title);
       final normContent = normalizeText(doc.content);
       final normPath = normalizeText(doc.path);

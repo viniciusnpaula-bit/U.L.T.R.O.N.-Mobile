@@ -25,18 +25,21 @@ data class BackgroundVoiceConfig(
     val fishLanguage: String = "pt",
     val fishModel: String = "s2.1-pro",
     val whisperMode: Boolean = false,
+    val wakeWordProfile: String = "ultron",
 ) {
     val hasStt: Boolean get() = sttKey.isNotBlank() && sttUrl.isNotBlank()
     val hasFish: Boolean get() = fishEnabled && fishKey.isNotBlank() && fishRefId.isNotBlank()
+    val resolvedWakeProfile: WakeWordProfile get() = WakeWordProfile.fromId(wakeWordProfile)
 }
 
 /**
- * Persiste as credenciais de STT, IA e Fish Audio cifradas com AES-256-GCM
+ * Persiste as credenciais de STT, IA, Fish Audio e o perfil de Wake-Word cifradas com AES-256-GCM
  * via AndroidKeyStore para que o serviço em 2º plano responda mesmo com o app fechado.
  */
 object BackgroundVoiceConfigStore {
     private const val PREFS_NAME = "ultron_bg_voice_prefs"
     private const val KEY_PAYLOAD = "encrypted_cfg_v1"
+    private const val KEY_WAKE_PROFILE_PLAIN = "wake_word_profile_v1"
     private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
     private const val KEY_ALIAS = "ultron_bg_voice_cfg_key_v1"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
@@ -45,6 +48,12 @@ object BackgroundVoiceConfigStore {
 
     fun save(context: Context, cfg: BackgroundVoiceConfig) {
         try {
+            val resolvedProfile = WakeWordMatcher.setActiveProfileById(cfg.wakeWordProfile)
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_WAKE_PROFILE_PLAIN, resolvedProfile.id)
+                .apply()
+
             val json = JSONObject().apply {
                 put("sttUrl", cfg.sttUrl)
                 put("sttKey", cfg.sttKey)
@@ -59,6 +68,7 @@ object BackgroundVoiceConfigStore {
                 put("fishLanguage", cfg.fishLanguage)
                 put("fishModel", cfg.fishModel)
                 put("whisperMode", cfg.whisperMode)
+                put("wakeWordProfile", resolvedProfile.id)
             }.toString()
 
             val encoded = encryptString(json) ?: return
@@ -70,12 +80,48 @@ object BackgroundVoiceConfigStore {
         }
     }
 
+    fun saveWakeWordProfileOnly(context: Context, profileId: String): WakeWordProfile {
+        val resolved = WakeWordMatcher.setActiveProfileById(profileId)
+        try {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_WAKE_PROFILE_PLAIN, resolved.id)
+                .apply()
+            val current = load(context)
+            if (current.wakeWordProfile != resolved.id) {
+                save(context, current.copy(wakeWordProfile = resolved.id))
+            }
+        } catch (_: Exception) {
+        }
+        return resolved
+    }
+
+    fun loadWakeWordProfile(context: Context): WakeWordProfile {
+        return try {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val plain = prefs.getString(KEY_WAKE_PROFILE_PLAIN, null)
+            if (!plain.isNullOrBlank()) {
+                WakeWordMatcher.setActiveProfileById(plain)
+            } else {
+                val cfg = load(context)
+                WakeWordMatcher.setActiveProfileById(cfg.wakeWordProfile)
+            }
+        } catch (_: Exception) {
+            WakeWordMatcher.activeProfile
+        }
+    }
+
     fun load(context: Context): BackgroundVoiceConfig {
         return try {
-            val encoded = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(KEY_PAYLOAD, null) ?: return BackgroundVoiceConfig()
-            val raw = decryptString(encoded) ?: return BackgroundVoiceConfig()
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val fallbackProfile = prefs.getString(KEY_WAKE_PROFILE_PLAIN, "ultron") ?: "ultron"
+            val encoded = prefs.getString(KEY_PAYLOAD, null)
+                ?: return BackgroundVoiceConfig(wakeWordProfile = fallbackProfile)
+            val raw = decryptString(encoded)
+                ?: return BackgroundVoiceConfig(wakeWordProfile = fallbackProfile)
             val obj = JSONObject(raw)
+            val wakeProf = obj.optString("wakeWordProfile", fallbackProfile).ifBlank { fallbackProfile }
+            WakeWordMatcher.setActiveProfileById(wakeProf)
 
             BackgroundVoiceConfig(
                 sttUrl = obj.optString("sttUrl", ""),
@@ -91,6 +137,7 @@ object BackgroundVoiceConfigStore {
                 fishLanguage = obj.optString("fishLanguage", "pt"),
                 fishModel = obj.optString("fishModel", "s2.1-pro"),
                 whisperMode = obj.optBoolean("whisperMode", false),
+                wakeWordProfile = wakeProf,
             )
         } catch (_: Exception) {
             BackgroundVoiceConfig()

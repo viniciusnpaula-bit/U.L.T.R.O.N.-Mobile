@@ -3,6 +3,8 @@ package com.viniciusnpaula.ultron_mobile
 import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
@@ -23,9 +25,16 @@ import android.media.ExifInterface
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.nfc.NdefMessage
+import android.nfc.NdefRecord
+import android.nfc.NfcAdapter
+import android.nfc.Tag
+import android.nfc.tech.Ndef
+import android.nfc.tech.NdefFormatable
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -40,6 +49,7 @@ import android.view.KeyEvent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.google.zxing.integration.android.IntentIntegrator
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -55,6 +65,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     companion object {
         private const val CHANNEL = "com.viniciusnpaula.ultron_mobile/device"
         private const val ACTIONS_CHANNEL = "com.viniciusnpaula.ultron_mobile/android_actions"
+        private const val NFC_CHANNEL = "com.viniciusnpaula.ultron_mobile/nfc"
 
         @Volatile
         var isFaceDownGlobal: Boolean = false
@@ -79,6 +90,10 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         private const val VISION_GALLERY_REQUEST_CODE = 9102
         private const val VISION_CAMERA_PERM_REQUEST_CODE = 9103
         private const val CALENDAR_PERM_REQUEST_CODE = 9104
+        private const val PAIRING_QR_REQUEST_CODE = 9105
+        private const val PAIRING_QR_CAMERA_PERM_REQUEST_CODE = 9106
+        private const val SAF_PICK_DIR_REQUEST_CODE = 9107
+        private const val SAF_PICK_FILES_REQUEST_CODE = 9108
         private const val VISION_MAX_DIM_PX = 1024
         private const val VISION_JPEG_QUALITY = 82
 
@@ -114,6 +129,59 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 instance?.deviceChannel?.invokeMethod("onBackgroundTurnAvailable", null)
             }
         }
+
+        private val pendingWorkflowIds = mutableListOf<Int>()
+
+        fun notifyWorkflowTriggered(flowId: Int) {
+            synchronized(pendingWorkflowIds) {
+                if (!pendingWorkflowIds.contains(flowId)) {
+                    pendingWorkflowIds.add(flowId)
+                }
+            }
+            instance?.runOnUiThread {
+                instance?.deviceChannel?.invokeMethod("onWorkflowTriggered", flowId)
+            }
+        }
+
+        fun consumePendingWorkflowIds(): List<Int> {
+            synchronized(pendingWorkflowIds) {
+                val copy = pendingWorkflowIds.toList()
+                pendingWorkflowIds.clear()
+                return copy
+            }
+        }
+
+        @Volatile
+        private var pendingOrbTap: Boolean = false
+
+        @Volatile
+        private var pendingOrbRequireUnlock: Boolean = false
+
+        fun notifyFloatingOrbTap(requiresUnlock: Boolean) {
+            pendingOrbTap = true
+            pendingOrbRequireUnlock = requiresUnlock
+            instance?.runOnUiThread {
+                instance?.deliverPendingFloatingOrbTap()
+            }
+        }
+
+        fun consumePendingOrbTap(): Map<String, Any>? {
+            if (!pendingOrbTap) return null
+            val req = pendingOrbRequireUnlock
+            pendingOrbTap = false
+            pendingOrbRequireUnlock = false
+            return mapOf(
+                "triggered" to true,
+                "requiresUnlock" to req,
+            )
+        }
+    }
+
+    private fun deliverPendingFloatingOrbTap() {
+        if (!isActivityResumed) return
+        val channel = deviceChannel ?: return
+        val payload = consumePendingOrbTap() ?: return
+        channel.invokeMethod("onFloatingOrbTapped", payload)
     }
 
     /** Entrega a wake word pendente ao Flutter; só consome quando a Activity está em 1º plano. */
@@ -186,12 +254,67 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             } else {
                 pending?.error("CALENDAR_PERMISSION_DENIED", "Permissão de Agenda (Calendário) negada.", null)
             }
+        } else if (requestCode == PAIRING_QR_CAMERA_PERM_REQUEST_CODE) {
+            val camGranted = ContextCompat.checkSelfPermission(
+                this, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+            val pending = pendingQrResult
+            if (camGranted && pending != null) {
+                launchPairingQrScanner(pending)
+            } else {
+                pendingQrResult = null
+                pending?.error("PERMISSION_DENIED", "Permissão de câmera negada para ler QR Code.", null)
+            }
         }
     }
 
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SAF_PICK_DIR_REQUEST_CODE) {
+            val pending = pendingSafDirResult ?: return
+            pendingSafDirResult = null
+            if (resultCode != Activity.RESULT_OK) {
+                pending.success(null)
+                return
+            }
+            val treeUri = data?.data
+            val resolvedPath = resolveSafTreeUriToPath(treeUri)
+            pending.success(resolvedPath)
+            return
+        }
+        if (requestCode == SAF_PICK_FILES_REQUEST_CODE) {
+            val pending = pendingSafFilesResult ?: return
+            pendingSafFilesResult = null
+            if (resultCode != Activity.RESULT_OK || data == null) {
+                pending.success(emptyList<String>())
+                return
+            }
+            val uris = mutableListOf<Uri>()
+            val clip = data.clipData
+            if (clip != null && clip.itemCount > 0) {
+                for (i in 0 until clip.itemCount) {
+                    clip.getItemAt(i)?.uri?.let { uris.add(it) }
+                }
+            } else {
+                data.data?.let { uris.add(it) }
+            }
+            val copiedPaths = copySafUrisToBatchCache(uris)
+            pending.success(copiedPaths)
+            return
+        }
+        if (requestCode == PAIRING_QR_REQUEST_CODE) {
+            val pending = pendingQrResult ?: return
+            pendingQrResult = null
+            if (resultCode != Activity.RESULT_OK) {
+                pending.success(null)
+                return
+            }
+            val parsed = IntentIntegrator.parseActivityResult(IntentIntegrator.REQUEST_CODE, resultCode, data)
+            val contents = parsed?.contents ?: data?.getStringExtra("SCAN_RESULT")
+            pending.success(contents)
+            return
+        }
         if (requestCode != VISION_CAMERA_REQUEST_CODE && requestCode != VISION_GALLERY_REQUEST_CODE) {
             return
         }
@@ -206,7 +329,9 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         val uri = if (requestCode == VISION_CAMERA_REQUEST_CODE) {
             pendingVisionCameraUri
         } else {
-            data?.data
+            data?.data ?: data?.clipData?.let { clip ->
+                if (clip.itemCount > 0) clip.getItemAt(0).uri else null
+            }
         }
         pendingVisionCameraUri = null
         if (uri == null) {
@@ -252,6 +377,13 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             applyLockScreenMode(true)
             intent.removeExtra(UltronAudioService.EXTRA_WAKE_WORD)
         }
+        if (intent?.getBooleanExtra(FloatingOrbService.EXTRA_ORB_VOICE_TRIGGER, false) == true) {
+            val requireUnlock = intent.getBooleanExtra(FloatingOrbService.EXTRA_ORB_REQUIRE_UNLOCK, false)
+            applyLockScreenMode(true)
+            intent.removeExtra(FloatingOrbService.EXTRA_ORB_VOICE_TRIGGER)
+            intent.removeExtra(FloatingOrbService.EXTRA_ORB_REQUIRE_UNLOCK)
+            notifyFloatingOrbTap(requireUnlock)
+        }
         if (intent?.getBooleanExtra(BootReceiver.EXTRA_REARM_SENTINEL, false) == true) {
             intent.removeExtra(BootReceiver.EXTRA_REARM_SENTINEL)
             val hasMic = ContextCompat.checkSelfPermission(
@@ -274,8 +406,53 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         }
     }
 
+    private fun capturePairingIntent(intent: Intent?, notifyChannel: Boolean = false) {
+        val data = intent?.data ?: return
+        if (!data.scheme.equals("ultron", ignoreCase = true)) {
+            return
+        }
+        if (data.host.equals("pair", ignoreCase = true)) {
+            val uriString = data.toString()
+            pendingPairingUri = uriString
+            if (notifyChannel) {
+                deviceChannel?.invokeMethod("onPairingUriReceived", uriString)
+            }
+        } else if (data.host.equals("spotify-callback", ignoreCase = true)) {
+            val uriString = data.toString()
+            pendingSpotifyCallbackUri = uriString
+            if (notifyChannel) {
+                deviceChannel?.invokeMethod("onSpotifyCallbackUriReceived", uriString)
+            }
+        }
+    }
+
+    private fun captureNfcIntent(intent: Intent?, notifyChannel: Boolean = false) {
+        val action = intent?.action ?: return
+        if (action != NfcAdapter.ACTION_NDEF_DISCOVERED &&
+            action != NfcAdapter.ACTION_TECH_DISCOVERED &&
+            action != NfcAdapter.ACTION_TAG_DISCOVERED
+        ) {
+            return
+        }
+        val tag: Tag? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(NfcAdapter.EXTRA_TAG)
+        }
+        val rawId = tag?.id ?: return
+        if (rawId.isEmpty()) return
+        val uidHex = rawId.joinToString("") { b -> "%02X".format(b) }
+        pendingNfcUnlockUid = uidHex
+        if (notifyChannel) {
+            nfcChannel?.invokeMethod("onNfcTagDetected", uidHex)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         captureTileIntent(intent)
+        capturePairingIntent(intent, notifyChannel = false)
+        captureNfcIntent(intent, notifyChannel = false)
         handleWakeIntent(intent)
         super.onCreate(savedInstanceState)
     }
@@ -284,18 +461,107 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         super.onNewIntent(intent)
         setIntent(intent)
         captureTileIntent(intent)
+        capturePairingIntent(intent, notifyChannel = true)
+        captureNfcIntent(intent, notifyChannel = true)
         handleWakeIntent(intent)
     }
 
     private var audioCaptureHandler: AudioCaptureHandler? = null
     private var actionsChannel: MethodChannel? = null
     private var pendingTileAction: String? = null
+    private var pendingPairingUri: String? = null
+    private var pendingSpotifyCallbackUri: String? = null
     private var deviceChannel: MethodChannel? = null
+    private var nfcChannel: MethodChannel? = null
     private var sensorManager: SensorManager? = null
     private var accelerometer: Sensor? = null
     private var isFaceDown: Boolean = false
     private var pendingVisionResult: MethodChannel.Result? = null
     private var pendingVisionCameraUri: Uri? = null
+    private var pendingQrResult: MethodChannel.Result? = null
+    private var pendingSafDirResult: MethodChannel.Result? = null
+    private var pendingSafFilesResult: MethodChannel.Result? = null
+    private var pendingNfcUnlockUid: String? = null
+    private var nfcAdapter: NfcAdapter? = null
+    private var nfcReaderEnabled: Boolean = false
+    private var nfcWriteUnlockOnTap: Boolean = false
+
+    private fun writeUnlockUriToTag(tag: Tag): Pair<Boolean, String?> {
+        val message = NdefMessage(arrayOf(NdefRecord.createUri("ultron://unlock")))
+        val ndef = Ndef.get(tag)
+        if (ndef != null) {
+            return try {
+                ndef.connect()
+                if (!ndef.isWritable) {
+                    false to "Tag NFC é somente leitura."
+                } else if (ndef.maxSize < message.toByteArray().size) {
+                    false to "Tag NFC sem espaço suficiente."
+                } else {
+                    ndef.writeNdefMessage(message)
+                    true to null
+                }
+            } catch (e: Exception) {
+                false to (e.message ?: "Falha ao gravar NDEF.")
+            } finally {
+                safely("closeNdef") { ndef.close() }
+            }
+        }
+        val formatable = NdefFormatable.get(tag)
+        if (formatable != null) {
+            return try {
+                formatable.connect()
+                formatable.format(message)
+                true to null
+            } catch (e: Exception) {
+                false to (e.message ?: "Falha ao formatar NDEF.")
+            } finally {
+                safely("closeNdefFormatable") { formatable.close() }
+            }
+        }
+        return false to "Tag não suporta gravação NDEF."
+    }
+
+    private fun attachNfcReaderModeIfNeeded() {
+        if (!nfcReaderEnabled || !isActivityResumed) return
+        val adapter = nfcAdapter ?: NfcAdapter.getDefaultAdapter(this).also { nfcAdapter = it } ?: return
+        if (!adapter.isEnabled) return
+        safely("enableNfcReaderMode") {
+            val flags = NfcAdapter.FLAG_READER_NFC_A or
+                NfcAdapter.FLAG_READER_NFC_B or
+                NfcAdapter.FLAG_READER_NFC_F or
+                NfcAdapter.FLAG_READER_NFC_V or
+                NfcAdapter.FLAG_READER_NFC_BARCODE or
+                NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS
+            adapter.enableReaderMode(this, { tag: Tag? ->
+                val safeTag = tag ?: return@enableReaderMode
+                val rawId = safeTag.id ?: return@enableReaderMode
+                if (rawId.isEmpty()) return@enableReaderMode
+                val uidHex = rawId.joinToString("") { b -> "%02X".format(b) }
+                if (nfcWriteUnlockOnTap) {
+                    val (written, err) = writeUnlockUriToTag(safeTag)
+                    runOnUiThread {
+                        nfcChannel?.invokeMethod(
+                            "onNfcWriteResult",
+                            mapOf(
+                                "uid" to uidHex,
+                                "written" to written,
+                                "error" to err,
+                            ),
+                        )
+                    }
+                }
+                runOnUiThread {
+                    nfcChannel?.invokeMethod("onNfcTagDetected", uidHex)
+                }
+            }, flags, null)
+        }
+    }
+
+    private fun detachNfcReaderMode() {
+        safely("disableNfcReaderMode") {
+            nfcAdapter?.disableReaderMode(this)
+        }
+    }
     private var pendingCalendarOperation: (() -> Unit)? = null
     private var pendingCalendarResult: MethodChannel.Result? = null
 
@@ -321,6 +587,58 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             activity = this,
             messenger = flutterEngine.dartExecutor.binaryMessenger,
         )
+
+        nfcChannel?.setMethodCallHandler(null)
+        nfcChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            NFC_CHANNEL,
+        ).apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getNfcStatus" -> {
+                        val adapter = nfcAdapter ?: NfcAdapter.getDefaultAdapter(this@MainActivity).also { nfcAdapter = it }
+                        result.success(
+                            mapOf(
+                                "available" to (adapter != null),
+                                "enabled" to (adapter?.isEnabled == true),
+                            )
+                        )
+                    }
+                    "openNfcSettings" -> {
+                        val nfcIntent = Intent(Settings.ACTION_NFC_SETTINGS).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            startActivity(nfcIntent)
+                        } catch (_: Exception) {
+                            safely("openWirelessSettings") {
+                                startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                            }
+                        }
+                        result.success(true)
+                    }
+                    "startNfcReader" -> {
+                        val adapter = nfcAdapter ?: NfcAdapter.getDefaultAdapter(this@MainActivity).also { nfcAdapter = it }
+                        nfcWriteUnlockOnTap = call.argument<Boolean>("writeUnlockNdef") ?: false
+                        nfcReaderEnabled = true
+                        attachNfcReaderModeIfNeeded()
+                        result.success(adapter != null && adapter.isEnabled)
+                    }
+                    "stopNfcReader" -> {
+                        nfcWriteUnlockOnTap = false
+                        nfcReaderEnabled = false
+                        detachNfcReaderMode()
+                        result.success(true)
+                    }
+                    "consumePendingNfcUnlock" -> {
+                        val uid = pendingNfcUnlockUid
+                        pendingNfcUnlockUid = null
+                        result.success(uid)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
 
         actionsChannel?.setMethodCallHandler(null)
         actionsChannel = MethodChannel(
@@ -371,18 +689,29 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         ) {
             startSentinelService()
         }
+        if (sentinelPrefs.getBoolean(FloatingOrbService.PREF_ORB_ENABLED, false) &&
+            !FloatingOrbService.isRunning &&
+            FloatingOrbService.canDraw(this)
+        ) {
+            FloatingOrbService.start(this)
+        }
         // Entrega com pequeno atraso para o Dart já ter registrado o handler (cold start).
-        window?.decorView?.postDelayed({ deliverPendingWakeWord() }, 600L)
+        window?.decorView?.postDelayed({
+            deliverPendingWakeWord()
+            deliverPendingFloatingOrbTap()
+        }, 600L)
         try {
             accelerometer?.let {
                 sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
             }
         } catch (_: Exception) {
         }
+        attachNfcReaderModeIfNeeded()
     }
 
     override fun onPause() {
         isActivityResumed = false
+        detachNfcReaderMode()
         try {
             sensorManager?.unregisterListener(this)
         } catch (_: Exception) {
@@ -453,7 +782,15 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             }
             "mediaControl" -> {
                 val action = call.argument<String>("action") ?: "play_pause"
-                result.success(DeviceHardwareHelper.dispatchMediaControl(this, action))
+                val preferredApp = call.argument<String>("preferredApp") ?: ""
+                Thread {
+                    val res = DeviceHardwareHelper.dispatchMediaControlVerified(
+                        this,
+                        action,
+                        preferredApp,
+                    )
+                    runOnUiThread { result.success(res.toMap()) }
+                }.start()
             }
             "vibrate" -> {
                 val durationMs = (call.argument<Int>("durationMs") ?: 180).coerceIn(20, 3000)
@@ -520,8 +857,13 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     lastSpeechEndTimestampMs = System.currentTimeMillis()
                 }
                 isUltronSpeakingGlobal = speaking
-                if (!speaking) {
+                if (speaking) {
+                    FloatingOrbService.updateState(OrbState.SPEAKING)
+                } else {
                     UltronTtsHelper.stopAll()
+                    if (FloatingOrbService.currentState == OrbState.SPEAKING) {
+                        FloatingOrbService.updateState(OrbState.IDLE)
+                    }
                 }
                 result.success(true)
             }
@@ -666,6 +1008,8 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 }
             }
             "syncBackgroundVoiceConfig" -> {
+                val wakeProfileArg = call.argument<String>("wakeWordProfile")
+                    ?: UltronAudioService.loadStoredWakeProfile(this).id
                 val cfg = BackgroundVoiceConfig(
                     sttUrl = call.argument<String>("sttUrl") ?: "",
                     sttKey = call.argument<String>("sttKey") ?: "",
@@ -680,13 +1024,57 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     fishLanguage = call.argument<String>("fishLanguage") ?: "pt",
                     fishModel = call.argument<String>("fishModel") ?: "s2.1-pro",
                     whisperMode = call.argument<Boolean>("whisperMode") ?: false,
+                    wakeWordProfile = wakeProfileArg,
                 )
                 BackgroundVoiceConfigStore.save(this, cfg)
+                UltronAudioService.setWakeWordProfile(this, wakeProfileArg)
                 val historyRaw = call.argument<List<Map<String, Any?>>>("recentHistory")
                 if (historyRaw != null) {
                     BackgroundChatStore.seedForegroundContext(this, historyRaw)
                 }
                 result.success(true)
+            }
+            "getWakeWordProfile" -> {
+                val profile = UltronAudioService.loadStoredWakeProfile(this)
+                result.success(profile.id)
+            }
+            "setWakeWordProfile" -> {
+                val profileId = call.argument<String>("profile") ?: "ultron"
+                val profile = UltronAudioService.setWakeWordProfile(this, profileId)
+                result.success(
+                    mapOf(
+                        "id" to profile.id,
+                        "label" to profile.displayName,
+                        "hotSwapped" to UltronAudioService.isRunning,
+                    ),
+                )
+            }
+            "isFloatingOrbRunning" -> {
+                result.success(FloatingOrbService.isRunning)
+            }
+            "setFloatingOrb" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                if (!enabled) {
+                    FloatingOrbService.stop(this)
+                    result.success(false)
+                } else {
+                    val started = FloatingOrbService.start(this)
+                    result.success(started)
+                }
+            }
+            "updateFloatingOrbState" -> {
+                val stateId = call.argument<String>("state") ?: "ocioso"
+                FloatingOrbService.updateStateById(stateId)
+                result.success(true)
+            }
+            "setFloatingOrbAuthState" -> {
+                val locked = call.argument<Boolean>("locked") ?: true
+                val accessLevel = call.argument<String>("accessLevel") ?: "locked"
+                FloatingOrbService.updateAuthState(locked, accessLevel)
+                result.success(true)
+            }
+            "consumePendingFloatingOrbTap" -> {
+                result.success(consumePendingOrbTap())
             }
             "consumePendingBackgroundTurns" -> {
                 result.success(BackgroundChatStore.consumePendingTurns(this))
@@ -718,6 +1106,23 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     return
                 }
                 startVisionCapture(source, result)
+            }
+            "scanPairingQr" -> {
+                if (pendingQrResult != null) {
+                    result.error("QR_BUSY", "Já existe uma leitura de QR Code em andamento.", null)
+                    return
+                }
+                startPairingQrScanner(result)
+            }
+            "consumePendingPairingUri" -> {
+                val uri = pendingPairingUri
+                pendingPairingUri = null
+                result.success(uri)
+            }
+            "consumePendingSpotifyCallbackUri" -> {
+                val uri = pendingSpotifyCallbackUri
+                pendingSpotifyCallbackUri = null
+                result.success(uri)
             }
             "getCalendarEvents" -> {
                 val nowMs = System.currentTimeMillis()
@@ -751,7 +1156,151 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     )
                 }
             }
+            "deleteCalendarEvent" -> {
+                val eventId = (call.argument<String>("eventId") ?: "").trim()
+                val title = (call.argument<String>("title") ?: "").trim()
+                if (eventId.isEmpty() && title.isEmpty()) {
+                    result.error("INVALID_ARGUMENT", "Informe o ID ou título do evento para cancelar.", null)
+                    return
+                }
+                ensureCalendarPermissions(writeRequired = true, result = result) {
+                    deleteCalendarEventByIdOrTitle(eventId = eventId, title = title, result = result)
+                }
+            }
+            "scheduleReminderAlarm" -> {
+                val id = call.argument<Number>("id")?.toInt() ?: 1
+                val title = (call.argument<String>("title") ?: "Lembrete U.L.T.R.O.N.").trim()
+                val triggerAtMs = call.argument<Number>("triggerAtMs")?.toLong()
+                    ?: (System.currentTimeMillis() + 60_000L)
+                result.success(scheduleLocalReminderAlarm(id, title, triggerAtMs))
+            }
+            "cancelReminderAlarm" -> {
+                val id = call.argument<Number>("id")?.toInt() ?: 1
+                result.success(cancelLocalReminderAlarm(id))
+            }
+            "scheduleWorkflowAlarm" -> {
+                val id = call.argument<Number>("id")?.toInt() ?: 1
+                val name = (call.argument<String>("name") ?: "Fluxo #$id").trim()
+                val triggerAtMs = call.argument<Number>("triggerAtMs")?.toLong()
+                    ?: (System.currentTimeMillis() + 60_000L)
+                val intervalMinutes = call.argument<Number>("intervalMinutes")?.toInt() ?: 0
+                result.success(scheduleLocalWorkflowAlarm(id, name, triggerAtMs, intervalMinutes))
+            }
+            "cancelWorkflowAlarm" -> {
+                val id = call.argument<Number>("id")?.toInt() ?: 1
+                result.success(cancelLocalWorkflowAlarm(id))
+            }
+            "consumePendingWorkflowIds" -> {
+                result.success(consumePendingWorkflowIds())
+            }
+            "getDefaultDownloadsPath" -> {
+                val dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                result.success(dl?.absolutePath)
+            }
+            "pickDirectorySaf" -> {
+                if (pendingSafDirResult != null) {
+                    result.error("SAF_BUSY", "Seleção de pasta SAF já em andamento.", null)
+                    return
+                }
+                try {
+                    pendingSafDirResult = result
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        addFlags(
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+                        )
+                    }
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(intent, SAF_PICK_DIR_REQUEST_CODE)
+                } catch (e: Exception) {
+                    pendingSafDirResult = null
+                    val dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    result.success(dl?.absolutePath)
+                }
+            }
+            "pickMultipleFilesSaf" -> {
+                if (pendingSafFilesResult != null) {
+                    result.error("SAF_BUSY", "Seleção múltipla de arquivos SAF já em andamento.", null)
+                    return
+                }
+                try {
+                    pendingSafFilesResult = result
+                    val rawMimes = call.argument<List<String>>("mimeTypes")
+                    val mimeArray = if (rawMimes != null && rawMimes.isNotEmpty()) {
+                        rawMimes.toTypedArray()
+                    } else {
+                        arrayOf(
+                            "application/pdf",
+                            "text/plain",
+                            "text/markdown",
+                            "text/csv",
+                            "image/*",
+                        )
+                    }
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_MIME_TYPES, mimeArray)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(intent, SAF_PICK_FILES_REQUEST_CODE)
+                } catch (e: Exception) {
+                    pendingSafFilesResult = null
+                    result.success(emptyList<String>())
+                }
+            }
+            "convertImageFileNative" -> {
+                val sourcePath = (call.argument<String>("sourcePath") ?: "").trim()
+                val destPath = (call.argument<String>("destPath") ?: "").trim()
+                val format = (call.argument<String>("format") ?: "jpg").trim().lowercase()
+                if (sourcePath.isEmpty() || destPath.isEmpty()) {
+                    result.success(false)
+                    return
+                }
+                result.success(convertImageFileOnDisk(sourcePath, destPath, format))
+            }
             else -> result.notImplemented()
+        }
+    }
+
+    private fun resolveSafTreeUriToPath(treeUri: Uri?): String? {
+        if (treeUri == null) return null
+        return try {
+            val seg = treeUri.lastPathSegment ?: return null
+            if (seg.startsWith("primary:")) {
+                val rel = seg.removePrefix("primary:")
+                File(Environment.getExternalStorageDirectory(), rel).absolutePath
+            } else if (seg.contains(":")) {
+                val rel = seg.substringAfter(":")
+                File(Environment.getExternalStorageDirectory(), rel).absolutePath
+            } else {
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)?.absolutePath
+            }
+        } catch (_: Exception) {
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)?.absolutePath
+        }
+    }
+
+    private fun convertImageFileOnDisk(sourcePath: String, destPath: String, format: String): Boolean {
+        return try {
+            val bmp = BitmapFactory.decodeFile(sourcePath) ?: return false
+            val outFile = File(destPath)
+            outFile.parentFile?.mkdirs()
+            val compressFmt = if (format == "png") {
+                Bitmap.CompressFormat.PNG
+            } else {
+                Bitmap.CompressFormat.JPEG
+            }
+            outFile.outputStream().use { out ->
+                bmp.compress(compressFmt, 92, out)
+            }
+            bmp.recycle()
+            outFile.exists() && outFile.length() > 0L
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -890,6 +1439,37 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         return "App de SMS aberto para $label com a mensagem: \"$cleanText\"."
     }
 
+    private fun startPairingQrScanner(result: MethodChannel.Result) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            pendingQrResult = result
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.CAMERA),
+                PAIRING_QR_CAMERA_PERM_REQUEST_CODE,
+            )
+            return
+        }
+        launchPairingQrScanner(result)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun launchPairingQrScanner(result: MethodChannel.Result) {
+        try {
+            pendingQrResult = result
+            val intent = IntentIntegrator(this).apply {
+                setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+                setPrompt("Aponte para o QR Code no U.L.T.R.O.N. Desktop")
+                setBeepEnabled(false)
+                setBarcodeImageEnabled(false)
+                setOrientationLocked(true)
+            }.createScanIntent()
+            startActivityForResult(intent, PAIRING_QR_REQUEST_CODE)
+        } catch (e: Exception) {
+            pendingQrResult = null
+            result.error("QR_SCANNER_UNAVAILABLE", e.message ?: "Leitor de QR Code indisponível.", null)
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun startVisionCapture(source: String, result: MethodChannel.Result) {
         if (source == "gallery") {
@@ -944,9 +1524,12 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
 
     private fun decodeAndCompressVisionImage(uri: Uri, source: String): Map<String, Any>? {
         val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        contentResolver.openInputStream(uri)?.use { input ->
+        // inJustDecodeBounds = true always returns null from decodeStream; return Boolean to check stream open.
+        val boundsRead = contentResolver.openInputStream(uri)?.use { input ->
             BitmapFactory.decodeStream(input, null, boundsOpts)
-        } ?: return null
+            true
+        } ?: false
+        if (!boundsRead) return null
 
         val rawW = boundsOpts.outWidth
         val rawH = boundsOpts.outHeight
@@ -1224,6 +1807,180 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             )
         } catch (e: Exception) {
             result.error("CALENDAR_WRITE_ERROR", e.message ?: "Falha ao criar evento na Agenda.", null)
+        }
+    }
+
+    private fun deleteCalendarEventByIdOrTitle(
+        eventId: String,
+        title: String,
+        result: MethodChannel.Result,
+    ) {
+        try {
+            val numericId = eventId.toLongOrNull()
+            if (numericId != null && numericId > 0) {
+                val uri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, numericId)
+                val deletedRows = contentResolver.delete(uri, null, null)
+                result.success(
+                    mapOf(
+                        "deleted" to (deletedRows > 0),
+                        "deletedCount" to deletedRows,
+                        "eventId" to numericId.toString(),
+                        "title" to title,
+                    ),
+                )
+                return
+            }
+
+            val queryTitle = title.ifEmpty { eventId }.trim()
+            var targetId: Long? = null
+            var matchedTitle = queryTitle
+            contentResolver.query(
+                CalendarContract.Events.CONTENT_URI,
+                arrayOf(
+                    CalendarContract.Events._ID,
+                    CalendarContract.Events.TITLE,
+                    CalendarContract.Events.DTSTART,
+                ),
+                "${CalendarContract.Events.DELETED} = 0 AND ${CalendarContract.Events.TITLE} LIKE ?",
+                arrayOf("%$queryTitle%"),
+                "${CalendarContract.Events.DTSTART} ASC",
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    targetId = cursor.getLong(0)
+                    matchedTitle = cursor.getString(1) ?: queryTitle
+                }
+            }
+
+            if (targetId == null) {
+                result.success(
+                    mapOf(
+                        "deleted" to false,
+                        "deletedCount" to 0,
+                        "eventId" to "",
+                        "title" to queryTitle,
+                    ),
+                )
+                return
+            }
+
+            val deleteUri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, targetId!!)
+            val deletedRows = contentResolver.delete(deleteUri, null, null)
+            result.success(
+                mapOf(
+                    "deleted" to (deletedRows > 0),
+                    "deletedCount" to deletedRows,
+                    "eventId" to targetId.toString(),
+                    "title" to matchedTitle,
+                ),
+            )
+        } catch (e: Exception) {
+            result.error("CALENDAR_DELETE_ERROR", e.message ?: "Falha ao remover evento da Agenda.", null)
+        }
+    }
+
+    private fun copySafUrisToBatchCache(uris: List<Uri>): List<String> {
+        if (uris.isEmpty()) return emptyList()
+        val batchDir = File(cacheDir, "saf_batch_${System.currentTimeMillis()}").apply {
+            mkdirs()
+        }
+        val out = mutableListOf<String>()
+        for ((idx, uri) in uris.withIndex()) {
+            try {
+                var displayName = "doc_${idx + 1}"
+                contentResolver.query(
+                    uri,
+                    arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val raw = cursor.getString(0)?.trim()
+                        if (!raw.isNullOrEmpty()) {
+                            displayName = raw.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                        }
+                    }
+                }
+                val target = File(batchDir, displayName)
+                contentResolver.openInputStream(uri)?.use { input ->
+                    target.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                if (target.exists()) {
+                    out.add(target.absolutePath)
+                }
+            } catch (_: Exception) {
+                // Ignora item inacessível e continua o lote.
+            }
+        }
+        return out
+    }
+
+    private fun scheduleLocalReminderAlarm(
+        reminderId: Int,
+        title: String,
+        triggerAtMs: Long,
+    ): Boolean = ReminderAlarmReceiver.scheduleAlarm(this, reminderId, title, triggerAtMs)
+
+    private fun cancelLocalReminderAlarm(reminderId: Int): Boolean =
+        ReminderAlarmReceiver.cancelAlarm(this, reminderId)
+
+    private fun scheduleLocalWorkflowAlarm(
+        flowId: Int,
+        name: String,
+        triggerAtMs: Long,
+        intervalMinutes: Int,
+    ): Boolean {
+        return try {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return false
+            val intent = Intent(this, WorkflowAlarmReceiver::class.java).apply {
+                action = WorkflowAlarmReceiver.ACTION_TRIGGER_WORKFLOW
+                putExtra(WorkflowAlarmReceiver.EXTRA_WORKFLOW_ID, flowId)
+                putExtra(WorkflowAlarmReceiver.EXTRA_WORKFLOW_NAME, name)
+            }
+            val pending = PendingIntent.getBroadcast(
+                this,
+                60_000 + flowId,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val safeTrigger = max(triggerAtMs, System.currentTimeMillis() + 1_000L)
+            if (intervalMinutes > 0) {
+                alarmManager.setRepeating(
+                    AlarmManager.RTC_WAKEUP,
+                    safeTrigger,
+                    intervalMinutes * 60_000L,
+                    pending,
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, safeTrigger, pending)
+            } else {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, safeTrigger, pending)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun cancelLocalWorkflowAlarm(flowId: Int): Boolean {
+        return try {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return false
+            val intent = Intent(this, WorkflowAlarmReceiver::class.java).apply {
+                action = WorkflowAlarmReceiver.ACTION_TRIGGER_WORKFLOW
+            }
+            val pending = PendingIntent.getBroadcast(
+                this,
+                60_000 + flowId,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            alarmManager.cancel(pending)
+            pending.cancel()
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 }

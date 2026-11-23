@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../services/speech_text.dart';
 import '../../services/voice_service.dart';
 
 Future<void> showVoiceSelectorSheet(
@@ -127,6 +128,23 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
     unawaited(widget.voiceService.preview().catchError((_) {}));
   }
 
+  Future<void> _selectWakeWord(WakeWordProfile wakeProfile) async {
+    HapticFeedback.selectionClick();
+    await widget.voiceService.setWakeWordProfile(wakeProfile);
+    widget.onChanged?.call();
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '🎙️ Wake-word alterada para "${wakeProfile.label}" (sherpa-onnx KWS atualizado sem reiniciar).',
+          style: const TextStyle(fontSize: 11),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   Future<void> _selectVoice(TtsVoiceOption option) async {
     HapticFeedback.selectionClick();
     if (widget.voiceService.isFishAudioActive) {
@@ -210,6 +228,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
   Widget build(BuildContext context) {
     final activeVoice = widget.voiceService.activeVoiceLabel;
     final currentProfile = widget.voiceService.profile;
+    final currentWakeWord = widget.voiceService.wakeWordProfile;
     final fishActive = widget.voiceService.isFishAudioActive;
 
     return Padding(
@@ -264,8 +283,57 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                       : 'Timbre: ${currentProfile.label} (Tom ${currentProfile.pitch} • Velocidade ${currentProfile.rate})',
                   style: const TextStyle(color: _rose, fontSize: 10),
                 ),
+                const SizedBox(height: 2),
+                Text(
+                  'Wake-Word ativa: "${currentWakeWord.label}"',
+                  style: const TextStyle(color: Color(0xFFA89698), fontSize: 10),
+                ),
               ],
             ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'PALAVRA DE ATIVAÇÃO (WAKE-WORD KWS MULTI-PERFIL)',
+            style: TextStyle(
+              color: _rose,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.9,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              for (final wp in WakeWordProfile.values)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: OutlinedButton(
+                      key: ValueKey('wake_word_profile_${wp.id}'),
+                      onPressed: () => _selectWakeWord(wp),
+                      style: OutlinedButton.styleFrom(
+                        backgroundColor: currentWakeWord == wp
+                            ? _crimson
+                            : const Color(0xFF2E0305),
+                        foregroundColor:
+                            currentWakeWord == wp ? Colors.black : _rose,
+                        side: BorderSide(
+                          color: currentWakeWord == wp ? _crimson : _border,
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                      ),
+                      child: Text(
+                        wp.label.toUpperCase(),
+                        style: const TextStyle(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 12),
           const Text(

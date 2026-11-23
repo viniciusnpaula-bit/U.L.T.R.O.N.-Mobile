@@ -1,99 +1,92 @@
-# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.4.2`)
+# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.5.0`)
 
-Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado com **Núcleo Holográfico Shader (`CoreOrb`)**, estética tática **AMOLED Carmesim**, banco local criptografado **SQLCipher**, segurança **Fail-Closed**, **Action Gate tático**, **25 Slash Commands determinísticos**, **RAG Lexical FTS5 (Obsidian)**, **Visão Multimodal (VLM)**, **Agenda Android (`CalendarContract`) + Briefing Matinal Unificado**, **Log Imutável de Auditoria (SHA-256) + Bridge HTTP IoT em `Skills/*.md`**, **Sentinela de Voz não-Google (`AudioRecord` + Eco-VAD + `sherpa-onnx` KWS)** e **Bridge Bidirecional Desktop LAN**.
+Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado com **Núcleo Holográfico Shader (`CoreOrb`)**, estética tática **AMOLED Carmesim**, **Telemetria Tática ao vivo no Cockpit**, **Camada Cognitiva & Guardrails Anti-Alucinação**, **Modos Táticos Isolados (`/modo`)**, **Segundo Cérebro Obsidian (`Inventario/`, `Pessoas/`, RAG FTS5/BM25)**, **Projetista Elétrico Industrial (`/eletrica` NBR 5410 + Ponte CADe_SIMU)**, **ETL em Lote (`/etl`)**, **Recibos Epistemológicos (SHA-256) + Checkpoints de Fluxo**, **Segurança Fail-Closed (SQLCipher + Auth Composta Biometria/NFC NDEF)**, **Sentinela de Voz não-Google (`AudioRecord` + Eco-VAD + `sherpa-onnx` KWS)** e **Bridge Bidirecional Desktop LAN / Tailscale (incl. Mini-Apps Sandboxed)**.
 
-> **Alvo de Referência**: Dispositivos Android `arm64-v8a` (ex.: Samsung Galaxy A34 5G — Dimensity 1080, Mali-G68, 6–8 GB RAM), sem pesos de LLM locais para preservar bateria, memória e temperatura.
-
----
-
-## ⚡ O que o U.L.T.R.O.N. Mobile faz atualmente
-
-### 1. 📱 Controle Nativo do Celular, Hardware e Mídia (`MethodChannel`)
-Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/device`), pelos **Quick Settings Tiles** ou pedindo em linguagem natural para a IA:
-- **Lanterna / Flash LED**: Liga, desliga ou alterna o flash traseiro (`/lanterna`, `"ligar lanterna"`, `"apagar luz"`).
-- **Volume, Áudio e Controle Universal de Mídia**: Ajusta volume de mídia de `0%` a `100%` e envia comandos universais de `play`, `pause`, `play_pause`, `next`, `previous` e `stop` via `AudioManager` (`KEYCODE_MEDIA_*`) para Spotify, YouTube Music e outros players.
-- **Lançador Universal de Apps & Painéis Android**: Abre apps conhecidos ou qualquer app instalado buscando no `PackageManager`, além de painéis nativos (**Wi-Fi**, **Bluetooth**, **Tela**, **Som**, **Bateria**, **Localização**, **Segurança**, **Apps**).
-- **Alarmes, Timers, Discador, Vibração e Web**: Cria despertadores e timers no Relógio nativo, abre o discador, aciona motor háptico e abre buscas na web.
-- **Telemetria Real de Hardware**: Lê nível e temperatura da bateria (`°C`), carregamento, RAM usada/total/livre (`MB`), modelo, versão Android e status de rede.
-
-### 1B. 📨 Sentinela de Mensagens & Comunicação Autônoma (`NotificationListenerService` + `RemoteInput`)
-- **Captura em Tempo Real (WhatsApp, Telegram, Instagram, SMS, Gmail, Discord)**: Lê em voz alta (`/mensagens`, `"ler mensagens"`) e gera **Resumo Tático por IA** filtrando ruídos.
-- **Resposta Silenciosa em 2º Plano (`RemoteInput`) e Envio Ativo (`ContactsContract`)**: Responde notificações sem abrir o app (`"responder: ..."`, `/reply`) e resolve contatos da agenda para WhatsApp/SMS — **protegidos pelo `ActionGate` Fail-Closed com confirmação explícita antes do disparo**.
-
-### 1C. 🎙️ Motor de Voz Neural Não-Google, Wake Word (`sherpa-onnx`), Push-to-Talk e Fish Studio TTS
-- **Captura PCM Nativa (`AudioRecord` + AEC/NS/AGC) & Eco-VAD 24h (`UltronAudioService`)**: Escuta em primeiro plano e serviço de 2º plano com `AudioCaptureSource` (Zero popup do Google), segmentação VAD (`AudioVadBuffer`) e `GroqWhisperSttService` + fallback nativo.
-- **Hotword Offline (`sherpa-onnx` Zipformer KWS + `UltronWakeWordRecognizer`)**: Reconhece `"Ei Ultron"` / `"Ultron"` com suporte a ativação sobre a tela de bloqueio e opt-in de reinício pós-boot (`BootReceiver`).
-- **Push-to-Talk + Barge-in Seletivo + Fish Studio TTS + TTS Nativo**: Segure 🎤 na barra de comandos para Push-to-Talk, escolha entre **3 perfis de timbre (`GRAVE`, `NATURAL`, `ÁGIL`)**, síntese neural **Fish Studio** ou fallback nativo `pt-BR`, e modo sussurro noturno.
-- **Dicionário Fonético & Atalhos (`/memory`)**: Correções PT-BR personalizadas (`VoiceCorrectionsService`) e atalhos de voz com confirmação (`VoiceShortcutsService`).
-
-### 2. 🧠 Central de IA 100% Gratuita (9 Provedores) + Visão Multimodal VLM (P2)
-- **Zero-Key Out-of-the-Box + 9 Provedores Gratuitos**: **Pollinations AI** (sem chave), Groq Cloud (`openai/gpt-oss-120b`, `meta-llama/llama-4-scout-17b-16e-instruct`), Google Gemini (`gemini-2.5-flash`), OpenRouter (`:free` + `qwen/qwen2.5-vl-72b-instruct:free`), Cerebras, GitHub Models, Mistral, SambaNova e HuggingFace.
-- **Auto-Discovery (`/models`) e Failover Inteligente (`AiFailover`)**: Prioriza automaticamente modelos multimodais quando uma imagem é anexada (`requiresVision`).
-- **Visão Multimodal Nativa (`P2` — Câmera & Galeria -> VLM)**:
-  - Botão 📷 ao lado da barra de comandos e comando `/visao` (`/visao`, `/visao galeria`, `/ocr`).
-  - Captura via `FileProvider` + `ACTION_IMAGE_CAPTURE` ou galeria (`ACTION_GET_CONTENT`), corrige rotação EXIF, redimensiona para `<= 1024px`, comprime JPEG Base64 em memória e envia direto para o VLM com pré-visualização inline.
-
-### 3. 📓 Segundo Cérebro Obsidian, RAG Lexical FTS5 (P1) e Skills Locais (`.md`)
-- **Quick Captures no Diário (`Diario/AAAA-MM-DD.md`), Inbox e Memória (`/note`, `/vault`, `[ACTION:REMEMBER]`)**.
-- **Busca & RAG Lexical Local (`P1` — `VaultSearchService` via SQLite FTS5/FTS4/BM25)**:
-  - Indexa incrementalmente todo o cofre Markdown (`ULTRON-Vault`) em SQLite (< 5 MB de RAM) e injeta trechos relevantes no contexto da IA automaticamente durante a conversa.
-  - Consulta direta com `/buscar <termo>` (`/search`, `/rag`) ou `"buscar nas notas: <termo>"`.
-- **Skills Procedurais Mobile (`Skills/*.md`)**: Rotinas executáveis com `[ACTION:...]` (`modo_estudo.md`, `foco_noturno.md`, `alerta_tatico.md`) via `/skills` e `/skill <nome>`.
-
-### 4. 🧭 Sensores de Contexto e Núcleo Holográfico Shader 60 FPS
-- **Núcleo Holográfico GLSL (`shaders/crimson_core.frag` + `CoreOrb`)**: Anéis energéticos reativos à voz (`speechRms`), estados **Centro**, **Palco** e **Tela Cheia** (GPU desligada).
-- **Flip-to-Shush, Modo Foco Noturno (22h–06h) e Vigilância de Bateria (`< 15%`)**.
-
-### 5. 🛡️ Segurança *Fail-Closed*, SQLCipher, Duress PIN, Action Gate & Bridge Desktop LAN (P3)
-- **Biometria (`local_auth`) + PIN (`PBKDF2-HMAC-SHA256`, 120.000 iterações) + PIN de Coação (*Duress PIN*)**.
-- **Banco Criptografado SQLCipher v2 (`DatabaseKeyVault` + `ConversationHistory`)**: Chave de 256 bits no Keystore e migração automática; `/clear` expurga tanto RAM quanto SQLCipher.
-- **Action Gate Tático**: Classifica ações (`safe`, `sensitive`, `critical`) e exige confirmação explícita do Operador para ações sensíveis (`WHATSAPP`, `SMS`, `REPLY_MESSAGE`, `DIAL`, `PC_OPEN_APP`, `PC_MEDIA`, `PC_CLIPBOARD_*`, `PC_RUN_SKILL`) e críticas (`KILL_SWITCH`, `CLEAR_HISTORY`).
-- **Bridge Bidirecional Desktop LAN & Kill Switch (`P3` — `/desktop`, `/pc`, `/killswitch`)**:
-  - Pareamento LAN assinado com **HMAC-SHA256 + Timestamp + Nonce + verificação de assinatura na resposta (`X-Ultron-Signature`)**.
-  - Kill Switch Fail-Closed que exige chave HMAC explícita configurável em `/security` (**FIXAR IP** / **CHAVE** / **GERAR**).
-  - Subcomandos diretos via `/pc`: `/pc status`, `/pc abrir <app>`, `/pc midia <acao>`, `/pc copiar <texto>`, `/pc colar` e `/pc skill <nome>`.
-
-### 6. 📅 Agenda Android (`CalendarContract`) & Briefing Matinal Unificado (P4)
-- **Leitura e Escrita Nativa de Agenda (`/agenda`, `/calendar`, `"minha agenda"`, `"agendar ..."`)**:
-  - Consulta eventos e recorrências reais no Android via `CalendarContract.Instances` (`/agenda hoje`, `/agenda semana`, `/agenda amanha`).
-  - Agenda compromissos direto no calendário primário (ou fallback `ACTION_INSERT`) via `/agenda criar <detalhes>` ou `[ACTION:CREATE_EVENT:...]`, sempre protegido por confirmação explícita do **Action Gate**.
-- **Briefing Executivo Matinal (`/briefing`, `"bom dia"`, `"briefing matinal"`)**:
-  - `BriefingService` cruza em paralelo **Clima atual (sem chave de API)**, **Compromissos do dia (`CalendarContract`)**, **Mensagens recentes da Sentinela** e **Telemetria do dispositivo**, gerando relatório tático + leitura em voz alta. Permite fixar cidade com `/briefing cidade <nome>`.
-
-### 7. 📜 Log Imutável de Auditoria (SHA-256) & Bridge HTTP em `Skills/*.md` (P5)
-- **Trilha de Auditoria Encadeada por SHA-256 (`AuditLogService` + `/audit`)**:
-  - Registro local *append-only* (`ultron_audit.db`) em que cada entrada inclui o hash da anterior, permitindo detectar qualquer adulteração via `/audit` ou na aba **SEGURANÇA**.
-  - Registra automaticamente Kill Switches, `/pc`, `/clear`, envios de WhatsApp/SMS/Reply, criação de eventos e disparos HTTP.
-- **Bridge HTTP / Webhooks IoT em `Skills/*.md` (`[HTTP:METHOD:URL|JSON]`)**:
-  - Permite acionar *Home Assistant*, *ESPHome*, *Node-RED* e webhooks locais diretamente dentro das skills Markdown (ex.: `[HTTP:POST:http://192.168.1.50:8123/api/webhook/luz|{"estado":"on"}]`), protegidos pelo **Action Gate**.
-
-### 8. 🌐 Atualizador OTA (`SHA-256`) e Histórico Criptografado (`/history`)
-- **Atualizador GitHub OTA**: Verifica releases no GitHub, valida integridade `SHA-256` do APK e inicia instalação local (`REQUEST_INSTALL_PACKAGES`).
+> **Alvo de Referência**: Dispositivos Android `arm64-v8a` (validado em **Samsung Galaxy A34 5G — `SM_A346M`**), mantendo inferência pesada na nuvem gratuita (9 provedores) ou no PC Desktop via LAN para preservar bateria, RAM e temperatura.
 
 ---
 
-## 💬 Comandos Rápidos (25 Slash Commands & Voz)
+## ⚡ Principais Recursos do U.L.T.R.O.N. Mobile
+
+### 1. 📱 Controle Nativo do Celular, Hardware & Mídia Proativa (`MethodChannel`)
+Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/device`), pelos **Quick Settings Tiles**, **Orbe Flutuante Android** ou por voz/texto:
+- **Controle Universal de Mídia Proativo e Verificado**: Integração com `MediaSessionManager` + `AudioManager.isMusicActive`. Quando você pede *"continuar a música no Spotify"* com o aplicativo fechado, o U.L.T.R.O.N. **abre o Spotify automaticamente**, tenta retomar a reprodução e **só confirma se o áudio realmente iniciar** (caso contrário, informa honestamente que abriu o app e aguarda o play).
+- **Lanterna / Flash LED, Volume, Alarmes, Timers, Discador e Vibração**: Controle nativo imediato.
+- **Lançador Universal de Apps & Painéis Android**: Busca apps no `PackageManager` e abre painéis nativos (**Wi-Fi**, **Bluetooth**, **Tela**, **Som**, **Bateria**, **Localização**, **Segurança**, **Apps**).
+- **Telemetria Real de Hardware**: Bateria, temperatura (`°C`), RAM usada/total/livre (`MB`), Wi-Fi, Dados Móveis e **Bluetooth**.
+
+### 2. 📊 Telemetria Tática no Cockpit & Central de IA Gratuita (9 Provedores)
+- **Barra de Telemetria ao Vivo (`core_screen.dart`)**: Faixa AMOLED Carmesim exibindo `MODO` ativo (clicável), `BRAIN` (com badge **`FAILOVER`** quando o fallback assume), `LAT` (ms), `TOK` (`↑/↓` reais da API ou estimados `~` + turnos), `LAN`, `BT` e `VOZ`.
+- **Zero-Key Out-of-the-Box + 9 Provedores Gratuitos**: **Pollinations AI** (sem chave), Groq Cloud, Google Gemini, OpenRouter (`:free`), Cerebras, GitHub Models, Mistral, SambaNova e HuggingFace com circuit breaker e auto-discovery (`/models`).
+- **Visão Multimodal + Memória Visual de Sessão (`/visao`, `/ocr`)**: Captura via câmera/galeria com compressão JPEG em memória e contexto visual persistente durante a sessão para perguntas encadeadas (*"qual o valor desse resistor?"*, *"isso é compatível com 220V?"*) sem reabrir a câmera.
+
+### 3. 🧠 Camada Cognitiva Determinística & Guardrails (`CognicaoService`)
+- **Pré-processador Local (Zero Custo de Tokens)**: Detecta urgência/comandos diretos (reduz janela de histórico para economizar tokens) e temas sensíveis (zera sarcasmo/humor e ajusta tom do TTS).
+- **Isolamento OCR/Visão Anti-Prompt-Injection**: Encapsula textos extraídos de imagens em `<UNTRUSTED_VISUAL_DATA>` e neutraliza tags `[ACTION:...]` ou instruções embutidas em fotos.
+- **Pós-processador Anti-Alucinação**: Cruza a fala do LLM com as ferramentas efetivamente confirmadas no turno e bloqueia o TTS de anunciar ações que falharam ou não foram executadas.
+
+### 4. 🎯 Modos Táticos Isolados ("Helpers" — `/modo`)
+- 5 perfis pré-configurados: **`geral`**, **`engenharia`**, **`estudos`**, **`treino`** e **`dev`**.
+- Cada modo especialista:
+  - Consulta apenas sua subpasta do cofre Obsidian no RAG FTS5 (ex.: `Memoria/Engenharia/` vs `Memoria/Treino/`).
+  - Isola o histórico em `ConversationHistory` (`conversationId` próprio).
+  - Monta um system prompt enxuto com apenas as categorias de ferramentas relevantes (preservando núcleo mínimo global como notas, lembretes, timer e volume).
+
+### 5. 📓 Segundo Cérebro Obsidian, Arquivo de Vida (`Inventario/` & `Pessoas/`) e RAG FTS5
+- **Estrutura Padronizada**: `Diario/`, `Memoria/`, `Inbox/`, **`Inventario/`**, **`Pessoas/`** e `Skills/*.md`, com CRUD completo e pilha **Undo** (`/desfazer`).
+- **Arquivo de Vida & Garantias (`Skills/garantias.md`)**: Fluxo integrando `/visao`/`/ocr` → extração estruturada (`Produto`, `Data de Compra`, `Prazo de Garantia`, `Procedimento de Reset`) → nota YAML/Markdown em `Inventario/` → lembrete automático 15 dias antes do vencimento.
+- **Persistência de Lembretes Pós-Reboot**: `ReminderService` + `ReminderAlarmReceiver` + `BootReceiver` restauram automaticamente todos os alarmes `PENDING` futuros após reinicialização (`BOOT_COMPLETED`) ou atualização do APK (`MY_PACKAGE_REPLACED`).
+- **Fichas em `Pessoas/` + Filtro de Privacidade**: `ObsidianService.sanitizeForExternalAi()` remove linhas privadas e redige telefones, e-mails, endereços e CPFs antes de enviar qualquer contexto do cofre a APIs externas.
+
+### 6. ⚡ Projetista Elétrico Industrial Offline & Ponte CADe_SIMU (`/eletrica`)
+- **Motor Offline (`EletricaEngine`)**: Tabelas de ampacidade **NBR 5410 (Método B1)**, dimensionamento de cabos, disjuntores, contatores e relés térmicos com memória de cálculo.
+- **Parametrização de Inversores**: Referência rápida para **WEG CFW500** (`P0100..P0404`) e **Altus AD600M**.
+- **Topologias & Auditoria Estrutural**: Gera *Partida Direta*, *Reversão*, *Estrela-Triângulo* e *Sequência de Motores* auditando curto na fonte (`SHORT_CIRCUIT`), bobina aberta (`OPEN_COIL`), falta de proteção (`MISSING_PROTECTION`) e falta de intertravamento (`MISSING_INTERLOCK`).
+- **Exportação Netlist + Diagrama SVG IEC**: Salva em `Memoria/Engenharia/` no Obsidian e envia opcionalmente a Netlist ao clipboard do Desktop via Ponte LAN (`PC_CLIPBOARD_PUSH`) para apoio ao CADe_SIMU *(nota transparente: não gera `.cad` binário proprietário nem executa simulação SPICE no celular)*.
+
+### 7. 🗂️ Utilitários de Arquivos (SAF) & ETL em Lote (`/arquivos`, `/etl`)
+- **Limpeza de Duplicados SHA-256** (`/limpar_duplicados`), **Conversão de Imagens** `.webp`/`.heic` → `.jpg`/`.png` (`/converter_imagens`) e **Padronização de PDFs** `AAAA-MM-DD - Assunto.pdf` (`/organizar_pdf_downloads`).
+- **ETL em Lote (`/etl [saf|pasta]`)**: Seleção múltipla via SAF (`ACTION_OPEN_DOCUMENT` + `EXTRA_ALLOW_MULTIPLE`), consolidação offline de `.txt`/`.md`/`.csv` e delegação híbrida de PDFs ao Desktop LAN (`PC_EXEC_TOOL:batch_pdf_etl`), salvando tabela Markdown diretamente em `Inbox/ETL_*.md`.
+
+### 8. 🎙️ Motor de Voz Não-Google, Wake Word (`sherpa-onnx`) & Diagnóstico Acústico
+- **Regra Permanente Non-Google**: Captura exclusivamente via `AudioRecord` nativo (AEC/NS/AGC), Eco-VAD 24h (`UltronAudioService`), KWS multi-perfil offline `sherpa-onnx` (`Ultron`/`Jarvis`/`Edith`/`Visão`) e STT `GroqWhisperSttService` / endpoint compatível — **zero uso de `SpeechRecognizer`/`RecognizerIntent` do Google**.
+- **Diagnóstico Acústico em Campo (`ai_settings_screen.dart`)**: Medidor de ruído ambiente em dBFS (`-60..0 dB`), pré-roll VAD (`600 ms`), latência média medida do Whisper/Groq e contagem de falsos positivos KWS PT-BR.
+- **Fish Studio TTS + TTS Nativo pt-BR**, Push-to-Talk, Barge-in seletivo e dicionário fonético (`/memory`).
+
+### 9. 🛡️ Segurança Fail-Closed, Auth Composta, Recibos & Checkpoints
+- **SQLCipher v2 (`DatabaseKeyVault`)** + **PIN (`PBKDF2-HMAC-SHA256`)** + **Duress PIN (Coação)** + **NFC** + **Biometria**.
+- **Auth Composta (`SovereignAuthPolicy.biometricPlusNfcNdef`)**: Suporte a elevação soberana exigindo **Biometria + Tag NFC com payload NDEF assinado** (rejeitando UID simples clonável).
+- **Recibos Epistemológicos em Cadeia SHA-256 (`AuditLogService` / `/audit`)**: Classifica execuções em `CONFIRMED`, `UNCERTAIN` (Intents externos Android) e `FAILED`, com verificação de integridade.
+- **Fluxos Agendados com Checkpoints (`/fluxo`, `WorkflowSchedulerService`)**: `runFlowWithCheckpoints()` pausa automaticamente quando uma etapa retorna `UNCERTAIN` e retoma da etapa seguinte sem reexecutar ações já disparadas.
+
+### 10. 💻 Bridge Bidirecional Desktop LAN / Tailscale & Mini-Apps Sandboxed (`/pc`, `/desktop`)
+- Comunicação assinada com **HMAC-SHA256 + Timestamp + Nonce + verificação da assinatura de resposta**, aceitando redes privadas LAN e **Tailscale (`100.64.0.0/10` e `.ts.net`)**.
+- **Self-Evolving Mini-Apps (`/pc miniapp <título> | <especificação>`)**: Contrato seguro `PC_EXEC_TOOL` (`create_mini_app`) classificado como `RiskLevel.critical` com confirmação obrigatória no `ActionGate`, validação de URL LAN/Tailscale + token de sessão + TTL (especificação e handler Python em [docs/DESKTOP_MINI_APP_CONTRACT.md](docs/DESKTOP_MINI_APP_CONTRACT.md)).
+- Controle Spotify Web API (OAuth 2.0 PKCE), Agenda Android (`CalendarContract`), Briefing Matinal (`/briefing`), Sentinela WhatsApp/Notificações (`RemoteInput`) e Atualizador OTA (`SHA-256`).
+
+---
+
+## 💬 Comandos Rápidos (Slash Commands & Voz)
 
 | Comando / Voz | Função |
 | :--- | :--- |
-| `/help` | Lista todos os 25 Slash Commands disponíveis |
-| `/audit` ou `/auditoria` | Verifica cadeia SHA-256 do log imutável de auditoria (**P5**) |
-| `/briefing [cidade]` ou `"bom dia"` | Briefing executivo (Agenda + Sentinela + Clima + Telemetria) (**P4**) |
-| `/agenda [hoje\|semana\|criar ...]` | Lê compromissos ou agenda novos eventos via `CalendarContract` (**P4**) |
-| `/device` ou `/celular` | Painel de hardware, sentinela de mensagens e skills |
-| `/buscar <termo>` ou `"buscar nas notas: ..."` | Busca léxica SQLite FTS5/BM25 no cofre Obsidian (**P1**) |
-| `/visao [camera\|galeria] [pergunta]` ou `/ocr` | Anexa foto/print comprimido para análise VLM (**P2**) |
-| `/desktop` | Tela de pareamento LAN e testes HMAC com o PC |
-| `/pc <status\|abrir\|midia\|copiar\|colar\|skill>` | Envia comandos assinados HMAC bidirecionais ao PC (**P3**) |
-| `/memory` ou `/memoria` | Correções fonéticas PT-BR, preferências e atalhos por voz |
-| `/lanterna` ou `"ligar lanterna"` | Liga/desliga o flash LED traseiro |
-| `/note <texto>` / `/vault [ideia]` | Salva nota no Diário ou Inbox do Obsidian |
-| `/skills` ou `/skill <nome>` | Lista ou executa skills Markdown em `Skills/*.md` |
-| `/mensagens` / `/reply <texto>` | Lê mensagens capturadas ou responde em 2º plano |
-| `/models` | Lista modelos ativos ao vivo (Auto-Discovery) |
-| `/security` / `/killswitch` / `/lock` | Segurança, Duress PIN, chave HMAC LAN e Kill Switch |
-| `/settings` / `/history` / `/clear` | Provedores de IA, histórico SQLCipher e expurgo seguro |
-| `/voice` / `/status` | Ativa captura de voz ou exibe telemetria rápida |
+| `/help` | Lista todos os Slash Commands disponíveis |
+| `/modo [geral\|engenharia\|estudos\|treino\|dev]` | Alterna Modos Táticos isolados (cofre, histórico e ferramentas filtradas) |
+| `/eletrica [direta\|reversao\|estrela\|sequencia] [X cv] [220v\|380v] [cfw500\|ad600m] [pc]` | Projetista Elétrico NBR 5410 + Auditoria + Netlist/SVG + Ponte CADe_SIMU |
+| `/etl [saf\|pasta]` ou `/arquivos [duplicados\|converter\|pdfs\|lote]` | ETL em lote para `Inbox/` + limpeza SHA-256, conversão e organização de PDFs |
+| `/visao [camera\|galeria]` ou `/ocr` | Análise visual VLM + contexto visual persistente na sessão |
+| `/buscar <termo>` ou `/rag <termo>` | Busca léxica local SQLite FTS5/BM25 no cofre Obsidian |
+| `/note <texto>` / `/vault` / `/desfazer` | CRUD no cofre Obsidian (`Diario/`, `Inbox/`, `Inventario/`, `Pessoas/`) com Undo |
+| `/skills` / `/skill <nome>` | Lista ou executa skills em `Skills/*.md` (incl. `garantias.md`) |
+| `/lembrete <data/tempo:título>` / `/lembretes` | Lembretes persistentes em SQLite com reagendamento automático pós-reboot |
+| `/fluxo [listar\|criar\|rodar\|agendar\|excluir]` | Fluxos encadeados com AuthGate e checkpoints pausáveis |
+| `/audit` ou `/auditoria` | Verifica integridade SHA-256 e resumo de recibos (`CONFIRMED`/`UNCERTAIN`/`FAILED`) |
+| `/briefing [cidade]` ou `"bom dia"` | Briefing matinal (Clima + Agenda + Sentinela + Telemetria) |
+| `/agenda [hoje\|semana\|criar ...]` | Leitura e criação de eventos via `CalendarContract` |
+| `/spotify [estado\|buscar\|tocar\|playlists]` | Controle Spotify Web API (OAuth 2.0 PKCE) |
+| `/desktop` / `/pc <status\|abrir\|midia\|copiar\|colar\|skill\|miniapp\|...>` | Ponte Desktop LAN / Tailscale assinada HMAC-SHA256 |
+| `/device` / `/lanterna` / `/mensagens` / `/reply` | Hardware nativo, controle de mídia proativo e Sentinela de notificações |
+| `/settings` / `/models` / `/memory` / `/security` / `/killswitch` / `/history` / `/clear` | Provedores IA, diagnóstico acústico, segurança, Duress PIN e SQLCipher |
 
 ---
 
@@ -102,60 +95,75 @@ Comandos executados instantaneamente (mesmo offline), pela aba **CELULAR** (`/de
 ```text
 lib/
 ├── core/security/
-│   ├── action_gate.dart              # Simulação de risco + fail-closed HMAC-SHA256
-│   ├── auth_gate.dart              # Máquina de estados (locked, guarded/duress, session)
+│   ├── action_gate.dart              # Simulação de risco, confirmação crítica (incl. create_mini_app) e HMAC
+│   ├── auth_gate.dart              # PIN, NFC, Biometria e política composta Biometria + NFC NDEF
 │   ├── database_key_vault.dart       # Chave SQLCipher 256-bit no Keystore
-│   └── pin_vault.dart              # PBKDF2-HMAC-SHA256 (PIN normal + Duress PIN)
+│   └── pin_vault.dart              # PBKDF2-HMAC-SHA256 (PIN normal + Duress PIN + tags NFC)
 ├── models/
-│   └── chat_message.dart
+│   ├── chat_message.dart
+│   └── tactical_mode.dart            # Modos Táticos isolados (Geral, Engenharia, Estudos, Treino, Dev)
 ├── services/
-│   ├── ai_provider_service.dart      # 9 provedores, failover inteligente e suporte VLM
-│   ├── android_actions_service.dart  # Ponte de ações protegida pelo AuthGate
-│   ├── app_update_service.dart       # Atualizador OTA GitHub com SHA-256
-│   ├── audio_capture_service.dart    # AudioRecord PCM + VAD (não-Google)
-│   ├── audit_log_service.dart        # Log append-only encadeado com SHA-256 (P5)
-│   ├── briefing_service.dart         # Clima + Agenda + Sentinela + Telemetria (P4)
-│   ├── conversation_history.dart     # Persistência SQLCipher v2 com migração
-│   ├── desktop_pairing_service.dart  # Bridge LAN HMAC-SHA256 bidirecional + nonce
-│   ├── device_control_service.dart   # MethodChannel, Vision, RAG, Agenda, HTTP Bridge e Kill Switch
-│   ├── obsidian_service.dart         # Cofre Markdown (Diario/, Inbox, Skills/*.md)
-│   ├── slash_command_parser.dart     # Parser determinístico de 25 /commands
-│   ├── vault_search_service.dart     # Motor de busca/RAG FTS5/FTS4/BM25 local
+│   ├── ai_provider_service.dart      # 9 provedores, failover, usage/estimativa de tokens e SessionTelemetry
+│   ├── audio_capture_service.dart    # AudioRecord PCM (não-Google)
+│   ├── audio_vad_buffer.dart         # VAD pré-roll, medidor dBFS e AcousticDiagnosticsTracker
+│   ├── audit_log_service.dart        # Log imutável SHA-256 com recibos CONFIRMED/UNCERTAIN/FAILED
+│   ├── briefing_service.dart         # Clima + Agenda + Sentinela + Telemetria
+│   ├── cognicao_service.dart         # Pré-processador, isolamento visual anti-injection e pós-auditoria
+│   ├── conversation_history.dart     # Persistência SQLCipher v2 isolada por conversationId
+│   ├── desktop_command_listener.dart # Listener bidirecional Desktop LAN
+│   ├── desktop_pairing_service.dart  # Bridge LAN/Tailscale HMAC-SHA256 + contrato MiniAppLaunch
+│   ├── device_control_service.dart   # MethodChannel, mídia proativa, RAG filtrado, ETL, /eletrica, PC Bridge
+│   ├── eletrica_engine.dart          # Motor NBR 5410, CFW500/AD600M, topologias IEC, auditoria, Netlist & SVG
+│   ├── file_utilities_service.dart   # SAF duplicados SHA-256, conversão imagens, PDFs e ETL em lote
+│   ├── obsidian_service.dart         # Cofre Markdown (Diario, Memoria, Inbox, Inventario, Pessoas, Skills) + Privacidade
+│   ├── reminder_service.dart         # Lembretes SQLite + reagendamento AlarmManager
+│   ├── slash_command_parser.dart     # Parser determinístico de Slash Commands
+│   ├── spotify_service.dart          # Spotify Web API OAuth 2.0 PKCE
+│   ├── vault_search_service.dart     # Busca/RAG FTS5/FTS4/BM25 com filtro opcional por pathPrefix
 │   ├── voice_pipeline_controller.dart# Pipeline de voz contínua, PTT e barge-in
-│   └── voice_service.dart            # Fish Studio TTS + TTS nativo pt-BR
+│   ├── voice_service.dart            # Fish Studio TTS + TTS nativo pt-BR
+│   └── workflow_scheduler_service.dart# Fluxos agendados + checkpoints persistentes pausáveis
 └── ui/
-    ├── screens/                      # Auth, Core (CoreOrb shader), DesktopPairing, Memory, AI Settings, History, Update
+    ├── screens/                      # Auth, Core (CoreOrb + Telemetria), DesktopPairing, Memory, AI Settings (Diag. Acústico), History, Update
     └── widgets/                      # CoreOrb, ActionConfirmationDialog, VoiceSelectorSheet
 android/
 └── app/src/main/
-    ├── kotlin/.../MainActivity.kt    # Ponte nativa (Hardware, MediaSession, NotificationSentinel, CalendarContract, AudioRecord, FileProvider Vision)
-    ├── res/xml/file_paths.xml        # FileProvider seguro para capturas temporárias de Visão
-    └── assets/                       # Modelo sherpa-onnx Zipformer KWS (offline Wake Word)
+    ├── kotlin/.../MainActivity.kt           # Ponte nativa (Hardware, MediaSession, SAF multi-arquivo, Vision, NFC)
+    ├── kotlin/.../DeviceHardwareHelper.kt   # Hardware, mídia verificada/proativa, Bluetooth, lançador universal
+    ├── kotlin/.../ReminderAlarmReceiver.kt  # AlarmManager + restauração de lembretes persistidos no SQLite
+    ├── kotlin/.../BootReceiver.kt           # Reagendamento de lembretes (BOOT_COMPLETED / MY_PACKAGE_REPLACED) + Sentinela
+    ├── kotlin/.../BackgroundVoiceResponder.kt# Respostas autônomas 2º plano com mídia proativa/honesta
+    ├── kotlin/.../UltronAudioService.kt     # Sentinela de voz 24h non-Google (AudioRecord + sherpa-onnx)
+    ├── kotlin/.../FloatingOrbService.kt     # Orbe Flutuante Android
+    └── assets/                              # Modelo sherpa-onnx Zipformer KWS (offline Wake Word)
+docs/
+└── DESKTOP_MINI_APP_CONTRACT.md             # Contrato seguro e handler Python para Mini-Apps LAN/Tailscale
 shaders/
-└── crimson_core.frag                 # Fragment shader GLSL do Núcleo Holográfico
+└── crimson_core.frag                        # Fragment shader GLSL do Núcleo Holográfico
 ```
 
 ---
 
-## 🛠️ Como Compilar e Publicar Releases
+## 🛠️ Como Testar e Compilar Localmente
 
-### Pré-requisitos Locais
-1. Instale o **Flutter SDK (stable)** e o **Android SDK**.
-2. Execute:
-   ```bash
-   flutter pub get
-   flutter analyze
-   flutter test
-   flutter build apk --release --target-platform android-arm64
-   ```
-   O APK será gerado em `build/app/outputs/flutter-apk/app-release.apk`.
+### Pré-requisitos
+1. **Flutter SDK (stable)**, **Android SDK** e **JDK 17+**.
+2. No Windows (caso o disco `C:` esteja cheio ou o caminho do workspace contenha acentos), redirecione `TEMP`/`TMP` para `D:\downloads\tmp` e use um drive ASCII (`subst U:`) para builds AOT `release`:
 
-### Esteira CI/CD e Releases Automáticos (GitHub Actions)
-- **Flutter CI (`.github/workflows/flutter-ci.yml`)**: Executado a cada push ou PR na `main` (roda `flutter analyze`, `flutter test`, compila o APK de debug e valida permissões e `applicationId`).
-- **Android Release (`.github/workflows/android-release.yml`)**: Ao enviar uma tag no formato `vX.Y.Z` (ex.: `git tag v0.6.0 && git push origin v0.6.0`), o GitHub Actions compila o APK `arm64` assinado com os segredos do repositório (`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`), verifica a assinatura com `apksigner` e publica automaticamente na aba **Releases** do GitHub. Consulte [docs/release-checklist.md](docs/release-checklist.md) para o checklist de validação no Galaxy A34 5G.
+```powershell
+# Análise estática e suíte completa de testes (208 testes)
+$env:TEMP='D:\downloads\tmp'
+$env:TMP='D:\downloads\tmp'
+$env:ANDROID_HOME='D:\downloads\android-sdk'
+$env:ANDROID_SDK_ROOT='D:\downloads\android-sdk'
 
-### 7. 🔒 Pipeline de Áudio, Memória SQLCipher e Pareamento Desktop LAN
-- **Banco Criptografado SQLCipher v2 (`DatabaseKeyVault` + `ConversationHistory`)**: Chave aleatória de 256 bits no `flutter_secure_storage` com migração atômica do SQLite legado (`ultron_conversations.db`).
-- **Pipeline Whisper STT + VAD (`AudioCaptureSource`, `VadSegmenter`, `GroqWhisperSttService`, `VoicePipelineController`)**: Captura PCM em memória com AEC/NS/AGC nativo, detecção de fala/silêncio, filtros anti-alucinação Whisper, Push-to-Talk e modo contínuo com barge-in seletivo.
-- **Memória, Correções PT-BR e Atalhos (`/memory`)**: Correções fonéticas persistidas (`VoiceCorrectionsService`), preferências e atalhos por voz com confirmação explícita em `MemorySettingsScreen`.
-- **Desktop LAN & Quick Settings Tile (`/desktop`)**: Pareamento LAN assinado com HMAC-SHA256 (`DesktopPairingService`) e atalho rápido na barra do Android (`UltronTileService`) sempre protegido pelo `AuthGate`.
+dart analyze lib test
+flutter test
+
+# Build release arm64 (via drive ASCII quando o caminho tem acento)
+flutter build apk --release --target-platform android-arm64
+```
+
+### Esteira CI/CD (GitHub Actions)
+- **Flutter CI (`.github/workflows/flutter-ci.yml`)**: Roda `flutter analyze`, `flutter test` e valida o build Android em cada push/PR.
+- **Android Release (`.github/workflows/android-release.yml`)**: Compila e assina o APK `arm64` a partir de tags `vX.Y.Z` com verificação via `apksigner` e publicação em Releases.

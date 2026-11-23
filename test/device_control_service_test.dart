@@ -2,11 +2,18 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:ultron_mobile/services/audit_log_service.dart';
+import 'package:ultron_mobile/services/briefing_service.dart';
+import 'package:ultron_mobile/services/desktop_pairing_service.dart';
 import 'package:ultron_mobile/services/device_control_service.dart';
 import 'package:ultron_mobile/services/obsidian_service.dart';
+import 'package:ultron_mobile/services/reminder_service.dart';
+import 'package:ultron_mobile/services/speech_text.dart';
+import 'package:ultron_mobile/services/web_info_service.dart';
+import 'package:ultron_mobile/services/workflow_scheduler_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -637,6 +644,590 @@ void main() {
     expect(verification.valid, isTrue);
     expect(verification.totalEntries, greaterThanOrEqualTo(4));
   });
+
+  test('blocks SSRF metadata and cleartext external HTTP in Skill Bridge',
+      () async {
+    sqfliteFfiInit();
+    final db = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(version: 1, singleInstance: false),
+    );
+    final audit = await AuditLogService.open(database: db);
+    addTearDown(() => audit.close());
+
+    final service = DeviceControlService(
+      channel: channel,
+      auditLogProvider: () async => audit,
+    );
+
+    final metaRes = await service.executeAiActions(
+      '[ACTION:HTTP_GET:http://169.254.169.254/latest/meta-data]',
+      confirmAction: (_) async => true,
+    );
+    expect(metaRes.executedLogs.single, contains('Falha em HTTP_GET'));
+    expect(metaRes.executedLogs.single, contains('anti-SSRF'));
+
+    final cleartextExternal = await service.executeAiActions(
+      '[ACTION:HTTP_GET:http://example.com/hook]',
+      confirmAction: (_) async => true,
+    );
+    expect(cleartextExternal.executedLogs.single, contains('Falha em HTTP_GET'));
+    expect(cleartextExternal.executedLogs.single, contains('HTTPS obrigatório'));
+  });
+
+  test('rejects non-LAN and metadata endpoints for Kill Switch', () async {
+    final storage = _TestSecureStorage();
+    sqfliteFfiInit();
+    final db = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(version: 1, singleInstance: false),
+    );
+    final audit = await AuditLogService.open(database: db);
+    addTearDown(() => audit.close());
+
+    final service = DeviceControlService(
+      channel: channel,
+      storage: storage,
+      auditLogProvider: () async => audit,
+    );
+
+    await expectLater(
+      () => service.savePcKillSwitchUrl('http://8.8.8.8/kill'),
+      throwsArgumentError,
+    );
+    await expectLater(
+      () => service.savePcKillSwitchUrl('169.254.169.254'),
+      throwsArgumentError,
+    );
+
+    final blockedPublic = await service.triggerPcKillSwitch(
+      overrideUrl: 'http://8.8.8.8/kill',
+      overrideSecret: 'secret-123',
+    );
+    expect(blockedPublic, contains('bloqueado'));
+
+    final blockedMeta = await service.triggerPcKillSwitch(
+      overrideUrl: 'http://169.254.169.254/latest/meta-data',
+      overrideSecret: 'secret-123',
+    );
+    expect(blockedMeta, contains('bloqueado'));
+
+    final entries = await audit.recent(limit: 5);
+    expect(entries.where((e) => e.status == 'DENIED').length, 2);
+  });
+
+  test('enforces ActionGate + AuditLog on natural DIAL and refines replyMatch/missing skill',
+      () async {
+    sqfliteFfiInit();
+    final db = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(version: 1, singleInstance: false),
+    );
+    final audit = await AuditLogService.open(database: db);
+    addTearDown(() => audit.close());
+
+    final tempDir = await Directory.systemTemp.createTemp('ultron_ctrl_audit_');
+    addTearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+    final obs = ObsidianService(tempDir);
+    await obs.initialize();
+
+    final service = DeviceControlService(
+      channel: channel,
+      obsidianProvider: () async => obs,
+      auditLogProvider: () async => audit,
+    );
+
+    // DIAL blocked when confirmAction returns false
+    final deniedDial = await service.tryExecuteNaturalCommand(
+      'ligar para 11999999999',
+      confirmAction: (_) async => false,
+    );
+    expect(deniedDial?.handled, isTrue);
+    expect(deniedDial?.message, contains('cancelada'));
+    expect(calls.where((c) => c.method == 'dialNumber'), isEmpty);
+
+    // DIAL succeeds + logs when confirmed
+    final okDial = await service.tryExecuteNaturalCommand(
+      'ligar para 11999999999',
+      confirmAction: (_) async => true,
+    );
+    expect(okDial?.handled, isTrue);
+    expect(calls.where((c) => c.method == 'dialNumber').length, 1);
+
+    // replyMatch must NOT hijack ordinary prompts starting with "Responda apenas:"
+    final aiPromptRes = await service.tryExecuteNaturalCommand(
+      'Responda apenas: OK auditoria',
+      confirmAction: (_) async => true,
+    );
+    expect(aiPromptRes, isNull);
+
+    final aiPromptRes2 = await service.tryExecuteNaturalCommand(
+      'Responda em português: tudo certo?',
+      confirmAction: (_) async => true,
+    );
+    expect(aiPromptRes2, isNull);
+
+    // Valid background reply patterns still work
+    final replyExplicit = await service.tryExecuteNaturalCommand(
+      'responder para Carlos: Chego já',
+      confirmAction: (_) async => true,
+    );
+    expect(replyExplicit?.handled, isTrue);
+    expect(replyExplicit?.message, contains('Carlos'));
+
+    // Unknown explicit skill returns handled feedback instead of silent null
+    final missingSkill = await service.tryExecuteNaturalCommand(
+      'executar skill inexistente_xyz',
+    );
+    expect(missingSkill?.handled, isTrue);
+    expect(missingSkill?.message, contains('não encontrada'));
+
+    final logEntries = await audit.recent(limit: 10);
+    expect(logEntries.any((e) => e.action == 'DIAL' && e.status == 'DENIED'),
+        isTrue);
+    expect(logEntries.any((e) => e.action == 'DIAL' && e.status == 'EXECUTED'),
+        isTrue);
+  });
+
+  test('buildContextualSystemPrompt injects real-time device date and clock',
+      () async {
+    final service = DeviceControlService(channel: channel);
+    final fixedNow = DateTime(2026, 11, 19, 17, 13, 5); // quinta-feira
+
+    final clockSection = DeviceControlService.formatClockContext(fixedNow);
+    expect(clockSection, contains('Data atual: 2026-11-19 (quinta-feira)'));
+    expect(clockSection, contains('Hora atual: 17:13:05'));
+    expect(clockSection, contains('alarmes relativos'));
+
+    final prompt = await service.buildContextualSystemPrompt(now: fixedNow);
+    expect(prompt, contains('=== RELÓGIO DO DISPOSITIVO (TEMPO REAL) ==='));
+    expect(prompt, contains('Data atual: 2026-11-19 (quinta-feira)'));
+    expect(prompt, contains('Hora atual: 17:13:05'));
+  });
+
+  test('tryExecuteNaturalCommand handles natural phrases to open apps',
+      () async {
+    final service = DeviceControlService(channel: channel);
+
+    final r1 =
+        await service.tryExecuteNaturalCommand('No meu celular, abra o WhatsApp.');
+    expect(r1?.handled, isTrue);
+    expect(calls.last.method, 'openApp');
+    expect(calls.last.arguments, {'target': 'whatsapp'});
+
+    final r2 = await service
+        .tryExecuteNaturalCommand('Ultron, por favor pode abrir o Spotify');
+    expect(r2?.handled, isTrue);
+    expect(calls.last.method, 'openApp');
+    expect(calls.last.arguments, {'target': 'spotify'});
+  });
+
+  test('natural and AI-tag PC_OPEN_APP dispatch to DesktopPairingService via ActionGate',
+      () async {
+    final prevOverrides = HttpOverrides.current;
+    HttpOverrides.global = _RealHttpOverrides();
+    addTearDown(() => HttpOverrides.global = prevOverrides);
+
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+
+    final received = <Map<String, dynamic>>[];
+    const secret = 'desktop-test-secret-32-chars-ok!';
+    server.listen((req) async {
+      final raw = await utf8.decoder.bind(req).join();
+      received.add(jsonDecode(raw) as Map<String, dynamic>);
+      req.response.statusCode = 200;
+      req.response.write('{"ok":true}');
+      await req.response.close();
+    });
+
+    final storage = _TestSecureStorage();
+    final pairing = DesktopPairingService(storage: storage);
+    await pairing.savePairing(
+      DesktopPairingConfig(
+        baseUrl: 'http://127.0.0.1:${server.port}',
+        deviceId: 'galaxy-a34',
+        sharedSecret: secret,
+      ),
+    );
+
+    final service = DeviceControlService(
+      channel: channel,
+      desktopPairingProvider: () => pairing,
+    );
+
+    // Fail-closed if confirmation denied
+    final denied = await service.tryExecuteNaturalCommand(
+      'abra o Rocket League no meu PC',
+      confirmAction: (_) async => false,
+    );
+    expect(denied?.handled, isTrue);
+    expect(received, isEmpty);
+
+    // Executes and sends PC_OPEN_APP when confirmed
+    final ok = await service.tryExecuteNaturalCommand(
+      'abra o Rocket League no meu PC',
+      confirmAction: (_) async => true,
+    );
+    expect(ok?.handled, isTrue);
+    expect(ok?.message, contains('rocket league'));
+
+    final ai = await service.executeAiActions(
+      'Abrindo agora. [ACTION:PC_OPEN_APP:chrome]',
+      confirmAction: (_) async => true,
+    );
+    expect(ai.executedLogs.join(' '), contains('PC_OPEN_APP'));
+
+    expect(received.length, 2);
+    expect(received[0]['command'], 'PC_OPEN_APP');
+    expect(received[0]['args'], {'app': 'rocket league'});
+    expect(received[1]['command'], 'PC_OPEN_APP');
+    expect(received[1]['args'], {'app': 'chrome'});
+  });
+
+  test(
+      'executes Phase 1 Obsidian CRUD, UNDO, CANCEL_EVENT, and persistent Reminders via natural commands and AI tags',
+      () async {
+    sqfliteFfiInit();
+    final remDb = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(version: 1, singleInstance: false),
+    );
+    final reminderSvc = await ReminderService.open(
+      database: remDb,
+      channel: channel,
+    );
+    addTearDown(() => reminderSvc.close());
+
+    final tempDir =
+        await Directory.systemTemp.createTemp('ultron_phase1_dc_test_');
+    addTearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+    final obs = ObsidianService(tempDir);
+    await obs.initialize();
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'deleteCalendarEvent') {
+        return {
+          'deleted': true,
+          'deletedCount': 1,
+          'eventId': '555',
+          'title': (call.arguments['title'] as String?)?.isNotEmpty == true
+              ? call.arguments['title']
+              : 'Reunião Tática',
+        };
+      }
+      if (call.method == 'scheduleReminderAlarm' ||
+          call.method == 'cancelReminderAlarm') {
+        return true;
+      }
+      return true;
+    });
+
+    final service = DeviceControlService(
+      channel: channel,
+      obsidianProvider: () async => obs,
+      reminderProvider: () async => reminderSvc,
+    );
+
+    // 1. Obsidian Append + Tasks + Status + Read + List + Undo via AI tags & natural commands
+    final aiObs = await service.executeAiActions(
+      'Atualizando cofre. '
+      '[ACTION:OBSIDIAN_APPEND:Memoria/Operador.md:- [ ] Testar sensor KWS] '
+      '[ACTION:OBSIDIAN_TASKS:marcar:1] '
+      '[ACTION:OBSIDIAN_LIST:Memoria] '
+      '[ACTION:OBSIDIAN_READ:Memoria/Operador.md] '
+      '[ACTION:OBSIDIAN_STATUS]',
+    );
+    expect(aiObs.executedLogs.length, 5);
+    expect(aiObs.executedLogs[0], contains('Anexado em Operador.md'));
+    expect(aiObs.executedLogs[1], contains('[x] Testar sensor KWS'));
+    expect(aiObs.executedLogs[2], contains('Memoria/Operador.md'));
+    expect(aiObs.executedLogs[3], contains('Perfil do Operador'));
+    expect(aiObs.executedLogs[4], contains('notas'));
+
+    // Undo via natural command reverts checkbox mark
+    final undo1 = await service.tryExecuteNaturalCommand('desfazer');
+    expect(undo1?.handled, isTrue);
+    expect(undo1?.message, contains('OBSIDIAN_TASKS'));
+    expect(
+      await obs.readNote('Memoria/Operador.md'),
+      contains('- [ ] Testar sensor KWS'),
+    );
+
+    // Undo via AI tag [ACTION:UNDO] reverts the append
+    final undo2 = await service.executeAiActions('[ACTION:UNDO]');
+    expect(undo2.executedLogs.single, contains('OBSIDIAN_APPEND'));
+    expect(
+      await obs.readNote('Memoria/Operador.md'),
+      isNot(contains('Testar sensor KWS')),
+    );
+
+    // 2. Calendar CANCEL_EVENT enforces ActionGate (RiskLevel.sensitive)
+    final deniedCancel = await service.executeAiActions(
+      '[ACTION:CANCEL_EVENT:Reunião Tática]',
+      confirmAction: (_) async => false,
+    );
+    expect(deniedCancel.executedLogs.single, contains('bloqueado'));
+    expect(calls.where((c) => c.method == 'deleteCalendarEvent'), isEmpty);
+
+    final approvedCancel = await service.executeAiActions(
+      '[ACTION:CANCEL_EVENT:Reunião Tática]',
+      confirmAction: (_) async => true,
+    );
+    expect(approvedCancel.executedLogs.single,
+        contains('Evento removido: "Reunião Tática"'));
+    expect(calls.where((c) => c.method == 'deleteCalendarEvent').length, 1);
+
+    // 3. Persistent Reminders (REMINDER_CREATE, REMINDER_LIST, REMINDER_CANCEL)
+    final createRem = await service.tryExecuteNaturalCommand(
+      'me lembre de Revisar backup daqui 20 minutos',
+    );
+    expect(createRem?.handled, isTrue);
+    expect(createRem?.message, contains('Revisar backup'));
+    expect(calls.any((c) => c.method == 'scheduleReminderAlarm'), isTrue);
+
+    final listRem =
+        await service.tryExecuteNaturalCommand('listar lembretes');
+    expect(listRem?.handled, isTrue);
+    expect(listRem?.message, contains('Revisar backup'));
+
+    final cancelRem = await service.executeAiActions(
+      '[ACTION:REMINDER_CANCEL:1]',
+    );
+    expect(cancelRem.executedLogs.single, contains('Lembrete #1 cancelado'));
+    expect(calls.any((c) => c.method == 'cancelReminderAlarm'), isTrue);
+    expect(await service.listReminders(onlyPending: true), isEmpty);
+  });
+
+  test(
+      'executes Phase 2 WEATHER, NEWS, WEB_SEARCH, SKILL_CREATE/DELETE, and FLOW_* via DeviceControlService',
+      () async {
+    sqfliteFfiInit();
+    final flowDb = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(version: 1, singleInstance: false),
+    );
+    final flowSvc = await WorkflowSchedulerService.open(
+      database: flowDb,
+      channel: channel,
+    );
+    addTearDown(() => flowSvc.close());
+
+    final tempDir =
+        await Directory.systemTemp.createTemp('ultron_phase2_dc_test_');
+    addTearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+    final obs = ObsidianService(tempDir);
+    await obs.initialize();
+
+    final mockWebInfo = WebInfoService(
+      briefingService: BriefingService(
+        weatherFetcher: (city) async => WeatherSnapshot(
+          city: city.isEmpty ? 'São Paulo' : city,
+          tempC: 23,
+          feelsLikeC: 24,
+          condition: 'Céu aberto',
+        ),
+      ),
+      httpGetText: (uri, {headers = const {}}) async {
+        if (uri.host.contains('news.google.com')) {
+          return '<rss><channel><item><title>IA avança no Brasil - TechBR</title><link>https://example.com</link></item></channel></rss>';
+        }
+        return '{"Heading":"Dart","AbstractText":"Linguagem otimizada para multiplataforma.","AbstractURL":"https://dart.dev"}';
+      },
+    );
+
+    final service = DeviceControlService(
+      channel: channel,
+      obsidianProvider: () async => obs,
+      webInfoProvider: () => mockWebInfo,
+      workflowSchedulerProvider: () async => flowSvc,
+    );
+
+    // 1. WEATHER, NEWS, WEB_SEARCH
+    final wNat =
+        await service.tryExecuteNaturalCommand('clima em Florianópolis');
+    expect(wNat?.handled, isTrue);
+    expect(wNat?.message, contains('Florianópolis: 23°C'));
+
+    final nNat =
+        await service.tryExecuteNaturalCommand('notícias sobre tecnologia');
+    expect(nNat?.handled, isTrue);
+    expect(nNat?.message, contains('IA avança no Brasil'));
+
+    final wsNat =
+        await service.tryExecuteNaturalCommand('pesquisar_web Dart lang');
+    expect(wsNat?.handled, isTrue);
+    expect(wsNat?.message, contains('Linguagem otimizada'));
+
+    // 2. SKILL_CREATE & SKILL_DELETE (requires confirmation as sensitive)
+    final deniedSkill = await service.executeAiActions(
+      '[ACTION:SKILL_CREATE:alerta_rapido|[ACTION:TORCH_ON]]',
+      confirmAction: (_) async => false,
+    );
+    expect(deniedSkill.executedLogs.single, contains('bloqueado'));
+
+    final createdSkill = await service.executeAiActions(
+      '[ACTION:SKILL_CREATE:alerta_rapido|[ACTION:TORCH_ON]]',
+      confirmAction: (_) async => true,
+    );
+    expect(createdSkill.executedLogs.single,
+        contains('Skills/alerta_rapido.md'));
+    expect(await obs.findSkill('alerta_rapido'), isNotNull);
+
+    final deletedSkill = await service.executeAiActions(
+      '[ACTION:SKILL_DELETE:alerta_rapido]',
+      confirmAction: (_) async => true,
+    );
+    expect(
+        deletedSkill.executedLogs.single, contains('Skill removida: alerta_rapido'));
+    expect(await obs.findSkill('alerta_rapido'), isNull);
+
+    // 3. FLOW_CREATE, FLOW_LIST, FLOW_RUN, FLOW_SCHEDULE, FLOW_DELETE
+    final flowExec = await service.executeAiActions(
+      '[ACTION:FLOW_CREATE:rotina_luz|TORCH_ON -> VOLUME_SET:65|daqui 30m] '
+      '[ACTION:FLOW_LIST] '
+      '[ACTION:FLOW_RUN:rotina_luz] '
+      '[ACTION:FLOW_SCHEDULE:rotina_luz:a cada 60m] '
+      '[ACTION:FLOW_DELETE:rotina_luz]',
+      confirmAction: (_) async => true,
+    );
+    expect(flowExec.executedLogs.length, 5);
+    expect(flowExec.executedLogs[0], contains('Fluxo #1 "rotina_luz" criado'));
+    expect(flowExec.executedLogs[1], contains('1 fluxo(s)'));
+    expect(flowExec.executedLogs[2], contains('Fluxo "rotina_luz" executado'));
+    expect(flowExec.executedLogs[3], contains('a cada 60m'));
+    expect(flowExec.executedLogs[4], contains('Fluxo "rotina_luz" removido'));
+  });
+
+  test(
+      'executes Phase 5 Wake-Word Multi-Profile hot-swap and Floating Orb AuthGate sync',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'getWakeWordProfile') return 'jarvis';
+      if (call.method == 'setWakeWordProfile') {
+        return {
+          'id': call.arguments['profile'],
+          'label': 'Jarvis',
+          'hotSwapped': true,
+        };
+      }
+      if (call.method == 'isFloatingOrbRunning') return true;
+      if (call.method == 'setFloatingOrb') {
+        return call.arguments['enabled'] == true;
+      }
+      if (call.method == 'consumePendingFloatingOrbTap') {
+        return {'triggered': true, 'requiresUnlock': true};
+      }
+      return true;
+    });
+
+    final service = DeviceControlService(channel: channel);
+
+    // 1. Multi-profile wake-word switch
+    final updatedProfile =
+        await service.setWakeWordProfile(WakeWordProfile.jarvis);
+    expect(updatedProfile, WakeWordProfile.jarvis);
+    expect(WakeWord.activeProfile, WakeWordProfile.jarvis);
+    expect(calls.last.method, 'setWakeWordProfile');
+    expect(calls.last.arguments['profile'], 'jarvis');
+
+    // Reset back to ultron for clean global state
+    await service.setWakeWordProfile(WakeWordProfile.ultron);
+    expect(WakeWord.activeProfile, WakeWordProfile.ultron);
+
+    // 2. Floating Orb start/stop, state update, and AuthGate lock sync
+    expect(await service.setFloatingOrb(true), isTrue);
+    expect(calls.last.method, 'setFloatingOrb');
+    expect(calls.last.arguments['enabled'], isTrue);
+
+    await service.updateFloatingOrbState('ouvindo');
+    expect(calls.last.method, 'updateFloatingOrbState');
+    expect(calls.last.arguments['state'], 'ouvindo');
+
+    await service.syncFloatingOrbAuthState(
+      locked: true,
+      accessLevel: 'locked',
+    );
+    expect(calls.last.method, 'setFloatingOrbAuthState');
+    expect(calls.last.arguments['locked'], isTrue);
+    expect(calls.last.arguments['accessLevel'], 'locked');
+
+    final pendingTap = await service.consumePendingFloatingOrbTap();
+    expect(pendingTap?.triggered, isTrue);
+    expect(pendingTap?.requiresUnlock, isTrue);
+
+    bool? callbackRequiresUnlock;
+    service.setNativeEventHandlers(
+      onFloatingOrbTapped: (reqUnlock) => callbackRequiresUnlock = reqUnlock,
+    );
+    const codec = StandardMethodCodec();
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+      channel.name,
+      codec.encodeMethodCall(
+        const MethodCall('onFloatingOrbTapped', {'requiresUnlock': true}),
+      ),
+      (_) {},
+    );
+    expect(callbackRequiresUnlock, isTrue);
+  });
 }
 
 class _RealHttpOverrides extends HttpOverrides {}
+
+class _TestSecureStorage extends FlutterSecureStorage {
+  final Map<String, String> _data = <String, String>{};
+
+  @override
+  Future<String?> read({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async =>
+      _data[key];
+
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    if (value == null) {
+      _data.remove(key);
+    } else {
+      _data[key] = value;
+    }
+  }
+
+  @override
+  Future<void> delete({
+    required String key,
+    IOSOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    MacOsOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async {
+    _data.remove(key);
+  }
+}

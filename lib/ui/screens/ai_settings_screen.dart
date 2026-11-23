@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/ai_provider_service.dart';
+import '../../services/audio_vad_buffer.dart';
 import '../../services/device_control_service.dart';
+import '../../services/speech_text.dart';
+import '../../services/spotify_service.dart';
 
 class AiSettingsScreen extends StatefulWidget {
   const AiSettingsScreen({super.key, AiProviderStore? store}) : _store = store;
@@ -29,12 +32,17 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   final _sttUrl = TextEditingController(text: SttConfig.defaultEndpointUrl);
   final _sttModel = TextEditingController(text: SttConfig.defaultModel);
   final _sttKey = TextEditingController();
+  final _spotifyClientId = TextEditingController();
+  final _spotifyService = SpotifyService();
 
   List<AiProviderConfig> _providers = const [];
   List<String> _fetchedModels = const [];
   FreeProviderPreset _selectedPreset = FreeProviderPreset.catalog[1];
   bool _loading = true;
   bool _fetchingModels = false;
+  bool _spotifyConnected = false;
+  WakeWordProfile _wakeWordProfile = WakeWord.activeProfile;
+  bool _floatingOrbRunning = false;
   String? _testingProviderId;
 
   @override
@@ -52,12 +60,17 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
     _sttUrl.dispose();
     _sttModel.dispose();
     _sttKey.dispose();
+    _spotifyClientId.dispose();
     super.dispose();
   }
 
   Future<void> _reload() async {
     final list = await _store.load();
     final stt = await _store.loadSttConfig();
+    final spClientId = await _spotifyService.loadClientId();
+    final spConnected = await _spotifyService.isConnected();
+    final wakeProf = await _deviceService.getWakeWordProfile();
+    final orbRunning = await _deviceService.isFloatingOrbRunning();
     if (!mounted) return;
     setState(() {
       _providers = list;
@@ -65,8 +78,117 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         _sttUrl.text = stt.endpointUrl;
         _sttModel.text = stt.model;
       }
+      _spotifyClientId.text = spClientId;
+      _spotifyConnected = spConnected;
+      _wakeWordProfile = wakeProf;
+      _floatingOrbRunning = orbRunning;
       _loading = false;
     });
+  }
+
+  Future<void> _selectWakeWordProfile(WakeWordProfile profile) async {
+    HapticFeedback.selectionClick();
+    await _deviceService.setWakeWordProfile(profile);
+    if (!mounted) return;
+    setState(() => _wakeWordProfile = profile);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '🎙️ Wake-word alterada para "${profile.label}" (sherpa-onnx KWS atualizado sem reiniciar serviço).',
+          style: const TextStyle(fontSize: 11),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _toggleFloatingOrb(bool enable) async {
+    HapticFeedback.selectionClick();
+    if (enable) {
+      final canDraw = await _deviceService.canDrawOverlays();
+      if (!canDraw) {
+        await _deviceService.requestOverlayPermission();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Ative a permissão "Aparecer sobre outros apps" para iniciar o Orbe Flutuante.',
+              style: TextStyle(fontSize: 11),
+            ),
+          ),
+        );
+        return;
+      }
+    }
+    final active = await _deviceService.setFloatingOrb(enable);
+    if (!mounted) return;
+    setState(() => _floatingOrbRunning = active);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          active
+              ? '🔴 Orbe Flutuante Android ativado (arrastável sobre outros apps).'
+              : 'Orbe Flutuante Android desativado.',
+          style: const TextStyle(fontSize: 11),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _connectSpotifyOAuth() async {
+    final clientId = _spotifyClientId.text.trim();
+    if (clientId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Cole o Client ID do Spotify Developer Dashboard antes de conectar.',
+            style: TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+      return;
+    }
+    try {
+      final authUri = await _spotifyService.buildAuthorizationUri(
+        clientIdOverride: clientId,
+      );
+      await _deviceService.openUrl(authUri.toString());
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            '🎵 Abrindo login OAuth 2.0 PKCE do Spotify no navegador...',
+            style: TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Falha ao iniciar OAuth Spotify: $e',
+            style: const TextStyle(fontSize: 11),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _disconnectSpotify() async {
+    await _spotifyService.disconnect();
+    final connected = await _spotifyService.isConnected();
+    if (!mounted) return;
+    setState(() => _spotifyConnected = connected);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Spotify desconectado e tokens removidos do cofre seguro.',
+          style: TextStyle(fontSize: 11),
+        ),
+      ),
+    );
   }
 
   Future<void> _saveStt() async {
@@ -1097,6 +1219,99 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         const Text(
+                          'WAKE-WORD MULTI-PERFIL & ORBE FLUTUANTE',
+                          style: TextStyle(
+                            color: _crimson,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Escolha a palavra de ativação do motor offline sherpa-onnx KWS (tolerância Levenshtein ≤ 1 e hot-swap sem reiniciar):',
+                          style: TextStyle(
+                            color: Color(0xFFA89698),
+                            fontSize: 10,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            for (final wp in WakeWordProfile.values)
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: OutlinedButton(
+                                    key: ValueKey('ai_settings_wake_${wp.id}'),
+                                    onPressed: () =>
+                                        _selectWakeWordProfile(wp),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: _wakeWordProfile == wp
+                                          ? _crimson
+                                          : const Color(0xFF2E0305),
+                                      foregroundColor: _wakeWordProfile == wp
+                                          ? Colors.black
+                                          : _rose,
+                                      side: BorderSide(
+                                        color: _wakeWordProfile == wp
+                                            ? _crimson
+                                            : _border,
+                                      ),
+                                      visualDensity: VisualDensity.compact,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      wp.label.toUpperCase(),
+                                      style: const TextStyle(
+                                        fontSize: 9.5,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        SwitchListTile.adaptive(
+                          key: const ValueKey('floating_orb_switch'),
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          activeColor: _crimson,
+                          title: const Text(
+                            'Orbe Flutuante Android (SYSTEM_ALERT_WINDOW)',
+                            style: TextStyle(
+                              color: Color(0xFFF0E6E7),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: const Text(
+                            'Bolha arrastável (ocioso, ouvindo, processando, falando) integrada ao AuthGate',
+                            style: TextStyle(
+                              color: Color(0xFFA89698),
+                              fontSize: 10,
+                            ),
+                          ),
+                          value: _floatingOrbRunning,
+                          onChanged: _toggleFloatingOrb,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  color: const Color(0xFF160509),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text(
                           'TRANSCRIÇÃO DE VOZ (STT WHISPER)',
                           style: TextStyle(
                             color: _crimson,
@@ -1138,8 +1353,277 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 16),
+                _buildAcousticDiagnosticsCard(),
+                const SizedBox(height: 16),
+                Card(
+                  color: const Color(0xFF160509),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'SPOTIFY WEB API (OAUTH 2.0 PKCE)',
+                              style: TextStyle(
+                                color: _crimson,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.0,
+                              ),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: _spotifyConnected
+                                    ? const Color(0xFF10381F)
+                                    : const Color(0xFF2E0305),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                _spotifyConnected ? 'CONECTADO' : 'NÃO CONECTADO',
+                                style: TextStyle(
+                                  color: _spotifyConnected
+                                      ? const Color(0xFF5CE69C)
+                                      : _rose,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Configure seu próprio Client ID do Spotify Developer Dashboard (sem client_secret no APK).',
+                          style: TextStyle(
+                            color: Color(0xFFA89698),
+                            fontSize: 10,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        InkWell(
+                          onTap: () async {
+                            await Clipboard.setData(
+                              const ClipboardData(
+                                text: SpotifyService.redirectUri,
+                              ),
+                            );
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Redirect URI copiada: ${SpotifyService.redirectUri}',
+                                  style: TextStyle(fontSize: 11),
+                                ),
+                              ),
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF2E0305),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: _border),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.copy, size: 13, color: _rose),
+                                SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Redirect URI: ${SpotifyService.redirectUri} (toque p/ copiar)',
+                                    style: TextStyle(
+                                      color: Color(0xFFF0E6E7),
+                                      fontSize: 10.5,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: _spotifyClientId,
+                          style: const TextStyle(
+                            color: Color(0xFFF0E6E7),
+                            fontSize: 12,
+                          ),
+                          decoration: _hudInputDecoration(
+                            'Spotify Client ID',
+                            hint: 'Ex: 4a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d',
+                          ),
+                          onSubmitted: (v) =>
+                              _spotifyService.saveClientId(v.trim()),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton.icon(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: _crimson,
+                                  foregroundColor: Colors.white,
+                                ),
+                                onPressed: _connectSpotifyOAuth,
+                                icon: const Icon(Icons.music_note, size: 16),
+                                label: const Text(
+                                  'CONECTAR SPOTIFY',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            OutlinedButton(
+                              onPressed: _disconnectSpotify,
+                              child: const Text(
+                                'DESCONECTAR',
+                                style: TextStyle(fontSize: 10.5),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
     );
   }
+
+  Widget _buildAcousticDiagnosticsCard() {
+    final snap = AcousticDiagnosticsTracker.instance.snapshot();
+    final dbNorm = ((snap.ambientNoiseDb + 60.0) / 60.0).clamp(0.0, 1.0);
+    final fpPct = (snap.falsePositiveRate * 100).toStringAsFixed(1);
+    return Card(
+      key: const Key('acoustic_diagnostics_card'),
+      color: const Color(0xFF160509),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'DIAGNÓSTICO ACÚSTICO EM CAMPO (AUDIORECORD / SHERPA-ONNX)',
+              style: TextStyle(
+                color: _crimson,
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.9,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Motor 100% nativo não-Google (AudioRecord + VAD pré-roll 600ms + Groq Whisper / sherpa-onnx KWS).',
+              style: TextStyle(color: Color(0xFFA89698), fontSize: 10),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Ruído ambiente (dBFS)',
+                  style: TextStyle(color: Colors.white70, fontSize: 11),
+                ),
+                Text(
+                  '${snap.ambientNoiseDb.toStringAsFixed(1)} dB',
+                  style: const TextStyle(
+                    color: _rose,
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: dbNorm,
+                minHeight: 6,
+                backgroundColor: const Color(0xFF2E0305),
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  dbNorm > 0.75 ? _crimson : const Color(0xFF5CE69C),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                _diagMetricPill('PRÉ-ROLL VAD', '${snap.preRollMs} ms'),
+                _diagMetricPill(
+                  'LATÊNCIA WHISPER',
+                  snap.sttSampleCount > 0 ? '${snap.avgSttLatencyMs} ms' : '-- ms',
+                ),
+                _diagMetricPill(
+                  'KWS PT-BR FP',
+                  '${snap.kwsFalsePositives}/${snap.kwsTriggers} ($fpPct%)',
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                      AcousticDiagnosticsTracker.instance
+                          .recordKwsTrigger(falsePositive: true);
+                      setState(() {});
+                    },
+                    child: const Text(
+                      'MARCAR FALSO POSITIVO',
+                      style: TextStyle(fontSize: 10),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: () {
+                    AcousticDiagnosticsTracker.instance.reset();
+                    setState(() {});
+                  },
+                  child: const Text('ZERAR', style: TextStyle(fontSize: 10)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _diagMetricPill(String label, String value) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF210407),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF51080D)),
+        ),
+        child: Text(
+          '$label: $value',
+          style: const TextStyle(
+            color: Color(0xFFEADCDD),
+            fontSize: 10,
+            fontFamily: 'monospace',
+          ),
+        ),
+      );
 }

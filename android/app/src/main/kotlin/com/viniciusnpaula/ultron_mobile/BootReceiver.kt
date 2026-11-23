@@ -30,7 +30,15 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
+        val action = intent?.action ?: return
+        if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) {
+            return
+        }
+        // Sempre restaura alarmes persistidos de lembretes (incluindo vencimentos de garantia
+        // de longo prazo), independentemente de o sentinela de voz estar ativado.
+        ReminderAlarmReceiver.reschedulePersistedReminders(context)
+
+        if (action != Intent.ACTION_BOOT_COMPLETED) return
         val prefs = context.getSharedPreferences(UltronAudioService.PREFS_NAME, Context.MODE_PRIVATE)
         val enabled = prefs.getBoolean(UltronAudioService.PREF_ENABLED, false)
         val autostart = prefs.getBoolean(UltronAudioService.PREF_BOOT_AUTOSTART, false)

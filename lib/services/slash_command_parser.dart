@@ -24,6 +24,16 @@ enum UltronCommand {
   calendar,
   briefing,
   audit,
+  undo,
+  reminder,
+  weather,
+  news,
+  websearch,
+  flow,
+  spotify,
+  files,
+  mode,
+  eletrica,
 }
 
 class CommandResult {
@@ -91,6 +101,11 @@ class SlashCommandParser {
     '/obsidian': UltronCommand.vault,
     '/cerebro': UltronCommand.vault,
     '/segundocerebro': UltronCommand.vault,
+    '/obsidian_notas': UltronCommand.vault,
+    '/obsidian_ler': UltronCommand.vault,
+    '/obsidian_anexar': UltronCommand.vault,
+    '/obsidian_tarefas': UltronCommand.vault,
+    '/obsidian_status': UltronCommand.vault,
     '/search': UltronCommand.search,
     '/buscar': UltronCommand.search,
     '/rag': UltronCommand.search,
@@ -103,12 +118,55 @@ class SlashCommandParser {
     '/calendar': UltronCommand.calendar,
     '/evento': UltronCommand.calendar,
     '/eventos': UltronCommand.calendar,
+    '/cancelar_evento': UltronCommand.calendar,
     '/briefing': UltronCommand.briefing,
     '/bomdia': UltronCommand.briefing,
     '/resumodia': UltronCommand.briefing,
     '/audit': UltronCommand.audit,
     '/auditoria': UltronCommand.audit,
     '/logs': UltronCommand.audit,
+    '/desfazer': UltronCommand.undo,
+    '/undo': UltronCommand.undo,
+    '/reverter': UltronCommand.undo,
+    '/lembrete': UltronCommand.reminder,
+    '/lembretes': UltronCommand.reminder,
+    '/reminder': UltronCommand.reminder,
+    '/reminders': UltronCommand.reminder,
+    '/clima': UltronCommand.weather,
+    '/weather': UltronCommand.weather,
+    '/tempo': UltronCommand.weather,
+    '/noticias': UltronCommand.news,
+    '/noticia': UltronCommand.news,
+    '/news': UltronCommand.news,
+    '/manchetes': UltronCommand.news,
+    '/pesquisar_web': UltronCommand.websearch,
+    '/web': UltronCommand.websearch,
+    '/websearch': UltronCommand.websearch,
+    '/fluxo': UltronCommand.flow,
+    '/fluxos': UltronCommand.flow,
+    '/flow': UltronCommand.flow,
+    '/flows': UltronCommand.flow,
+    '/spotify': UltronCommand.spotify,
+    '/spotify_buscar': UltronCommand.spotify,
+    '/spotify_estado': UltronCommand.spotify,
+    '/spotify_tocar': UltronCommand.spotify,
+    '/spotify_listar_playlists': UltronCommand.spotify,
+    '/spotify_adicionar_playlist': UltronCommand.spotify,
+    '/arquivos': UltronCommand.files,
+    '/files': UltronCommand.files,
+    '/limpar_duplicados': UltronCommand.files,
+    '/converter_imagens': UltronCommand.files,
+    '/organizar_pdf_downloads': UltronCommand.files,
+    '/etl': UltronCommand.files,
+    '/lote_documentos': UltronCommand.files,
+    '/modo': UltronCommand.mode,
+    '/mode': UltronCommand.mode,
+    '/agente': UltronCommand.mode,
+    '/helper': UltronCommand.mode,
+    '/eletrica': UltronCommand.eletrica,
+    '/projetista': UltronCommand.eletrica,
+    '/cadesimu': UltronCommand.eletrica,
+    '/motor': UltronCommand.eletrica,
   };
 
   static CommandResult? parse(String input) {
@@ -118,7 +176,70 @@ class SlashCommandParser {
     final commandKey = parts.first.toLowerCase();
     final command = commands[commandKey];
     if (command == null) return null;
-    return CommandResult(command, parts.skip(1).join(' ').trim());
+    final rawArg = parts.skip(1).join(' ').trim();
+    return switch (commandKey) {
+      '/obsidian_notas' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'notas' : 'notas $rawArg',
+        ),
+      '/obsidian_ler' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'ler' : 'ler $rawArg',
+        ),
+      '/obsidian_anexar' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'anexar' : 'anexar $rawArg',
+        ),
+      '/obsidian_tarefas' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'tarefas' : 'tarefas $rawArg',
+        ),
+      '/obsidian_status' => const CommandResult(
+          UltronCommand.vault,
+          'status',
+        ),
+      '/cancelar_evento' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'cancelar' : 'cancelar $rawArg',
+        ),
+      '/spotify_buscar' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'buscar' : 'buscar $rawArg',
+        ),
+      '/spotify_estado' => const CommandResult(
+          UltronCommand.spotify,
+          'estado',
+        ),
+      '/spotify_tocar' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'tocar' : 'tocar $rawArg',
+        ),
+      '/spotify_listar_playlists' => const CommandResult(
+          UltronCommand.spotify,
+          'playlists',
+        ),
+      '/spotify_adicionar_playlist' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'adicionar' : 'adicionar $rawArg',
+        ),
+      '/limpar_duplicados' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'duplicados' : 'duplicados $rawArg',
+        ),
+      '/converter_imagens' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'converter' : 'converter $rawArg',
+        ),
+      '/organizar_pdf_downloads' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'pdfs' : 'pdfs $rawArg',
+        ),
+      '/etl' || '/lote_documentos' => CommandResult(
+          command,
+          rawArg.isEmpty ? 'lote' : 'lote $rawArg',
+        ),
+      _ => CommandResult(command, rawArg),
+    };
   }
 
   /// Retorna lista de sintaxes disponíveis com documentação tática.
@@ -265,6 +386,71 @@ class SlashCommandParser {
           'aliases': '/auditoria, /logs',
           'description':
               'Verifica a cadeia SHA-256 do log imutável de auditoria e exibe ações recentes.',
+        },
+        {
+          'command': '/desfazer',
+          'aliases': '/undo, /reverter',
+          'description':
+              'Desfaz a última operação mutável realizada no cofre Obsidian.',
+        },
+        {
+          'command': '/lembrete [listar|cancelar <id>|<texto e horário>]',
+          'aliases': '/lembretes, /reminder',
+          'description':
+              'Gerencia lembretes persistentes em SQLite com notificação agendada via AlarmManager.',
+        },
+        {
+          'command': '/clima [cidade]',
+          'aliases': '/weather, /tempo',
+          'description':
+              'Consulta previsão meteorológica atual sem necessidade de chave de API.',
+        },
+        {
+          'command': '/noticias [tema]',
+          'aliases': '/news, /manchetes',
+          'description':
+              'Busca manchetes atualizadas via feeds RSS públicos em português.',
+        },
+        {
+          'command': '/pesquisar_web <consulta>',
+          'aliases': '/web, /websearch',
+          'description':
+              'Pesquisa textual resumida direto no chat sem abrir o navegador.',
+        },
+        {
+          'command':
+              '/fluxo [listar|criar <nome>|<passos>|[horario]|rodar <nome>|agendar <nome>|<horario>|excluir <nome>]',
+          'aliases': '/fluxos, /flow',
+          'description':
+              'Gerencia fluxos dinâmicos encadeando ações/skills com agendamento nativo e AuthGate.',
+        },
+        {
+          'command':
+              '/spotify [estado|buscar <termo>|tocar <faixa/uri>|playlists|adicionar <playlist>|[faixa]]',
+          'aliases': '/spotify_tocar, /spotify_buscar, /spotify_estado',
+          'description':
+              'Controla a Spotify Web API via OAuth 2.0 PKCE (estado, busca, reprodução e playlists).',
+        },
+        {
+          'command':
+              '/arquivos [duplicados [pasta]|converter [jpg|png] [pasta]|pdfs [pasta]|lote [saf|pasta]]',
+          'aliases':
+              '/limpar_duplicados, /converter_imagens, /organizar_pdf_downloads, /etl',
+          'description':
+              'Utilitários de arquivos via SAF/Downloads: limpeza SHA-256, conversão .webp/.heic, padronização de PDFs e ETL em lote para Inbox/ do Obsidian.',
+        },
+        {
+          'command': '/modo [geral|engenharia|estudos|treino|dev]',
+          'aliases': '/mode, /agente, /helper',
+          'description':
+              'Alterna entre Modos Táticos isolados com memória filtrada no Obsidian, histórico separado e ferramentas enxutas.',
+        },
+        {
+          'command':
+              '/eletrica [direta|reversao|estrela|sequencia] [X cv] [220v|380v] [cfw500|ad600m] [pc]',
+          'aliases': '/projetista, /cadesimu, /motor',
+          'description':
+              'Projetista Elétrico offline (NBR 5410, auditoria estrutural, Netlist, SVG IEC e envio ao Desktop/CADe_SIMU).',
         },
       ];
 }

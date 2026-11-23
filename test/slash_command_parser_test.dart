@@ -66,6 +66,44 @@ void main() {
     expect(
         SlashCommandParser.parse('/auditoria')?.command, UltronCommand.audit);
     expect(SlashCommandParser.parse('/logs')?.command, UltronCommand.audit);
+    expect(SlashCommandParser.parse('/desfazer')?.command, UltronCommand.undo);
+    expect(SlashCommandParser.parse('/undo')?.command, UltronCommand.undo);
+    expect(SlashCommandParser.parse('/lembrete Tomar água')?.command,
+        UltronCommand.reminder);
+    expect(SlashCommandParser.parse('/obsidian_notas Memoria')?.command,
+        UltronCommand.vault);
+    expect(SlashCommandParser.parse('/obsidian_status')?.argument, 'status');
+    expect(SlashCommandParser.parse('/cancelar_evento Daily')?.command,
+        UltronCommand.calendar);
+    expect(SlashCommandParser.parse('/clima Curitiba')?.command,
+        UltronCommand.weather);
+    expect(SlashCommandParser.parse('/noticias IA')?.command,
+        UltronCommand.news);
+    expect(SlashCommandParser.parse('/pesquisar_web Dart')?.command,
+        UltronCommand.websearch);
+    expect(SlashCommandParser.parse('/fluxo listar')?.command,
+        UltronCommand.flow);
+    expect(SlashCommandParser.parse('/spotify estado')?.command,
+        UltronCommand.spotify);
+    expect(SlashCommandParser.parse('/spotify_tocar Starboy')?.argument,
+        'tocar Starboy');
+    expect(SlashCommandParser.parse('/limpar_duplicados')?.command,
+        UltronCommand.files);
+    expect(SlashCommandParser.parse('/limpar_duplicados')?.argument,
+        'duplicados');
+    expect(SlashCommandParser.parse('/converter_imagens png')?.argument,
+        'converter png');
+    expect(SlashCommandParser.parse('/organizar_pdf_downloads')?.argument,
+        'pdfs');
+    expect(SlashCommandParser.parse('/arquivos')?.command, UltronCommand.files);
+    expect(SlashCommandParser.parse('/etl saf')?.command, UltronCommand.files);
+    expect(SlashCommandParser.parse('/etl saf')?.argument, 'lote saf');
+    expect(SlashCommandParser.parse('/modo engenharia')?.command,
+        UltronCommand.mode);
+    expect(SlashCommandParser.parse('/modo engenharia')?.argument,
+        'engenharia');
+    expect(SlashCommandParser.parse('/agente dev')?.command,
+        UltronCommand.mode);
   });
 
   test('preserves command arguments separated by whitespace', () {

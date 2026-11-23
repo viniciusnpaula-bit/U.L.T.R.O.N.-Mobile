@@ -4,6 +4,26 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
+/// Classificação epistemológica honesta do desfecho de uma execução (Marco 2 — v1.7.0).
+enum ExecutionOutcome {
+  /// Efeito verificado localmente ou confirmado pelo receptor (ex.: lanterna, Obsidian, HTTP 200).
+  confirmed,
+
+  /// Ação disparada via Intent/app externo sem leitura do estado final (ex.: WhatsApp, discador, abrir app).
+  uncertain,
+
+  /// Execução bloqueada, cancelada ou encerrada com erro.
+  failed,
+}
+
+extension ExecutionOutcomeX on ExecutionOutcome {
+  String get auditStatus => switch (this) {
+        ExecutionOutcome.confirmed => 'CONFIRMED',
+        ExecutionOutcome.uncertain => 'UNCERTAIN',
+        ExecutionOutcome.failed => 'FAILED',
+      };
+}
+
 /// Entrada individual no log imutável encadeado por SHA-256.
 class AuditEntry {
   const AuditEntry({
@@ -249,15 +269,108 @@ class AuditLogService {
     );
   }
 
+  static const Set<String> _uncertainExternalActions = <String>{
+    'WHATSAPP',
+    'SMS',
+    'DIAL',
+    'OPEN_APP',
+    'OPEN_CAMERA',
+    'OPEN_SETTINGS',
+    'SEARCH',
+    'ALARM',
+  };
+
+  /// Classifica honestamente se a execução de [actionCode] teve efeito confirmado,
+  /// incerto (Intent externo sem confirmação final) ou falho.
+  static ExecutionOutcome classifyActionOutcome(
+    String actionCode, {
+    required bool succeeded,
+    String detail = '',
+  }) {
+    if (!succeeded) return ExecutionOutcome.failed;
+    final normDetail = detail.toLowerCase();
+    if (normDetail.contains('não encontrei') ||
+        normDetail.contains('sem permissão') ||
+        normDetail.contains('bloquead') ||
+        normDetail.contains('cancelad') ||
+        normDetail.contains('erro')) {
+      return ExecutionOutcome.failed;
+    }
+    final cleanOp = actionCode
+        .trim()
+        .toUpperCase()
+        .replaceAll(RegExp(r'[\[\]]'), '')
+        .replaceFirst(RegExp(r'^ACTION:'), '')
+        .split(':')
+        .first;
+    if (_uncertainExternalActions.contains(cleanOp)) {
+      return ExecutionOutcome.uncertain;
+    }
+    return ExecutionOutcome.confirmed;
+  }
+
+  /// Registra um recibo tipado (`CONFIRMED`, `UNCERTAIN`, `FAILED`) na cadeia SHA-256.
+  Future<AuditEntry> recordReceipt({
+    required String actor,
+    required String action,
+    String target = '',
+    required ExecutionOutcome outcome,
+    String detail = '',
+    DateTime? timestamp,
+  }) =>
+      record(
+        actor: actor,
+        action: action,
+        target: target,
+        status: outcome.auditStatus,
+        detail: detail,
+        timestamp: timestamp,
+      );
+
+  /// Resume a distribuição de desfechos nos últimos [limit] registros.
+  Future<({int confirmed, int uncertain, int failed, double confirmationRate})>
+      summarizeOutcomes({int limit = 80}) async {
+    final entries = await recent(limit: limit);
+    var confirmed = 0;
+    var uncertain = 0;
+    var failed = 0;
+    for (final e in entries) {
+      final st = e.status.toUpperCase();
+      if (st == 'CONFIRMED' || st == 'EXECUTED' || st == 'OK') {
+        confirmed++;
+      } else if (st == 'UNCERTAIN' || st == 'PAUSED_UNCERTAIN') {
+        uncertain++;
+      } else if (st == 'FAILED' ||
+          st == 'BLOCKED' ||
+          st == 'DENIED' ||
+          st == 'ERROR') {
+        failed++;
+      }
+    }
+    final total = confirmed + uncertain + failed;
+    final rate = total == 0 ? 1.0 : confirmed / total;
+    return (
+      confirmed: confirmed,
+      uncertain: uncertain,
+      failed: failed,
+      confirmationRate: rate,
+    );
+  }
+
   Future<String> formatReport({int limit = 15}) async {
     final verification = await verifyChain();
     final entries = await recent(limit: limit);
+    final summary = await summarizeOutcomes(limit: 80);
     final statusBadge = verification.valid
         ? '✅ CADEIA ÍNTEGRA (${verification.totalEntries} registros verificados)'
         : '🚨 ADULTERAÇÃO DETECTADA no registro #${verification.brokenAtSeq}';
     final buf = StringBuffer()
       ..writeln('📜 LOG IMUTÁVEL DE AUDITORIA (SHA-256)')
       ..writeln(statusBadge)
+      ..writeln(
+        '🧾 Recibos (últimos 80): ✅ ${summary.confirmed} confirmados · '
+        '❔ ${summary.uncertain} incertos · ❌ ${summary.failed} falhos',
+      )
       ..writeln('');
     if (entries.isEmpty) {
       buf.writeln('• Nenhum evento crítico ou webhook registrado ainda.');

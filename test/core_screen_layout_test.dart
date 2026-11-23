@@ -78,6 +78,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('cockpit_telemetry_bar')), findsOneWidget);
     final fieldSize = tester.getSize(find.byType(TextField));
     expect(fieldSize.width, greaterThanOrEqualTo(150));
   });

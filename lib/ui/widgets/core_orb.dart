@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
@@ -33,6 +34,8 @@ class _CoreOrbState extends State<CoreOrb>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final Ticker _ticker;
   final ValueNotifier<double> _time = ValueNotifier<double>(0);
+  FragmentProgram? _cachedProgram;
+  FragmentShader? _cachedShader;
   bool _lifecycleActive = true;
   bool? _lastNotifiedTickerActive;
 
@@ -43,15 +46,34 @@ class _CoreOrbState extends State<CoreOrb>
     final initialLifecycle = WidgetsBinding.instance.lifecycleState;
     _lifecycleActive = initialLifecycle == null ||
         initialLifecycle == AppLifecycleState.resumed;
+    _syncShader();
     _ticker = createTicker((duration) {
       _time.value = duration.inMicroseconds / 1000000.0;
     });
     _syncTicker();
   }
 
+  void _syncShader() {
+    final nextProgram = widget.shaderProgram;
+    if (identical(nextProgram, _cachedProgram)) return;
+    _cachedShader?.dispose();
+    _cachedShader = null;
+    _cachedProgram = nextProgram;
+    if (nextProgram != null) {
+      try {
+        _cachedShader = nextProgram.fragmentShader();
+      } catch (_) {
+        _cachedShader = null;
+      }
+    }
+  }
+
   @override
   void didUpdateWidget(covariant CoreOrb oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.shaderProgram, widget.shaderProgram)) {
+      _syncShader();
+    }
     if (oldWidget.stage != widget.stage ||
         oldWidget.onTickerStateChanged != widget.onTickerStateChanged) {
       _syncTicker();
@@ -82,6 +104,8 @@ class _CoreOrbState extends State<CoreOrb>
     WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
     _time.dispose();
+    _cachedShader?.dispose();
+    _cachedShader = null;
     super.dispose();
   }
 
@@ -90,45 +114,55 @@ class _CoreOrbState extends State<CoreOrb>
     if (widget.stage == CoreStage.hidden) {
       return const SizedBox.shrink();
     }
-    return ValueListenableBuilder<double>(
-      valueListenable: _time,
-      builder: (context, time, _) {
-        final program = widget.shaderProgram;
-        final CustomPainter painter = program != null
-            ? _ShaderCorePainter(
-                program: program,
-                time: time,
-                energy: widget.energy,
-              )
-            : CorePainter(time, energy: widget.energy);
-        return CustomPaint(painter: painter);
-      },
+    final shader = _cachedShader;
+    if (shader != null) {
+      return RepaintBoundary(
+        child: CustomPaint(
+          painter: _ShaderCorePainter(
+            shader: shader,
+            timeListenable: _time,
+            energy: widget.energy,
+          ),
+        ),
+      );
+    }
+    return RepaintBoundary(
+      child: ValueListenableBuilder<double>(
+        valueListenable: _time,
+        builder: (context, time, _) {
+          return CustomPaint(
+            painter: CorePainter(time, energy: widget.energy),
+          );
+        },
+      ),
     );
   }
 }
 
 class _ShaderCorePainter extends CustomPainter {
   _ShaderCorePainter({
-    required this.program,
-    required this.time,
+    required this.shader,
+    required this.timeListenable,
     required this.energy,
-  });
+  }) : super(repaint: timeListenable);
 
-  final FragmentProgram program;
-  final double time;
+  final FragmentShader shader;
+  final ValueListenable<double> timeListenable;
   final double energy;
+  final Paint _shaderPaint = Paint();
 
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
+    final time = timeListenable.value;
     var shaderDrawn = false;
     try {
-      final shader = program.fragmentShader();
       shader.setFloat(0, size.width);
       shader.setFloat(1, size.height);
       shader.setFloat(2, time);
       shader.setFloat(3, energy);
-      canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
+      _shaderPaint.shader = shader;
+      canvas.drawRect(Offset.zero & size, _shaderPaint);
       shaderDrawn = true;
     } catch (_) {
       CorePainter(time, energy: energy).paint(canvas, size);
@@ -141,8 +175,8 @@ class _ShaderCorePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ShaderCorePainter oldDelegate) =>
-      oldDelegate.program != program ||
-      oldDelegate.time != time ||
+      oldDelegate.shader != shader ||
+      oldDelegate.timeListenable != timeListenable ||
       oldDelegate.energy != energy;
 }
 

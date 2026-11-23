@@ -67,6 +67,7 @@ class VoiceService {
 
   static const _voiceKey = 'ultron.tts.voice.v1';
   static const _profileKey = 'ultron.tts.profile.v1';
+  static const _wakeWordProfileKey = 'ultron.tts.wake_word.v1';
 
   final FlutterTts _tts;
   final MethodChannel _deviceChannel;
@@ -76,6 +77,7 @@ class VoiceService {
   Future<void>? _initializing;
   bool _ready = false;
   bool _profileExplicitlySet = false;
+  bool _wakeWordExplicitlySet = false;
   bool _voiceExplicitlySet = false;
   bool _fishExplicitlySet = false;
   int _generation = 0;
@@ -84,6 +86,7 @@ class VoiceService {
   bool whisperMode = false;
   bool isSpeaking = false;
   VoiceProfile profile = VoiceProfile.grave;
+  WakeWordProfile wakeWordProfile = WakeWordProfile.ultron;
   String? activeVoiceName;
   String? lastFishError;
 
@@ -143,6 +146,16 @@ class VoiceService {
         }
       } catch (_) {}
     }
+    if (!_wakeWordExplicitlySet) {
+      try {
+        final savedWake = await _storage.read(key: _wakeWordProfileKey);
+        if (!_wakeWordExplicitlySet && savedWake != null) {
+          wakeWordProfile = WakeWordProfile.fromId(savedWake);
+          WakeWord.setActiveProfile(wakeWordProfile);
+        }
+      } catch (_) {}
+    }
+    _syncNativeWakeWordProfile();
     if (!_fishExplicitlySet && !_fishService.hasInitialConfig) {
       try {
         await _fishService.loadConfig();
@@ -247,6 +260,28 @@ class VoiceService {
     _syncNativeTtsConfig();
     try {
       await _storage.write(key: _voiceKey, value: voice.name);
+    } catch (_) {}
+  }
+
+  void _syncNativeWakeWordProfile() {
+    try {
+      unawaited(
+        _deviceChannel
+            .invokeMethod<Object?>('setWakeWordProfile', {
+              'profile': wakeWordProfile.id,
+            })
+            .then<void>((_) {}, onError: (_) {}),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> setWakeWordProfile(WakeWordProfile next) async {
+    _wakeWordExplicitlySet = true;
+    wakeWordProfile = next;
+    WakeWord.setActiveProfile(next);
+    _syncNativeWakeWordProfile();
+    try {
+      await _storage.write(key: _wakeWordProfileKey, value: next.id);
     } catch (_) {}
   }
 
@@ -356,8 +391,9 @@ class VoiceService {
     }
   }
 
-  Future<void> preview() =>
-      speak('Sistemas online. Eu sou o Ultron, pronto para suas ordens.');
+  Future<void> preview() => speak(
+        'Sistemas online. Eu sou ${wakeWordProfile == WakeWordProfile.edith ? 'a' : 'o'} ${wakeWordProfile.label}, pronto para suas ordens.',
+      );
 
   Future<void> stop() async {
     _generation++;

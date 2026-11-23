@@ -4,13 +4,18 @@ import android.app.Activity
 import android.app.ActivityManager
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
+import android.media.session.MediaController
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -26,6 +31,7 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.view.KeyEvent
 import java.io.File
+import java.text.Normalizer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -116,22 +122,248 @@ object DeviceHardwareHelper {
         return ((cur.toDouble() / max) * 100.0).roundToInt()
     }
 
-    fun dispatchMediaControl(context: Context, action: String): Boolean {
-        val keyCode = when (action.trim().lowercase()) {
+    data class MediaDispatchResult(
+        val status: String, // "confirmed" | "opened_needs_play" | "no_active_session" | "uncertain" | "failed"
+        val confirmed: Boolean,
+        val activePackage: String = "",
+        val launchedApp: String = "",
+        val detail: String = "",
+    ) {
+        fun toMap(): Map<String, Any> = mapOf(
+            "status" to status,
+            "confirmed" to confirmed,
+            "activePackage" to activePackage,
+            "launchedApp" to launchedApp,
+            "detail" to detail,
+        )
+    }
+
+    fun dispatchMediaControlVerified(
+        context: Context,
+        action: String,
+        preferredApp: String = "",
+        autoLaunchIfClosed: Boolean = true,
+    ): MediaDispatchResult {
+        val normAction = action.trim().lowercase()
+        val firstPass = dispatchMediaControlSinglePass(context, normAction, preferredApp)
+        if (firstPass.confirmed || !autoLaunchIfClosed) {
+            return firstPass
+        }
+
+        // Proatividade: se o pedido era para reproduzir/controlar faixa e o app está fechado,
+        // abre o player automaticamente, aguarda inicialização e tenta retomar a reprodução!
+        val isPlaybackStartAction = normAction in setOf("play", "play_pause", "toggle", "next", "previous", "prev")
+        if (firstPass.status == "no_active_session" && isPlaybackStartAction) {
+            val targetApp = preferredApp.trim().lowercase().ifEmpty { "spotify" }
+            val launched = runCatching {
+                launchInstalledAppWithStatus(context, targetApp)
+            }.getOrNull()
+
+            if (launched != null) {
+                if (!launched.openedImmediately) {
+                    return MediaDispatchResult(
+                        status = "opened_needs_play",
+                        confirmed = false,
+                        launchedApp = launched.label,
+                        detail = "${launched.label} estava fechado; atalho enviado na notificação para abrir.",
+                    )
+                }
+                // Aguarda o player inicializar e registrar sessão de mídia, depois tenta retomar
+                runCatching { Thread.sleep(1500) }
+                val retry = dispatchMediaControlSinglePass(context, normAction, targetApp)
+                if (retry.confirmed) {
+                    return MediaDispatchResult(
+                        status = "confirmed",
+                        confirmed = true,
+                        activePackage = retry.activePackage,
+                        launchedApp = launched.label,
+                        detail = "Abri ${launched.label} e retomei a reprodução.",
+                    )
+                }
+                return MediaDispatchResult(
+                    status = "opened_needs_play",
+                    confirmed = false,
+                    activePackage = retry.activePackage,
+                    launchedApp = launched.label,
+                    detail = "${launched.label} estava fechado; abri o aplicativo, mas o play automático não iniciou.",
+                )
+            }
+        }
+        return firstPass
+    }
+
+    private fun dispatchMediaControlSinglePass(
+        context: Context,
+        normAction: String,
+        preferredApp: String,
+    ): MediaDispatchResult {
+        val keyCode = when (normAction) {
             "play" -> KeyEvent.KEYCODE_MEDIA_PLAY
             "pause" -> KeyEvent.KEYCODE_MEDIA_PAUSE
             "play_pause", "toggle" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
             "next" -> KeyEvent.KEYCODE_MEDIA_NEXT
             "previous", "prev" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
             "stop" -> KeyEvent.KEYCODE_MEDIA_STOP
-            else -> return false
+            else -> return MediaDispatchResult("failed", false, detail = "Ação de mídia inválida.")
         }
-        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            ?: return MediaDispatchResult("failed", false, detail = "AudioManager indisponível.")
+        val normApp = preferredApp.trim().lowercase()
+
+        // 1. Se tivermos acesso a MediaSessionManager (via NotificationListenerService),
+        // verificamos a sessão real do player antes e depois do comando.
+        val sessions: List<MediaController>? = runCatching {
+            val msm = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
+            msm?.getActiveSessions(ComponentName(context, UltronNotificationListenerService::class.java))
+        }.getOrNull()
+
+        if (sessions != null) {
+            val matchedController: MediaController? = if (normApp.isNotEmpty()) {
+                sessions.firstOrNull { it.packageName.lowercase().contains(normApp) }
+            } else {
+                sessions.firstOrNull {
+                    val st = it.playbackState?.state
+                    st == PlaybackState.STATE_PLAYING || st == PlaybackState.STATE_BUFFERING
+                } ?: sessions.firstOrNull()
+            }
+
+            if (matchedController == null) {
+                // Se o usuário pediu um app específico (ex: Spotify) e ele não tem sessão ativa,
+                // ou se não há nenhuma sessão de mídia ativa no aparelho:
+                if (normApp.isNotEmpty() || !audio.isMusicActive) {
+                    val label = if (normApp.isNotEmpty()) normApp else "player de mídia"
+                    return MediaDispatchResult(
+                        status = "no_active_session",
+                        confirmed = false,
+                        detail = "Nenhuma sessão ativa encontrada para $label (app fechado).",
+                    )
+                }
+            } else {
+                val pkg = matchedController.packageName
+                val beforeState = matchedController.playbackState?.state
+                val beforePlaying = beforeState == PlaybackState.STATE_PLAYING ||
+                    beforeState == PlaybackState.STATE_BUFFERING ||
+                    audio.isMusicActive
+                val beforeTitle = matchedController.metadata?.description?.title?.toString().orEmpty()
+
+                when (normAction) {
+                    "play" -> matchedController.transportControls.play()
+                    "pause" -> matchedController.transportControls.pause()
+                    "play_pause", "toggle" -> {
+                        if (beforePlaying) matchedController.transportControls.pause()
+                        else matchedController.transportControls.play()
+                    }
+                    "next" -> matchedController.transportControls.skipToNext()
+                    "previous", "prev" -> matchedController.transportControls.skipToPrevious()
+                    "stop" -> matchedController.transportControls.stop()
+                }
+
+                // Aguarda brevemente o estado real do player refletir o comando
+                for (attempt in 0 until 6) {
+                    runCatching { Thread.sleep(90) }
+                    val afterState = matchedController.playbackState?.state
+                    val afterPlaying = afterState == PlaybackState.STATE_PLAYING ||
+                        afterState == PlaybackState.STATE_BUFFERING ||
+                        audio.isMusicActive
+                    val afterTitle = matchedController.metadata?.description?.title?.toString().orEmpty()
+
+                    val ok = when (normAction) {
+                        "play" -> afterPlaying
+                        "pause", "stop" -> !afterPlaying || afterState == PlaybackState.STATE_PAUSED || afterState == PlaybackState.STATE_STOPPED
+                        "play_pause", "toggle" -> afterPlaying != beforePlaying
+                        "next", "previous", "prev" -> (afterTitle.isNotEmpty() && afterTitle != beforeTitle) || afterPlaying
+                        else -> false
+                    }
+                    if (ok) {
+                        return MediaDispatchResult(
+                            status = "confirmed",
+                            confirmed = true,
+                            activePackage = pkg,
+                            detail = "Confirmado na sessão $pkg.",
+                        )
+                    }
+                }
+                val finalPlaying = audio.isMusicActive ||
+                    matchedController.playbackState?.state == PlaybackState.STATE_PLAYING
+                return if (normAction == "play" && !finalPlaying) {
+                    MediaDispatchResult(
+                        status = "no_active_session",
+                        confirmed = false,
+                        activePackage = pkg,
+                        detail = "Sessão $pkg não iniciou reprodução após o comando.",
+                    )
+                } else {
+                    MediaDispatchResult(
+                        status = "uncertain",
+                        confirmed = false,
+                        activePackage = pkg,
+                        detail = "Comando enviado para $pkg, mas o estado final não mudou dentro do tempo limite.",
+                    )
+                }
+            }
+        }
+
+        // 2. Fallback sem NotificationListener: usa AudioManager.isMusicActive antes e após KeyEvent
+        val wasPlaying = audio.isMusicActive
+        if ((normAction == "pause" || normAction == "stop") && !wasPlaying) {
+            return MediaDispatchResult(
+                status = "no_active_session",
+                confirmed = false,
+                detail = "Nenhuma reprodução ativa detectada no aparelho.",
+            )
+        }
+
         val eventTime = SystemClock.uptimeMillis()
         audio.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, keyCode, 0))
         audio.dispatchMediaKeyEvent(KeyEvent(eventTime, eventTime, KeyEvent.ACTION_UP, keyCode, 0))
-        return true
+
+        for (attempt in 0 until 6) {
+            runCatching { Thread.sleep(90) }
+            val nowPlaying = audio.isMusicActive
+            when (normAction) {
+                "play" -> if (nowPlaying) {
+                    return MediaDispatchResult("confirmed", true, detail = "Áudio de mídia ativo confirmado.")
+                }
+                "pause", "stop" -> if (!nowPlaying) {
+                    return MediaDispatchResult("confirmed", true, detail = "Áudio de mídia interrompido.")
+                }
+                "play_pause", "toggle" -> if (nowPlaying != wasPlaying) {
+                    return MediaDispatchResult("confirmed", true, detail = "Estado de reprodução alternado.")
+                }
+            }
+        }
+
+        val finalPlaying = audio.isMusicActive
+        return when (normAction) {
+            "play" -> MediaDispatchResult(
+                status = "no_active_session",
+                confirmed = false,
+                detail = "Nenhum áudio iniciou após o comando (player possivelmente fechado).",
+            )
+            "play_pause", "toggle" -> if (!finalPlaying && !wasPlaying) {
+                MediaDispatchResult(
+                    status = "no_active_session",
+                    confirmed = false,
+                    detail = "Nenhum player respondeu ao Play/Pause.",
+                )
+            } else {
+                MediaDispatchResult("uncertain", false, detail = "Sinal enviado, mas não foi possível confirmar a troca.")
+            }
+            "next", "previous", "prev" -> if (!wasPlaying && !finalPlaying) {
+                MediaDispatchResult(
+                    status = "no_active_session",
+                    confirmed = false,
+                    detail = "Nenhum player ativo para trocar de faixa.",
+                )
+            } else {
+                MediaDispatchResult("uncertain", false, detail = "Sinal enviado ao player ativo (faixa não verificável sem acesso a notificações).")
+            }
+            else -> MediaDispatchResult("uncertain", false, detail = "Comando enviado sem confirmação final do player.")
+        }
     }
+
+    fun dispatchMediaControl(context: Context, action: String): Boolean =
+        dispatchMediaControlVerified(context, action).confirmed
 
     fun triggerVibration(context: Context, durationMs: Long) {
         val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -169,12 +401,15 @@ object DeviceHardwareHelper {
         intent: Intent,
         fallbackLabel: String,
     ): Boolean {
-        val canDirectLaunch = context is Activity ||
-            MainActivity.isActivityResumed ||
+        val canDirectLaunch = MainActivity.isActivityResumed ||
             canLaunchActivitiesFromBackground(context)
         if (canDirectLaunch) {
-            context.startActivity(intent)
-            return true
+            return try {
+                context.startActivity(intent)
+                true
+            } catch (_: Throwable) {
+                false
+            }
         }
         try {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
@@ -273,12 +508,25 @@ object DeviceHardwareHelper {
         }
     }
 
+    private val combiningMarksRegex = Regex("""\p{InCombiningDiacriticalMarks}+""")
+
+    private fun foldAccents(text: String): String {
+        val norm = Normalizer.normalize(text, Normalizer.Form.NFD)
+        return combiningMarksRegex.replace(norm, "").lowercase(Locale.ROOT).trim()
+    }
+
     fun launchInstalledApp(context: Context, rawQuery: String): String {
-        return launchInstalledAppWithStatus(context, rawQuery).label
+        val res = launchInstalledAppWithStatus(context, rawQuery)
+        return if (res.openedImmediately) {
+            res.label
+        } else {
+            "${res.label} (atalho na notificação — ative 'Aparecer sobre outros apps' para abrir em 2º plano)"
+        }
     }
 
     fun launchInstalledAppWithStatus(context: Context, rawQuery: String): AppLaunchResult {
-        val query = sanitizeAppQuery(rawQuery).lowercase()
+        val rawClean = sanitizeAppQuery(rawQuery)
+        val query = foldAccents(rawClean)
         if (query.isEmpty()) throw IllegalArgumentException("Informe o nome do aplicativo.")
 
         when (query) {
@@ -354,16 +602,18 @@ object DeviceHardwareHelper {
         val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
-        val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
+        val resolveInfos = pm.queryIntentActivities(mainIntent, PackageManager.MATCH_ALL)
         for (info in resolveInfos) {
             val label = info.loadLabel(pm).toString()
             val pkg = info.activityInfo.packageName
-            if (label.lowercase().contains(query) || pkg.lowercase().contains(query)) {
-                val launch = pm.getLaunchIntentForPackage(pkg)
-                if (launch != null) {
-                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    return AppLaunchResult(label, startActivitySafely(context, launch, label))
+            if (foldAccents(label).contains(query) || foldAccents(pkg).contains(query)) {
+                val launch = pm.getLaunchIntentForPackage(pkg) ?: Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    component = ComponentName(pkg, info.activityInfo.name)
+                    addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                 }
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                return AppLaunchResult(label, startActivitySafely(context, launch, label))
             }
         }
 
@@ -467,6 +717,10 @@ object DeviceHardwareHelper {
         val capabilities = cm?.getNetworkCapabilities(cm.activeNetwork)
         val wifiConnected = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
         val cellularConnected = capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true
+        val bluetoothEnabled = runCatching {
+            val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager
+            bm?.adapter?.isEnabled == true
+        }.getOrDefault(false)
 
         val manufacturer = Build.MANUFACTURER.uppercase()
         val model = Build.MODEL
@@ -485,7 +739,8 @@ object DeviceHardwareHelper {
             "deviceModel" to deviceModel,
             "androidVersion" to "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
             "wifiConnected" to wifiConnected,
-            "cellularConnected" to cellularConnected
+            "cellularConnected" to cellularConnected,
+            "bluetoothEnabled" to bluetoothEnabled
         )
     }
 }

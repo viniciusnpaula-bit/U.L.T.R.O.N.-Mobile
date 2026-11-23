@@ -102,4 +102,36 @@ void main() {
     await tester.pump();
     expect(tickerStates.last, isTrue);
   });
+
+  testWidgets(
+      'CoreOrb reuses FragmentShader across multiple frames and disposes cleanly',
+      (tester) async {
+    final program =
+        await FragmentProgram.fromAsset('shaders/crimson_core.frag');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 240,
+            height: 240,
+            child: CoreOrb(
+              stage: CoreStage.center,
+              shaderProgram: program,
+              energy: 0.5,
+            ),
+          ),
+        ),
+      ),
+    );
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(tester.takeException(), isNull);
+
+    // Unmount and dispose cached shader cleanly
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
 }

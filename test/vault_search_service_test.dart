@@ -54,11 +54,11 @@ void main() {
     expect(index.engine, VaultSearchEngine.fts5);
 
     final stats = await index.sync();
-    // Seeded: Operador.md, Segundo_Cerebro.md, 3 default skills + 3 created notes = 8
-    expect(stats.indexed, 8);
+    // Seeded: Operador.md, Segundo_Cerebro.md, 4 default skills (incl. garantias) + 3 created notes = 9
+    expect(stats.indexed, 9);
     expect(stats.updated, 0);
     expect(stats.removed, 0);
-    expect(stats.totalDocuments, 8);
+    expect(stats.totalDocuments, 9);
 
     final hiddenHits = await index.search('secretos');
     expect(hiddenHits, isEmpty);
@@ -219,5 +219,100 @@ void main() {
     expect(hits.length, 1);
     expect(hits.first.path, 'Memoria/Sensores.md');
     expect(hits.first.snippet, contains('giroscópio'));
+  });
+
+  test('sync skips re-scan within minInterval and respects invalidateSyncCache',
+      () async {
+    var clock = DateTime.utc(2026, 11, 19, 15, 0, 0);
+    final db = await _openInMemoryDb();
+    final index = await VaultSearchService.open(
+      vaultRoot: tempDir,
+      database: db,
+      now: () => clock,
+    );
+    addTearDown(index.close);
+
+    final initial = await index.sync(minInterval: const Duration(seconds: 30));
+    expect(initial.indexed, greaterThan(0));
+
+    // Create a new note while inside TTL window
+    await vault.dailyNote(
+      DateTime(2026, 11, 19),
+      'Nota adicionada dentro da janela de cache TTL.',
+    );
+
+    clock = clock.add(const Duration(seconds: 10));
+    final cached = await index.sync(minInterval: const Duration(seconds: 30));
+    expect(cached.indexed, 0);
+    expect(cached.totalDocuments, initial.totalDocuments);
+
+    // Invalidating cache forces immediate sync on next call
+    index.invalidateSyncCache();
+    final invalidated =
+        await index.sync(minInterval: const Duration(seconds: 30));
+    expect(invalidated.indexed, 1);
+
+    // Adding another note and waiting past TTL syncs automatically
+    await vault.captureToInbox('Ideia após expiração do cache');
+    clock = clock.add(const Duration(seconds: 35));
+    final refreshed =
+        await index.sync(minInterval: const Duration(seconds: 30));
+    expect(refreshed.indexed, 1);
+  });
+
+  test('search and buildRagContext isolate results by pathPrefix and index Inventario',
+      () async {
+    await vault.appendToNote(
+      'Memoria/Engenharia/PLC.md',
+      '# Automação PLC\nSensor indutivo calibrado em 24V com protocolo Modbus.',
+      createIfMissing: true,
+    );
+    await vault.appendToNote(
+      'Memoria/Treino/Hipertrofia.md',
+      '# Treino A\nSensor de frequência cardíaca e protocolo de séries progressivas.',
+      createIfMissing: true,
+    );
+    await vault.appendToNote(
+      'Inventario/Multimetro_Fluke.md',
+      ObsidianService.buildWarrantyNoteMarkdown(
+        product: 'Multímetro Fluke 117',
+        purchaseDate: DateTime(2026, 5, 10),
+        warrantyMonths: 36,
+        resetProcedure: 'Substituir fusível 11A interno.',
+      ),
+      createIfMissing: true,
+    );
+
+    final db = await _openInMemoryDb();
+    final index = await VaultSearchService.open(
+      vaultRoot: tempDir,
+      database: db,
+    );
+    addTearDown(index.close);
+    await index.sync(force: true);
+
+    final engHits = await index.search(
+      'sensor protocolo',
+      limit: 5,
+      pathPrefix: 'Memoria/Engenharia',
+    );
+    expect(engHits.length, 1);
+    expect(engHits.first.path, 'Memoria/Engenharia/PLC.md');
+
+    final treinoRag = await index.buildRagContext(
+      'sensor protocolo',
+      limit: 5,
+      pathPrefix: 'Memoria/Treino/',
+    );
+    expect(treinoRag, contains('Memoria/Treino/Hipertrofia.md'));
+    expect(treinoRag, isNot(contains('Memoria/Engenharia/PLC.md')));
+
+    final invHits = await index.search(
+      'fusivel fluke',
+      limit: 3,
+      pathPrefix: 'Inventario',
+    );
+    expect(invHits.length, 1);
+    expect(invHits.first.path, 'Inventario/Multimetro_Fluke.md');
   });
 }
