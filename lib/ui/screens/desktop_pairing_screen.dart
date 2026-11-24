@@ -252,7 +252,7 @@ class _DesktopPairingScreenState extends State<DesktopPairingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0002),
+      backgroundColor: const Color(0xFF080808),
       appBar: AppBar(title: const Text('Parear com U.L.T.R.O.N. Desktop')),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -260,11 +260,11 @@ class _DesktopPairingScreenState extends State<DesktopPairingScreen> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: const Color(0xFF140407),
+              color: const Color(0xFF111114),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: _isPaired
-                    ? const Color(0xFFFF2A4B).withValues(alpha: 0.7)
+                    ? const Color(0xFFF10D28).withValues(alpha: 0.7)
                     : Colors.white24,
               ),
             ),
@@ -276,8 +276,8 @@ class _DesktopPairingScreenState extends State<DesktopPairingScreen> {
                     Icon(
                       _isPaired ? Icons.link : Icons.link_off,
                       color: _isPaired
-                          ? const Color(0xFF5CE69C)
-                          : const Color(0xFFFF8A9B),
+                          ? const Color(0xFF22C55E)
+                          : const Color(0xFF9A9AA3),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -303,7 +303,7 @@ class _DesktopPairingScreenState extends State<DesktopPairingScreen> {
                 const SizedBox(height: 8),
                 Text(
                   _status,
-                  style: const TextStyle(color: Color(0xFFFFB8C2), fontSize: 13),
+                  style: const TextStyle(color: Color(0xFF9A9AA3), fontSize: 13),
                 ),
                 if (_isPaired) ...[
                   const SizedBox(height: 12),
@@ -362,7 +362,7 @@ class _DesktopPairingScreenState extends State<DesktopPairingScreen> {
           FilledButton.icon(
             onPressed: _busy ? null : _scanQrCode,
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFC8102E),
+              backgroundColor: const Color(0xFFF10D28),
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
             icon: const Icon(Icons.qr_code_scanner),

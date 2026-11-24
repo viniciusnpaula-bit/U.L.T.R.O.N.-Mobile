@@ -74,6 +74,7 @@ class VoiceService {
   final FlutterSecureStorage _storage;
   final FishAudioTtsService _fishService;
   VoidCallback? onSpeakComplete;
+  void Function(bool speaking)? onSpeakingChanged;
   Future<void>? _initializing;
   bool _ready = false;
   bool _profileExplicitlySet = false;
@@ -111,6 +112,7 @@ class VoiceService {
 
   void _notifyNativeSpeaking(bool speaking) {
     isSpeaking = speaking;
+    onSpeakingChanged?.call(speaking);
     try {
       unawaited(
         _deviceChannel.invokeMethod<bool>('setUltronSpeaking',

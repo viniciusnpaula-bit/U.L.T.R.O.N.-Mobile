@@ -27,10 +27,10 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
-  static const _crimson = Color(0xFFE50914);
-  static const _rose = Color(0xFFFFA0A0);
-  static const _border = Color(0xFF51080D);
-  static const _surface = Color(0xFF2E0305);
+  static const _crimson = Color(0xFFF10D28);
+  static const _rose = Color(0xFF9A9AA3);
+  static const _border = Color(0xFF222228);
+  static const _surface = Color(0xFF18181D);
 
   String pin = '';
   String? firstEntry;
@@ -406,7 +406,7 @@ class _AuthScreenState extends State<AuthScreen> {
   Widget build(BuildContext context) {
     if (hasPin == null) {
       return const Scaffold(
-        backgroundColor: Color(0xFF0A0002),
+        backgroundColor: Color(0xFF080808),
         body: Center(
           child: CircularProgressIndicator(color: _crimson),
         ),
@@ -416,7 +416,7 @@ class _AuthScreenState extends State<AuthScreen> {
     final slotCount = max(4, pin.length);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0002),
+      backgroundColor: const Color(0xFF080808),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -458,7 +458,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             Text(
                               '5G',
                               style: TextStyle(
-                                color: Color(0xFFA89698),
+                                color: Color(0xFF9A9AA3),
                                 fontSize: 10,
                               ),
                             ),
@@ -466,13 +466,13 @@ class _AuthScreenState extends State<AuthScreen> {
                             Icon(
                               Icons.battery_full,
                               size: 11,
-                              color: Color(0xFFFFA0A0),
+                              color: Color(0xFF9A9AA3),
                             ),
                             SizedBox(width: 2),
                             Text(
                               'SECURE',
                               style: TextStyle(
-                                color: Color(0xFFA89698),
+                                color: Color(0xFF9A9AA3),
                                 fontSize: 10,
                               ),
                             ),
@@ -507,7 +507,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         Text(
                           isSetup ? 'MODO: SETUP' : 'ISOLAMENTO: 127.0.0.1',
                           style: const TextStyle(
-                            color: Color(0xFFA89698),
+                            color: Color(0xFF9A9AA3),
                             fontSize: 10,
                           ),
                         ),
@@ -529,19 +529,13 @@ class _AuthScreenState extends State<AuthScreen> {
                         height: 110,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
+                          color: const Color(0xFF111114),
                           border: Border.all(
                             color: busy
                                 ? _crimson
-                                : _crimson.withValues(alpha: 0.35),
+                                : const Color(0xFF222228),
                             width: 1.5,
                           ),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Color(0x2875020F),
-                              blurRadius: 22,
-                              spreadRadius: 2,
-                            ),
-                          ],
                         ),
                         child: Stack(
                           alignment: Alignment.center,
@@ -552,33 +546,24 @@ class _AuthScreenState extends State<AuthScreen> {
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
                                 border: Border.all(
-                                  color: _crimson.withValues(alpha: 0.22),
+                                  color: const Color(0xFF1A1A20),
                                 ),
                               ),
                             ),
                             Icon(
                               isSetup
-                                  ? Icons.radar
+                                  ? Icons.lock_outline_rounded
                                   : (busy
                                       ? Icons.face_retouching_natural
                                       : _biometricIcon),
-                              size: 38,
-                              color: _crimson,
+                              size: 36,
+                              color: busy ? _crimson : const Color(0xFFEEEEEE),
                             ),
                             if (busy)
                               Container(
-                                width: 92,
+                                width: 72,
                                 height: 2,
-                                decoration: const BoxDecoration(
-                                  color: _crimson,
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: _crimson,
-                                      blurRadius: 12,
-                                      spreadRadius: 1,
-                                    ),
-                                  ],
-                                ),
+                                color: _crimson,
                               ),
                           ],
                         ),
@@ -605,7 +590,7 @@ class _AuthScreenState extends State<AuthScreen> {
                           ? 'USE DE 4 A 8 DÍGITOS E TOQUE EM ENTRAR'
                           : 'PIN (BASE) • NFC (2º ESTÁGIO) • ${_biometricLabel.toUpperCase()} (TOTAL)',
                       style: const TextStyle(
-                        color: Color(0xFFA89698),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 9.5,
                       ),
                       textAlign: TextAlign.center,
@@ -626,7 +611,7 @@ class _AuthScreenState extends State<AuthScreen> {
                             borderRadius: BorderRadius.circular(14),
                             border: Border.all(
                               color: nfcHwEnabled
-                                  ? const Color(0xFFFF8A9B)
+                                  ? const Color(0xFF9A9AA3)
                                   : Colors.white24,
                             ),
                           ),
@@ -637,7 +622,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                 Icons.nfc,
                                 size: 13,
                                 color: nfcHwEnabled
-                                    ? const Color(0xFFFF8A9B)
+                                    ? const Color(0xFF9A9AA3)
                                     : Colors.white54,
                               ),
                               const SizedBox(width: 5),
@@ -649,7 +634,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                         : 'HARDWARE NFC INDISPONÍVEL'),
                                 style: TextStyle(
                                   color: nfcHwEnabled
-                                      ? const Color(0xFFFFC5CE)
+                                      ? const Color(0xFF9A9AA3)
                                       : Colors.white60,
                                   fontSize: 9.5,
                                   fontWeight: FontWeight.w600,
@@ -671,7 +656,7 @@ class _AuthScreenState extends State<AuthScreen> {
                           const Text(
                             'STATUS:',
                             style: TextStyle(
-                              color: Color(0xFFA89698),
+                              color: Color(0xFF9A9AA3),
                               fontSize: 10,
                             ),
                           ),
@@ -736,27 +721,19 @@ class _AuthScreenState extends State<AuthScreen> {
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
                               color: filled
-                                  ? const Color(0xFF2E0305)
-                                  : Colors.transparent,
-                              borderRadius: BorderRadius.circular(8),
+                                  ? const Color(0xFF18181D)
+                                  : const Color(0xFF111114),
+                              borderRadius: BorderRadius.circular(10),
                               border: Border.all(
                                 color: filled ? _crimson : _border,
                               ),
-                              boxShadow: filled
-                                  ? const [
-                                      BoxShadow(
-                                        color: Color(0x6675020F),
-                                        blurRadius: 8,
-                                      ),
-                                    ]
-                                  : null,
                             ),
                             child: Text(
-                              filled ? '●' : '_',
+                              filled ? '●' : '·',
                               style: TextStyle(
                                 color: filled
-                                    ? _crimson
-                                    : const Color(0xFF635355),
+                                    ? const Color(0xFFEEEEEE)
+                                    : const Color(0xFF686872),
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -802,7 +779,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         label: isSetup && pin.isEmpty && firstEntry != null
                             ? 'VOLTAR'
                             : 'LIMPAR',
-                        textColor: const Color(0xFFFFA0A0),
+                        textColor: const Color(0xFF9A9AA3),
                         fontSize: 11,
                         onTap: blocked ? null : _handleClear,
                       ),
@@ -812,8 +789,8 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                       _KeypadButton(
                         label: 'ENTRAR ✓',
-                        backgroundColor: const Color(0x1A75020F),
-                        borderColor: const Color(0x6675020F),
+                        backgroundColor: const Color(0xFF18181D),
+                        borderColor: const Color(0xFF18181D),
                         textColor: _crimson,
                         fontSize: 11,
                         onTap: blocked ? null : _submit,
@@ -832,14 +809,14 @@ class _AuthScreenState extends State<AuthScreen> {
                         Text(
                           'PBKDF2-SHA256 • FALHAS: $failures',
                           style: const TextStyle(
-                            color: Color(0xFFA89698),
+                            color: Color(0xFF9A9AA3),
                             fontSize: 10,
                           ),
                         ),
                         const Text(
                           'FAIL-CLOSED ATIVO',
                           style: TextStyle(
-                            color: Color(0xFFFFA0A0),
+                            color: Color(0xFF9A9AA3),
                             fontSize: 10,
                             fontWeight: FontWeight.bold,
                           ),
@@ -861,9 +838,9 @@ class _KeypadButton extends StatelessWidget {
   const _KeypadButton({
     required this.label,
     required this.onTap,
-    this.backgroundColor = const Color(0xFF2E0305),
-    this.borderColor = const Color(0xFF51080D),
-    this.textColor = const Color(0xFFF0E6E7),
+    this.backgroundColor = const Color(0xFF18181D),
+    this.borderColor = const Color(0xFF222228),
+    this.textColor = const Color(0xFFEEEEEE),
     this.fontSize = 15,
   });
 
@@ -884,13 +861,13 @@ class _KeypadButton extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(12),
-          splashColor: const Color(0x3375020F),
-          highlightColor: const Color(0x1A75020F),
+          splashColor: const Color(0xFF18181D),
+          highlightColor: const Color(0xFF18181D),
           child: Center(
             child: Text(
               label,
               style: TextStyle(
-                color: onTap == null ? const Color(0xFF635355) : textColor,
+                color: onTap == null ? const Color(0xFF686872) : textColor,
                 fontSize: fontSize,
                 fontWeight: FontWeight.bold,
               ),

@@ -26,14 +26,25 @@ import '../../services/nfc_auth_service.dart';
 import '../../services/obsidian_service.dart';
 import '../../services/reminder_service.dart';
 import '../../services/slash_command_parser.dart';
+import '../../services/smart_notification_triage_service.dart';
 import '../../services/speech_text.dart';
 import '../../services/stt_service.dart';
+import '../../services/user_preferences_service.dart';
 import '../../services/voice_corrections_service.dart';
 import '../../services/voice_pipeline_controller.dart';
 import '../../services/voice_service.dart';
 import '../../services/voice_shortcuts_service.dart';
+import '../models/ultron_section.dart';
+import '../sections/automation_section.dart';
+import '../sections/desktop_section.dart';
+import '../sections/engineering_section.dart';
+import '../sections/files_section.dart';
+import '../sections/memory_section.dart';
+import '../sections/settings_section.dart';
+import '../theme/ultron_theme.dart';
 import '../widgets/action_confirmation_dialog.dart';
 import '../widgets/core_orb.dart' show CoreOrb, CoreStage;
+import '../widgets/ultron_navigation_drawer.dart';
 import '../widgets/voice_selector_sheet.dart';
 import 'ai_settings_screen.dart';
 import 'conversation_history_screen.dart';
@@ -86,10 +97,11 @@ class CoreScreen extends StatefulWidget {
 }
 
 class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
-  static const _crimson = Color(0xFFE50914);
-  static const _rose = Color(0xFFFFA0A0);
-  static const _border = Color(0xFF51080D);
+  static const _crimson = UltronColors.crimson;
+  static const _rose = UltronColors.textSecondary;
+  static const _border = UltronColors.border;
 
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final commandController = TextEditingController();
   final quickNoteController = TextEditingController();
   final duressPinController = TextEditingController();
@@ -120,6 +132,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
 
   CoreStage stage = CoreStage.center;
   _ActivePanel panel = _ActivePanel.main;
+  UltronSection activeSection = UltronSection.home;
+  bool showHelp = false;
   bool sending = false;
   bool listeningVoice = false;
   bool hasUpdate = false;
@@ -131,6 +145,11 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   bool ecoVadSentinelRunning = false;
   double speechRms = 0.0;
   VoiceProfile selectedVoiceProfile = VoiceProfile.grave;
+  VadProfile vadProfile = VadProfile.balanced;
+  int vadHangoverMs = 850;
+  final UserPreferencesService _userPrefs = UserPreferencesService();
+  NotificationTriageConfig triageConfig = const NotificationTriageConfig();
+  String _lastResponsePreview = '';
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
   SessionTelemetry sessionTelemetry = SessionTelemetry.initial();
@@ -156,9 +175,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   static const _defaultFeed = <_FeedEntry>[
     _FeedEntry(
       isUser: false,
-      senderLabel: 'Kernel Local',
-      text:
-          'U.L.T.R.O.N. Mobile v1.5.0 online. Wake Word KWS Multi-Perfil (Ultron/Jarvis/Edith/Visão), Orbe Flutuante Android, Obsidian CRUD + Undo, Fluxos Agendados, Spotify OAuth PKCE, Ponte LAN Desktop v3.0.0 e Utilitários SAF prontos para comando!',
+      senderLabel: 'U.L.T.R.O.N.',
+      text: 'Pronto para comandos.',
       timestamp: 'ONLINE',
     ),
   ];
@@ -177,9 +195,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       capture: widget.captureSource ?? MethodChannelAudioCaptureSource(),
       stt: widget.sttService ?? GroqWhisperSttService(),
       voiceService: voiceService,
-      vadSegmenter: VadSegmenter(
+      vadSegmenter: VadSegmenter.adaptive(
         sampleRate: 16000,
-        silenceHangover: const Duration(milliseconds: 500),
+        profile: vadProfile,
+        silenceHangover: Duration(milliseconds: vadHangoverMs),
       ),
       corrections: VoiceCorrectionsService(),
       shortcuts: VoiceShortcutsService(),
@@ -211,7 +230,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              '🤫 Flip-to-Shush ativado: voz do núcleo silenciada.',
+              'Flip-to-Shush ativado: voz do núcleo silenciada.',
               style: TextStyle(fontSize: 11),
             ),
             duration: Duration(seconds: 2),
@@ -240,7 +259,12 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           unawaited(_handleIncomingSpotifyCallbackUri(uri)),
       onFloatingOrbTapped: (requiresUnlock) =>
           unawaited(_handleFloatingOrbTap(requiresUnlock)),
+      onStopSpeakingRequested: () => unawaited(voiceService.stop()),
+      onUrgentNotificationDetected: () =>
+          unawaited(_consumePendingUrgentNotifications()),
+      onTriageConfigChanged: () => unawaited(_loadTriageConfig()),
     );
+    voiceService.onSpeakingChanged = _onVoiceSpeakingChanged;
     desktopCommandListener = DesktopCommandListener(
       pairingService: desktopPairing,
       deviceService: deviceService,
@@ -277,7 +301,80 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       unawaited(_consumePendingNfcUnlock());
       unawaited(_consumePendingWorkflows());
       unawaited(_consumePendingSpotifyCallbackUri());
+      unawaited(_loadTriageConfig());
+      unawaited(_consumePendingUrgentNotifications());
     });
+  }
+
+  void _onVoiceSpeakingChanged(bool speaking) {
+    if (!mounted) return;
+    if (_lifecycleState != AppLifecycleState.resumed) {
+      if (speaking) {
+        unawaited(
+          deviceService.setBackgroundResponseState(
+            active: true,
+            phase: 'speaking',
+            preview: _lastResponsePreview,
+          ),
+        );
+      } else if (!sending) {
+        unawaited(deviceService.setBackgroundResponseState(active: false));
+      }
+    }
+  }
+
+  Future<void> _loadTriageConfig() async {
+    try {
+      final raw = await deviceService.getSmartNotificationTriageConfig();
+      if (raw != null && mounted) {
+        setState(() => triageConfig = NotificationTriageConfig.fromMap(raw));
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _updateTriageConfig(NotificationTriageConfig next) async {
+    HapticFeedback.selectionClick();
+    setState(() => triageConfig = next);
+    await deviceService.configureSmartNotificationTriage(next.toChannelMap());
+  }
+
+  Future<void> _consumePendingUrgentNotifications() async {
+    try {
+      final rawEvents = await deviceService.consumePendingUrgentNotifications();
+      if (rawEvents.isEmpty) return;
+      ObsidianService? obsidian;
+      var savedAny = false;
+      for (final raw in rawEvents) {
+        final event = UrgentNotificationEvent.fromMap(raw);
+        if (event.saveToObsidian) {
+          try {
+            obsidian ??= await ObsidianService.openDefaultVault();
+            await SmartNotificationTriageService.appendUrgentEventToObsidian(
+              event,
+              obsidian: obsidian,
+            );
+            savedAny = true;
+          } catch (_) {}
+        }
+        if (mounted) {
+          final pct = (event.score * 100).round();
+          _appendFeed(
+            _FeedEntry(
+              isUser: false,
+              senderLabel: 'Triagem Urgente (${event.appLabel})',
+              text:
+                  '${event.sender} [$pct%${event.reasons.isEmpty ? '' : ' · ${event.reasons}'}]: ${event.text}'
+                  '${event.saveToObsidian ? '\nSalvo em Inbox/Urgencias.' : ''}',
+              timestamp: _formatTime(event.timestamp.toLocal()),
+            ),
+          );
+        }
+      }
+      if (savedAny) {
+        deviceService.invalidateVaultSearchCache();
+      }
+      unawaited(_loadTriageConfig());
+    } catch (_) {}
   }
 
   void _syncFloatingOrbAuthState() {
@@ -304,7 +401,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            '🔒 Sessão bloqueada no AuthGate. Desbloqueie ou eleve a sessão para executar comandos pelo Orbe Flutuante.',
+            'Sessão bloqueada no AuthGate. Desbloqueie ou eleve a sessão para executar comandos pelo Orbe Flutuante.',
             style: TextStyle(fontSize: 11),
           ),
           duration: Duration(seconds: 3),
@@ -350,12 +447,12 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         isUser: false,
         senderLabel: 'Spotify OAuth 2.0 PKCE',
         text:
-            '✅ Conta Spotify conectada com sucesso via OAuth 2.0 PKCE! Use `/spotify estado` ou `"tocar <música> no spotify"`.',
+            'Conta Spotify conectada com sucesso via OAuth 2.0 PKCE! Use `/spotify estado` ou `"tocar <música> no spotify"`.',
         timestamp: _formatTime(now),
       ));
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('🎵 Spotify conectado com sucesso via PKCE!'),
+          content: Text('Spotify conectado com sucesso via PKCE!'),
         ),
       );
     } catch (e) {
@@ -363,7 +460,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       _appendFeed(_FeedEntry(
         isUser: false,
         senderLabel: 'Spotify OAuth 2.0 PKCE',
-        text: '⚠️ Falha no callback OAuth do Spotify: $e',
+        text: 'Falha no callback OAuth do Spotify: $e',
         timestamp: _formatTime(DateTime.now()),
       ));
     }
@@ -400,7 +497,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('🔑 Sessão elevada por NFC (${widget.gate.levelBadge})!'),
+            content: Text('Sessão elevada por NFC (${widget.gate.levelBadge})!'),
           ),
         );
       }
@@ -451,7 +548,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       _appendFeed(_FeedEntry(
         isUser: false,
         senderLabel: 'Bridge Desktop LAN',
-        text: '✅ Desktop pareado com sucesso!\n'
+        text: 'Desktop pareado com sucesso!\n'
             '• URL: ${config.baseUrl}\n'
             '• Dispositivo: ${config.deviceId}\n'
             'Use `/pc status` para testar a conexão.',
@@ -465,7 +562,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       _appendFeed(_FeedEntry(
         isUser: false,
         senderLabel: 'Bridge Desktop LAN',
-        text: '⚠️ Link de pareamento inválido: $e',
+        text: 'Link de pareamento inválido: $e',
         timestamp: timeStr,
       ));
     }
@@ -586,7 +683,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '🎙️ "${detectedProfile.label}" detectado! Escutando seu comando…',
+          '"${detectedProfile.label}" detectado! Escutando seu comando…',
           style: const TextStyle(fontSize: 11),
         ),
         duration: const Duration(seconds: 2),
@@ -606,7 +703,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF14040A),
+        backgroundColor: const Color(0xFF111114),
         title: const Text(
           'DIAGNÓSTICO DA PALAVRA DE ATIVAÇÃO',
           style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
@@ -732,6 +829,21 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       final killUrl = await deviceService.loadPcKillSwitchUrl();
       final lanSecret = await deviceService.loadPcLanSecret();
       final desktopCfg = await desktopPairing.loadPairing();
+      var loadedVadProfile = vadProfile;
+      var loadedVadHangover = vadHangoverMs;
+      try {
+        final savedProfile = await _userPrefs.get('vad_profile');
+        final savedHangover = await _userPrefs.get('vad_hangover_ms');
+        if (savedProfile != null) {
+          loadedVadProfile = VadProfile.fromId(savedProfile);
+        }
+        final parsedHangover = int.tryParse(savedHangover ?? '');
+        if (parsedHangover != null &&
+            parsedHangover >= 400 &&
+            parsedHangover <= 2000) {
+          loadedVadHangover = parsedHangover;
+        }
+      } catch (_) {}
       List<MobileSkill> loadedSkills = const [];
       try {
         final obsidian = await ObsidianService.openDefaultVault();
@@ -756,6 +868,12 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         nfcStatus = hwNfc;
         notificationSentinelEnabled = notifEnabled;
         selectedVoiceProfile = voiceService.profile;
+        vadProfile = loadedVadProfile;
+        vadHangoverMs = loadedVadHangover;
+        voicePipeline.updateVadConfig(
+          loadedVadProfile,
+          silenceHangover: Duration(milliseconds: loadedVadHangover),
+        );
         recentMessages = loadedMsgs;
         if (killUrl.isNotEmpty && pcKillSwitchUrlController.text.isEmpty) {
           pcKillSwitchUrlController.text = killUrl;
@@ -866,7 +984,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           isUser: false,
           senderLabel: 'Vigilância Energética',
           text:
-              '⚠️ Bateria crítica (${hwStatus.batteryLevel}%). Renderizador 60 FPS descarregado da GPU automaticamente para economia profunda.',
+              'Bateria crítica (${hwStatus.batteryLevel}%). Renderizador 60 FPS descarregado da GPU automaticamente para economia profunda.',
           timestamp: _formatTime(DateTime.now()),
         ),
       );
@@ -879,6 +997,35 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       setState(() => nightFocusMode = true);
       voiceService.setWhisperMode(true);
     }
+  }
+
+  Future<void> _updateVadProfile(VadProfile next) async {
+    HapticFeedback.selectionClick();
+    final nextHangover = next.defaultHangover.inMilliseconds;
+    setState(() {
+      vadProfile = next;
+      vadHangoverMs = nextHangover;
+    });
+    voicePipeline.updateVadConfig(
+      next,
+      silenceHangover: Duration(milliseconds: nextHangover),
+    );
+    try {
+      await _userPrefs.set('vad_profile', next.id);
+      await _userPrefs.set('vad_hangover_ms', '$nextHangover');
+    } catch (_) {}
+  }
+
+  Future<void> _updateVadHangoverMs(int ms) async {
+    HapticFeedback.selectionClick();
+    setState(() => vadHangoverMs = ms);
+    voicePipeline.updateVadConfig(
+      vadProfile,
+      silenceHangover: Duration(milliseconds: ms),
+    );
+    try {
+      await _userPrefs.set('vad_hangover_ms', '$ms');
+    } catch (_) {}
   }
 
   Future<void> _toggleNightFocusMode() async {
@@ -959,7 +1106,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     final sent = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2E0305),
+        backgroundColor: const Color(0xFF18181D),
         title: Text(
           'Responder ${msg.sender} (${msg.appLabel})',
           style: const TextStyle(
@@ -974,7 +1121,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           children: [
             Text(
               '"${msg.text}"',
-              style: const TextStyle(color: Color(0xFFA89698), fontSize: 11),
+              style: const TextStyle(color: Color(0xFF9A9AA3), fontSize: 11),
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
             ),
@@ -985,7 +1132,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               style: const TextStyle(color: Colors.white, fontSize: 12),
               decoration: const InputDecoration(
                 hintText: 'Digite sua resposta em 2º plano…',
-                hintStyle: TextStyle(color: Color(0xFF635355), fontSize: 11),
+                hintStyle: TextStyle(color: Color(0xFF686872), fontSize: 11),
               ),
             ),
           ],
@@ -1012,7 +1159,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('↩️ $status', style: const TextStyle(fontSize: 11)),
+          content: Text(status, style: const TextStyle(fontSize: 11)),
         ),
       );
       await voiceService.speak('Resposta enviada.');
@@ -1058,7 +1205,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            '🚫 Envio cancelado pelo Operador.',
+            'Envio cancelado pelo Operador.',
             style: TextStyle(fontSize: 11),
           ),
         ),
@@ -1219,10 +1366,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 : 'NÍVEL 2 • NFC OU BIOMETRIA';
 
             return AlertDialog(
-              backgroundColor: const Color(0xFF140204),
+              backgroundColor: const Color(0xFF111114),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
-                side: BorderSide(color: _crimson.withValues(alpha: 0.5)),
+                side: const BorderSide(color: _border),
               ),
               title: const Text(
                 'Elevar Nível de Acesso',
@@ -1255,9 +1402,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF2E0305),
+                        color: const Color(0xFF18181D),
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: _crimson.withValues(alpha: 0.4)),
+                        border: Border.all(color: _border),
                       ),
                       child: const Row(
                         children: [
@@ -1359,7 +1506,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF140204),
+          backgroundColor: const Color(0xFF111114),
           title: const Text('Ative o NFC no Android'),
           content: const Text(
             'O NFC do celular está desligado. Toque em "Abrir Ajustes NFC", ative a chave NFC e depois volte para cadastrar sua tag.',
@@ -1419,10 +1566,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               });
             }
             return AlertDialog(
-              backgroundColor: const Color(0xFF140204),
+              backgroundColor: const Color(0xFF111114),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
-                side: BorderSide(color: _crimson.withValues(alpha: 0.5)),
+                side: const BorderSide(color: _border),
               ),
               title: const Text(
                 'Cadastrar Chave NFC (Nível 2)',
@@ -1470,12 +1617,12 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF2E0305),
+                      color: const Color(0xFF18181D),
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(
                         color: capturedUid.isEmpty
                             ? Colors.white24
-                            : const Color(0xFF5CE69C),
+                            : const Color(0xFF22C55E),
                       ),
                     ),
                     child: Row(
@@ -1484,7 +1631,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           capturedUid.isEmpty ? Icons.nfc : Icons.check_circle,
                           color: capturedUid.isEmpty
                               ? _rose
-                              : const Color(0xFF5CE69C),
+                              : const Color(0xFF22C55E),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
@@ -1538,7 +1685,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       setState(() => nfcTags = list);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('✅ Chave NFC cadastrada com hash criptográfico!'),
+          content: Text('Chave NFC cadastrada com hash criptográfico!'),
         ),
       );
     }
@@ -1547,11 +1694,22 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycleState = state;
-    voicePipeline.handleLifecycleState(state);
+    // Pausa apenas o microfone de primeiro plano; mantém respostas longas e fala (TTS) ativas!
+    voicePipeline.handleLifecycleState(state, stopTtsOnBackground: false);
     if (state != AppLifecycleState.resumed) {
-      voiceService.stop();
+      if (widget.gate.isAuthenticated && (sending || voiceService.isSpeaking)) {
+        unawaited(
+          deviceService.setBackgroundResponseState(
+            active: true,
+            phase: sending ? 'thinking' : 'speaking',
+            preview: _lastResponsePreview,
+          ),
+        );
+      }
     } else {
+      unawaited(deviceService.setBackgroundResponseState(active: false));
       unawaited(_syncPendingBackgroundTurns());
+      unawaited(_consumePendingUrgentNotifications());
       _consumePendingWakeWord();
       unawaited(_consumePendingFloatingOrbTap());
       unawaited(_consumePendingTileAction());
@@ -1574,7 +1732,14 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       onWakeWord: null,
       onBackgroundTurn: null,
       onPairingUriReceived: null,
+      onStopSpeakingRequested: null,
+      onUrgentNotificationDetected: null,
+      onTriageConfigChanged: null,
     );
+    if (voiceService.onSpeakingChanged == _onVoiceSpeakingChanged) {
+      voiceService.onSpeakingChanged = null;
+    }
+    unawaited(deviceService.setBackgroundResponseState(active: false));
     voiceService.stop();
     commandController.dispose();
     quickNoteController.dispose();
@@ -1592,12 +1757,51 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     setState(() {
       stage = next;
       panel = _ActivePanel.main;
+      activeSection = UltronSection.home;
+      showHelp = false;
     });
   }
 
   void _setPanel(_ActivePanel next) {
     HapticFeedback.selectionClick();
-    setState(() => panel = next);
+    setState(() {
+      panel = next;
+      showHelp = next == _ActivePanel.help;
+      activeSection = switch (next) {
+        _ActivePanel.main => UltronSection.home,
+        _ActivePanel.device => UltronSection.device,
+        _ActivePanel.security => UltronSection.security,
+        _ActivePanel.providers => UltronSection.intelligence,
+        _ActivePanel.help => UltronSection.settings,
+      };
+    });
+  }
+
+  void _selectSection(UltronSection next, {bool closeDrawer = true}) {
+    HapticFeedback.selectionClick();
+    if (closeDrawer && (_scaffoldKey.currentState?.isDrawerOpen ?? false)) {
+      Navigator.of(context).pop();
+    }
+    if (next == UltronSection.device) {
+      unawaited(_refreshDeviceStatus());
+    }
+    setState(() {
+      activeSection = next;
+      showHelp = false;
+      panel = switch (next) {
+        UltronSection.home => _ActivePanel.main,
+        UltronSection.device => _ActivePanel.device,
+        UltronSection.intelligence => _ActivePanel.providers,
+        UltronSection.security => _ActivePanel.security,
+        _ => _ActivePanel.main,
+      };
+    });
+  }
+
+  Future<void> _executeSlashFromSection(String rawCommand) async {
+    _selectSection(UltronSection.home, closeDrawer: false);
+    commandController.text = rawCommand;
+    await saveCommand();
   }
 
   void _toggleAudio() {
@@ -1656,7 +1860,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '📓 Anotado em Diario/$fileName: "$trimmed"',
+            'Anotado em Diario/$fileName: "$trimmed"',
             style: const TextStyle(fontSize: 11),
           ),
           duration: const Duration(seconds: 2),
@@ -1666,7 +1870,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         _FeedEntry(
           isUser: false,
           senderLabel: 'Obsidian Vault',
-          text: '📓 Quick Capture salvo em Diario/$fileName: "$trimmed"',
+          text: 'Quick Capture salvo em Diario/$fileName: "$trimmed"',
           timestamp: ts,
         ),
       );
@@ -1697,7 +1901,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '💡 Ideia salva em Inbox/$fileName: "$trimmed"',
+            'Ideia salva em Inbox/$fileName: "$trimmed"',
             style: const TextStyle(fontSize: 11),
           ),
           duration: const Duration(seconds: 2),
@@ -1707,7 +1911,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         _FeedEntry(
           isUser: false,
           senderLabel: 'Segundo Cérebro',
-          text: '💡 Ideia capturada em Inbox/$fileName: "$trimmed"',
+          text: 'Ideia capturada em Inbox/$fileName: "$trimmed"',
           timestamp: ts,
         ),
       );
@@ -2076,13 +2280,39 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           timestamp: _formatTime(replyNow),
         ),
       );
+      _lastResponsePreview = postAudit.speakText.length > 140
+          ? '${postAudit.speakText.substring(0, 140)}...'
+          : postAudit.speakText;
       unawaited(_syncBackgroundVoiceConfig());
       var ttsMs = 0;
-      if (_isForegroundActive) {
-        final ttsSw = Stopwatch()..start();
-        await voiceService.speak(postAudit.speakText);
-        ttsSw.stop();
-        ttsMs = ttsSw.elapsedMilliseconds;
+      final isBackground = _lifecycleState != AppLifecycleState.resumed;
+      if (widget.gate.isAuthenticated) {
+        if (isBackground && !isAudioOn) {
+          unawaited(
+            deviceService.notifyBackgroundResponseReady(
+              title: 'U.L.T.R.O.N. (${reply.provider})',
+              body: displayReply,
+            ),
+          );
+          unawaited(deviceService.setBackgroundResponseState(active: false));
+        } else {
+          if (isBackground) {
+            unawaited(
+              deviceService.setBackgroundResponseState(
+                active: true,
+                phase: 'speaking',
+                preview: _lastResponsePreview,
+              ),
+            );
+          }
+          final ttsSw = Stopwatch()..start();
+          await voiceService.speak(postAudit.speakText);
+          ttsSw.stop();
+          ttsMs = ttsSw.elapsedMilliseconds;
+          if (_lifecycleState != AppLifecycleState.resumed) {
+            unawaited(deviceService.setBackgroundResponseState(active: false));
+          }
+        }
       }
       totalSw.stop();
       debugPrint(
@@ -2106,6 +2336,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       );
     } finally {
       if (mounted) setState(() => sending = false);
+      if (!voiceService.isSpeaking) {
+        unawaited(deviceService.setBackgroundResponseState(active: false));
+      }
     }
   }
 
@@ -2125,8 +2358,20 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           timestamp: _formatTime(DateTime.now()),
         ),
       );
-      if (_isForegroundActive) {
+      if (widget.gate.isAuthenticated) {
+        if (_lifecycleState != AppLifecycleState.resumed) {
+          unawaited(
+            deviceService.setBackgroundResponseState(
+              active: true,
+              phase: 'speaking',
+              preview: 'Briefing diário em andamento',
+            ),
+          );
+        }
         await voiceService.speak(briefing.speakText);
+        if (_lifecycleState != AppLifecycleState.resumed) {
+          unawaited(deviceService.setBackgroundResponseState(active: false));
+        }
       }
     } catch (e) {
       if (!mounted) return;
@@ -2134,19 +2379,22 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         _FeedEntry(
           isUser: false,
           senderLabel: 'Briefing Executivo (P4)',
-          text: '⚠️ Falha ao consolidar briefing: $e',
+          text: 'Falha ao consolidar briefing: $e',
           timestamp: _formatTime(DateTime.now()),
         ),
       );
     } finally {
       if (mounted) setState(() => sending = false);
+      if (!voiceService.isSpeaking) {
+        unawaited(deviceService.setBackgroundResponseState(active: false));
+      }
     }
   }
 
   Future<bool> _confirmActionSimulation(ActionSimulation sim) async {
     if (!mounted) return false;
     return _confirmActionGate(
-      title: '⚠️ ACTION GATE — ${sim.actionCode}',
+      title: 'ACTION GATE: ${sim.actionCode}',
       message:
           '${sim.description}\n\nImpacto: ${sim.estimatedImpact}\nAlvo: ${sim.targetResource}',
       confirmText: 'APROVAR',
@@ -2182,7 +2430,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       _appendFeed(_FeedEntry(
         isUser: false,
         senderLabel: 'Visão Multimodal',
-        text: '⚠️ Falha ao capturar imagem: $e',
+        text: 'Falha ao capturar imagem: $e',
         timestamp: _formatTime(DateTime.now()),
       ));
     }
@@ -2192,7 +2440,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF1A0204),
+      backgroundColor: const Color(0xFF111114),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -2220,7 +2468,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 ),
                 subtitle: const Text(
                   'OCR, QR Code, placas ou diagnóstico visual',
-                  style: TextStyle(color: Color(0xFFA89698), fontSize: 11),
+                  style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 11),
                 ),
                 onTap: () {
                   Navigator.of(ctx).pop();
@@ -2235,7 +2483,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 ),
                 subtitle: const Text(
                   'Prints de tela ou fotos salvas',
-                  style: TextStyle(color: Color(0xFFA89698), fontSize: 11),
+                  style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 11),
                 ),
                 onTap: () {
                   Navigator.of(ctx).pop();
@@ -2257,7 +2505,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2E0305),
+        backgroundColor: const Color(0xFF18181D),
         title: Text(
           title,
           style: const TextStyle(
@@ -2268,7 +2516,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         ),
         content: Text(
           message,
-          style: const TextStyle(color: Color(0xFFF0E6E7), fontSize: 11),
+          style: const TextStyle(color: Color(0xFFEEEEEE), fontSize: 11),
         ),
         actions: [
           TextButton(
@@ -2326,7 +2574,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            '⚠️ Sentinela não confirmou captura do microfone. Conceda permissão e veja o diagnóstico em CELULAR.',
+            'Sentinela não confirmou captura do microfone. Conceda permissão e veja o diagnóstico em CELULAR.',
             style: TextStyle(fontSize: 11),
           ),
         ),
@@ -2338,7 +2586,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text(
-              '🎙️ Sentinela ativa. Ative "Aparecer sobre outros apps" para abrir WhatsApp/apps em 2º plano.',
+              'Sentinela ativa. Ative "Aparecer sobre outros apps" para abrir WhatsApp/apps em 2º plano.',
               style: TextStyle(fontSize: 11),
             ),
             duration: const Duration(seconds: 6),
@@ -2353,7 +2601,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              '🎙️ Palavra de ativação "Ultron" ativa (1º e 2º plano).',
+              'Palavra de ativação "Ultron" ativa (1º e 2º plano).',
               style: TextStyle(fontSize: 11),
             ),
             duration: Duration(seconds: 2),
@@ -2498,7 +2746,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             isUser: false,
             senderLabel: 'Skill Engine (.md)',
             text:
-                '⚠️ Skill "$argument" não encontrada em Skills/. Use /skills para listar as disponíveis.',
+                'Skill "$argument" não encontrada em Skills/. Use /skills para listar as disponíveis.',
             timestamp: timeStr,
           ));
         }
@@ -2525,8 +2773,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             isUser: false,
             senderLabel: 'Segundo Cérebro',
             text: opened
-                ? '📓 Cofre Obsidian aberto no app oficial!\nLocal: ${obs.vaultPath}'
-                : '📓 Cofre Segundo Cérebro: ${obs.vaultPath}\nUse /note <texto> para o Diário ou "ideia: <texto>" para o Inbox.',
+                ? 'Cofre Obsidian aberto no app oficial!\nLocal: ${obs.vaultPath}'
+                : 'Cofre Segundo Cérebro: ${obs.vaultPath}\nUse /note <texto> para o Diário ou "ideia: <texto>" para o Inbox.',
             timestamp: timeStr,
           ));
         } else if (lowerArg == 'status') {
@@ -2839,19 +3087,19 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             isUser: false,
             senderLabel: 'Bridge Desktop LAN',
             text: 'Uso de /pc (Requer Biometria • Nível 3):\n'
-                '• /pc status — ping HMAC assinado no Desktop\n'
-                '• /pc abrir <app> — solicita abertura de app no PC\n'
-                '• /pc midia <play_pause|next|previous|mute> — controle de mídia\n'
-                '• /pc copiar <texto> | /pc colar — área de transferência LAN\n'
-                '• /pc skill <nome> — executa skill no Desktop\n'
-                '• /pc termico — proteção térmica e telemetria CPU/GPU/RAM\n'
-                '• /pc energia <high_performance|balanced|power_saver> — plano de energia\n'
-                '• /pc volume_app [listar|<app> <0-100>] — mixer de volume por app\n'
-                '• /pc travados — encerrar aplicativos travados\n'
-                '• /pc backup — executar backup incremental\n'
-                '• /pc limpar_disco — limpeza de temporários e cache\n'
-                '• /pc ejetar_usb — ejetar unidade USB ociosa\n'
-                '• /pc tool <nome_ferramenta>|[ALTO/CRITICO]|{json} — despachante genérico v3.0.0\n'
+                '• /pc status: ping HMAC assinado no Desktop\n'
+                '• /pc abrir <app>: solicita abertura de app no PC\n'
+                '• /pc midia <play_pause|next|previous|mute>: controle de mídia\n'
+                '• /pc copiar <texto> | /pc colar: área de transferência LAN\n'
+                '• /pc skill <nome>: executa skill no Desktop\n'
+                '• /pc termico: proteção térmica e telemetria CPU/GPU/RAM\n'
+                '• /pc energia <high_performance|balanced|power_saver>: plano de energia\n'
+                '• /pc volume_app [listar|<app> <0-100>]: mixer de volume por app\n'
+                '• /pc travados: encerrar aplicativos travados\n'
+                '• /pc backup: executar backup incremental\n'
+                '• /pc limpar_disco: limpeza de temporários e cache\n'
+                '• /pc ejetar_usb: ejetar unidade USB ociosa\n'
+                '• /pc tool <nome_ferramenta>|[ALTO/CRITICO]|{json}: despachante genérico v3.0.0\n'
                 '• Use /desktop para parear ou testar o endpoint LAN.',
             timestamp: timeStr,
           ));
@@ -2862,7 +3110,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           _appendFeed(_FeedEntry(
             isUser: false,
             senderLabel: 'Bridge Desktop LAN',
-            text: '⚠️ Subcomando /pc não reconhecido: "$trimmedArg".\n'
+            text: 'Subcomando /pc não reconhecido: "$trimmedArg".\n'
                 'Use: /pc status | abrir | midia | copiar | colar | skill | termico | energia | volume_app | travados | backup | limpar_disco | ejetar_usb | tool',
             timestamp: timeStr,
           ));
@@ -2878,12 +3126,12 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             actor: 'OPERATOR',
           );
           final statusMsg = res.deniedByUser
-              ? '🚫 Comando /pc ($pcCmd) cancelado ou requer Biometria (Nível 3).'
+              ? 'Comando /pc ($pcCmd) cancelado ou requer Biometria (Nível 3).'
               : res.sent
-                  ? '✅ PC ($pcCmd) -> HTTP ${res.statusCode ?? 200}'
+                  ? 'PC ($pcCmd) -> HTTP ${res.statusCode ?? 200}'
                       '${res.verifiedSignature ? ' [HMAC resposta verificado]' : ''}'
                       '${(res.responseBody ?? '').trim().isNotEmpty ? '\n${res.responseBody}' : ''}'
-                  : '⚠️ Falha no /pc ($pcCmd): ${res.error ?? 'HTTP ${res.statusCode}'}';
+                  : 'Falha no /pc ($pcCmd): ${res.error ?? 'HTTP ${res.statusCode}'}';
           _appendFeed(_FeedEntry(
             isUser: false,
             senderLabel: 'Bridge Desktop LAN',
@@ -2901,7 +3149,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           _appendFeed(_FeedEntry(
             isUser: false,
             senderLabel: 'Bridge Desktop LAN',
-            text: '⚠️ Falha no comando /pc ($pcCmd): $e',
+            text: 'Falha no comando /pc ($pcCmd): $e',
             timestamp: timeStr,
           ));
         }
@@ -3029,7 +3277,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           _appendFeed(_FeedEntry(
             isUser: false,
             senderLabel: 'Auditoria SHA-256 (P5)',
-            text: '⚠️ Falha ao carregar trilha de auditoria: $e',
+            text: 'Falha ao carregar trilha de auditoria: $e',
             timestamp: timeStr,
           ));
         }
@@ -3276,7 +3524,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               isUser: false,
               senderLabel: 'Modos Táticos',
               text:
-                  '⚠️ Modo "$arg" não reconhecido. Opções: `geral`, `engenharia`, `estudos`, `treino`, `dev`.',
+                  'Modo "$arg" não reconhecido. Opções: `geral`, `engenharia`, `estudos`, `treino`, `dev`.',
               timestamp: timeStr,
             ));
           } else {
@@ -3343,7 +3591,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   Future<void> _showTacticalModePicker() async {
     final chosen = await showModalBottomSheet<TacticalMode>(
       context: context,
-      backgroundColor: const Color(0xFF140204),
+      backgroundColor: const Color(0xFF111114),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
       ),
@@ -3371,7 +3619,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   contentPadding: const EdgeInsets.symmetric(horizontal: 6),
                   leading: Icon(
                     selected ? Icons.radio_button_checked : Icons.radio_button_off,
-                    color: selected ? _crimson : const Color(0xFFA89698),
+                    color: selected ? _crimson : const Color(0xFF9A9AA3),
                     size: 18,
                   ),
                   title: Text(
@@ -3385,7 +3633,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   subtitle: Text(
                     '${m.description}${m.vaultPathPrefix != null ? ' (${m.vaultPathPrefix}/)' : ''}',
                     style: const TextStyle(
-                      color: Color(0xFFA89698),
+                      color: Color(0xFF9A9AA3),
                       fontSize: 10,
                     ),
                   ),
@@ -3403,9 +3651,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildCamouflageScreen() => Scaffold(
-        backgroundColor: const Color(0xFF121212),
+        backgroundColor: const Color(0xFF111114),
         appBar: AppBar(
-          backgroundColor: const Color(0xFF1E1E1E),
+          backgroundColor: const Color(0xFF18181D),
           title: const Text(
             'Bloco de Notas Pessoal',
             style: TextStyle(fontSize: 15, color: Colors.white70),
@@ -3422,7 +3670,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           padding: const EdgeInsets.all(16),
           children: const [
             Card(
-              color: Color(0xFF1E1E1E),
+              color: Color(0xFF18181D),
               child: ListTile(
                 title: Text(
                   'Lista de Compras da Semana',
@@ -3440,7 +3688,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             ),
             SizedBox(height: 8),
             Card(
-              color: Color(0xFF1E1E1E),
+              color: Color(0xFF18181D),
               child: ListTile(
                 title: Text(
                   'Leituras Recomendadas',
@@ -3451,7 +3699,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   ),
                 ),
                 subtitle: Text(
-                  '• Arquitetura Limpa — Cap. 4\n• Revisar anotações da faculdade',
+                  '• Arquitetura Limpa: Cap. 4\n• Revisar anotações da faculdade',
                   style: TextStyle(color: Colors.white70, fontSize: 12),
                 ),
               ),
@@ -3460,946 +3708,1120 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         ),
       );
 
-  @override
-  Widget build(BuildContext context) {
-    if (widget.gate.isDuressMode) {
-      return _buildCamouflageScreen();
+  double _currentOrbEnergy() {
+    if (nightFocusMode) return 0.12;
+    if (voiceService.isSpeaking) return 0.92;
+    if (listeningVoice || voicePipeline.isCapturing) {
+      return (0.52 + speechRms * 0.6).clamp(0.38, 1.15);
     }
-    return Scaffold(
-      backgroundColor: const Color(0xFF0A0002),
-      body: SafeArea(
+    if (sending || voicePipeline.isTranscribing) return 0.62;
+    return 0.22;
+  }
+
+  String _currentAssistantStatus() {
+    if (voicePipeline.lastError != null && voicePipeline.lastError!.isNotEmpty) {
+      return 'Atenção no áudio';
+    }
+    if (voicePipeline.isPushToTalkActive) return 'Gravando voz...';
+    if (listeningVoice || voicePipeline.isCapturing) return 'Escutando...';
+    if (voicePipeline.isTranscribing) return 'Transcrevendo...';
+    if (sending) return 'Processando...';
+    if (voiceService.isSpeaking) return 'Respondendo...';
+    if (nightFocusMode) return 'Foco noturno';
+    return 'Pronto';
+  }
+
+  String _currentVoiceTelemetryLabel() {
+    if (listeningVoice || voicePipeline.isCapturing) return 'Ouvindo';
+    if (voicePipeline.isTranscribing) return 'Transcrevendo';
+    if (voiceService.isSpeaking) return 'Falando';
+    if (!isAudioOn) return 'Mudo';
+    if (voicePipeline.isContinuousEnabled || ecoVadSentinelRunning) {
+      return 'Sentinela';
+    }
+    return 'Pronta';
+  }
+
+  Future<void> _showNotificationsSheet() async {
+    HapticFeedback.selectionClick();
+    unawaited(_refreshDeviceStatus());
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: UltronColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        side: BorderSide(color: UltronColors.border),
+      ),
+      builder: (ctx) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 20),
           child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Global Operator Selector Bar
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xCC0A0002),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _border),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Notificações e avisos',
+                    style: TextStyle(
+                      color: UltronColors.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    icon: const Icon(
+                      Icons.close_rounded,
+                      size: 20,
+                      color: UltronColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (hasUpdate) ...[
+                UltronActionTile(
+                  icon: Icons.system_update_outlined,
+                  title: 'Atualização disponível',
+                  subtitle: 'Versão instalada: $installedVersion',
+                  accentColor: UltronColors.crimson,
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const UpdateScreen()),
+                    );
+                  },
                 ),
-                child: Row(
+                const SizedBox(height: 10),
+              ],
+              if (!notificationSentinelEnabled)
+                UltronActionTile(
+                  icon: Icons.notifications_off_outlined,
+                  title: 'Leitor de notificações desativado',
+                  subtitle: 'Ative nas permissões do Android para resumir mensagens',
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    unawaited(deviceService.openNotificationListenerSettings());
+                  },
+                )
+              else if (recentMessages.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Text(
+                    'Nenhuma notificação recente capturada.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: UltronColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
+                )
+              else ...[
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 240),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: recentMessages.take(6).length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, index) {
+                      final msg = recentMessages[index];
+                      return UltronActionTile(
+                        icon: Icons.chat_bubble_outline_rounded,
+                        title: '${msg.sender} (${msg.appLabel})',
+                        subtitle: msg.text,
+                        onTap: () {
+                          Navigator.of(ctx).pop();
+                          unawaited(_promptReplyToMessage(msg));
+                        },
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
                   children: [
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: const BoxDecoration(
-                            color: _crimson,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(color: _crimson, blurRadius: 6),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        const Text(
-                          'U.L.T.R.O.N. 2.0',
-                          style: TextStyle(
-                            color: _crimson,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.1,
-                          ),
-                        ),
-                      ],
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          unawaited(_readRecentMessagesAloud());
+                        },
+                        icon: const Icon(Icons.volume_up_outlined, size: 16),
+                        label: const Text('Ler em voz alta'),
+                      ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _TopNavPill(
-                              label: 'NÚCLEO',
-                              selected: panel == _ActivePanel.main,
-                              onTap: () => _setPanel(_ActivePanel.main),
+                      child: FilledButton.icon(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          unawaited(_summarizeMessagesWithAi());
+                        },
+                        icon: const Icon(Icons.auto_awesome_outlined, size: 16),
+                        label: const Text('Resumir'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavigationContent({required bool isDrawer}) =>
+      UltronNavigationContent(
+        selected: activeSection,
+        onSelect: (section) => _selectSection(section, closeDrawer: isDrawer),
+        versionLabel: installedVersion,
+        accessBadge: widget.gate.levelBadge,
+        hasBiometricAccess: widget.gate.hasBiometricAccess,
+        hasUpdate: hasUpdate,
+        onLock: () {
+          if (isDrawer && (_scaffoldKey.currentState?.isDrawerOpen ?? false)) {
+            Navigator.of(context).pop();
+          }
+          _lockSession();
+        },
+      );
+
+  Widget _buildTopBar({required bool isWide}) {
+    final continuousActive =
+        voicePipeline.isContinuousEnabled || ecoVadSentinelRunning;
+    final hasNotifBadge = hasUpdate || recentMessages.isNotEmpty;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+      child: SizedBox(
+        height: 44,
+        child: Row(
+          children: [
+            if (!isWide)
+              IconButton(
+                key: const Key('ultron_menu_button'),
+                tooltip: 'Abrir menu',
+                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                icon: const Icon(
+                  Icons.menu_rounded,
+                  size: 22,
+                  color: UltronColors.textPrimary,
+                ),
+              )
+            else
+              const SizedBox(width: 10),
+            Expanded(
+              child: activeSection == UltronSection.home
+                  ? GestureDetector(
+                      onTap: _showTacticalModePicker,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text(
+                            'U.L.T.R.O.N.',
+                            style: TextStyle(
+                              color: UltronColors.textPrimary,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 1.0,
                             ),
-                            const SizedBox(width: 4),
-                            _TopNavPill(
-                              label: 'VOZ',
-                              selected: false,
-                              onTap: _openVoiceSelector,
-                            ),
-                            const SizedBox(width: 4),
-                            _TopNavPill(
-                              label: 'CELULAR',
-                              selected: panel == _ActivePanel.device,
-                              onTap: () {
-                                _refreshDeviceStatus();
-                                _setPanel(_ActivePanel.device);
-                              },
-                            ),
-                            const SizedBox(width: 4),
-                            _TopNavPill(
-                              label: 'PROVEDORES',
-                              selected: panel == _ActivePanel.providers,
-                              onTap: () => _setPanel(_ActivePanel.providers),
-                            ),
-                            const SizedBox(width: 4),
-                            _TopNavPill(
-                              label: 'MEMÓRIA',
-                              selected: false,
-                              onTap: () => _runCommand(UltronCommand.memory),
-                            ),
-                            const SizedBox(width: 4),
-                            _TopNavPill(
-                              label: 'DESKTOP',
-                              selected: false,
-                              onTap: () => _runCommand(UltronCommand.desktop),
-                            ),
-                            const SizedBox(width: 4),
-                            _TopNavPill(
-                              label: 'HISTÓRICO',
-                              selected: false,
-                              onTap: _openHistory,
-                            ),
-                            const SizedBox(width: 4),
-                            InkWell(
-                              onTap: _toggleAudio,
-                              borderRadius: BorderRadius.circular(6),
-                              child: Padding(
-                                padding: const EdgeInsets.all(4),
-                                child: Icon(
-                                  isAudioOn
-                                      ? Icons.volume_up
-                                      : Icons.volume_off,
-                                  size: 15,
-                                  color: isAudioOn
-                                      ? _crimson
-                                      : const Color(0xFFA89698),
+                          ),
+                          if (!activeTacticalMode.isGeneral) ...[
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: UltronColors.crimsonDark,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: UltronColors.crimsonBorder,
+                                ),
+                              ),
+                              child: Text(
+                                activeTacticalMode.shortLabel,
+                                style: const TextStyle(
+                                  color: UltronColors.textPrimary,
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
                           ],
-                        ),
+                        ],
+                      ),
+                    )
+                  : Text(
+                      showHelp ? 'Guia de comandos' : activeSection.label,
+                      style: const TextStyle(
+                        color: UltronColors.textPrimary,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-
-              // Main Screen Content (Main / Device / Security / Help / Providers)
-              Expanded(
-                child: switch (panel) {
-                  _ActivePanel.main => _buildMainPanel(),
-                  _ActivePanel.device => _buildDevicePanel(),
-                  _ActivePanel.security => _buildSecurityPanel(),
-                  _ActivePanel.help => _buildHelpPanel(),
-                  _ActivePanel.providers => _buildProvidersPanel(),
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTelemetryBar() {
-    final t = sessionTelemetry;
-    final tokPrefix = t.hasEstimatedTokens ? '~' : '';
-    final promptStr = SessionTelemetry.formatCompactTokens(t.promptTokens);
-    final compStr = SessionTelemetry.formatCompactTokens(t.completionTokens);
-    final latStr = t.lastLatencyMs > 0 ? '${t.lastLatencyMs}ms' : '--ms';
-    final btOn = deviceStatus?.bluetoothEnabled ?? false;
-    final lanActive = pcLanConfigured || desktopCommandListener.isRunning;
-    final voiceLabel = isAudioOn
-        ? selectedVoiceProfile.name.toUpperCase()
-        : 'MUDO';
-
-    return Container(
-      key: const Key('cockpit_telemetry_bar'),
-      margin: const EdgeInsets.only(top: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-      decoration: BoxDecoration(
-        color: const Color(0xFF140204),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: _border),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            GestureDetector(
-              key: const Key('cockpit_mode_chip'),
-              onTap: _showTacticalModePicker,
-              child: _telemetryChip(
-                label: 'MODO',
-                value: activeTacticalMode.shortLabel,
-                accent: activeTacticalMode.isGeneral
-                    ? _rose
-                    : const Color(0xFF64B5F6),
-              ),
             ),
-            const SizedBox(width: 6),
-            _telemetryChip(
-              label: 'BRAIN',
-              value: t.lastProvider,
-              accent: t.lastUsedFailover
-                  ? const Color(0xFFFFB74D)
-                  : _crimson,
-              badge: t.lastUsedFailover ? 'FAILOVER' : null,
-            ),
-            const SizedBox(width: 6),
-            _telemetryChip(
-              label: 'LAT',
-              value: latStr,
-              accent: t.lastLatencyMs > 4000
-                  ? const Color(0xFFFFB74D)
-                  : const Color(0xFF5CE69C),
-            ),
-            const SizedBox(width: 6),
-            _telemetryChip(
-              label: 'TOK',
-              value: '$tokPrefix↑$promptStr ↓$compStr · T${t.turns}',
-              accent: _rose,
-            ),
-            const SizedBox(width: 6),
-            _telemetryChip(
-              label: 'LAN',
-              value: lanActive ? 'ON' : 'OFF',
-              accent: lanActive
-                  ? const Color(0xFF5CE69C)
-                  : const Color(0xFF8A7A7C),
-            ),
-            const SizedBox(width: 6),
-            _telemetryChip(
-              label: 'BT',
-              value: btOn ? 'ON' : 'OFF',
-              accent: btOn
-                  ? const Color(0xFF64B5F6)
-                  : const Color(0xFF8A7A7C),
-            ),
-            const SizedBox(width: 6),
-            _telemetryChip(
-              label: 'VOZ',
-              value: voiceLabel,
-              accent: isAudioOn ? _rose : const Color(0xFF8A7A7C),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _telemetryChip({
-    required String label,
-    required String value,
-    required Color accent,
-    String? badge,
-  }) =>
-      Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          color: const Color(0xFF210407),
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: accent.withValues(alpha: 0.35)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '$label ',
-              style: TextStyle(
-                color: accent,
-                fontSize: 8.5,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'monospace',
-              ),
-            ),
-            Text(
-              value,
-              style: const TextStyle(
-                color: Color(0xFFEADCDD),
-                fontSize: 8.5,
-                fontFamily: 'monospace',
-              ),
-            ),
-            if (badge != null) ...[
-              const SizedBox(width: 4),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFB74D).withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-                child: Text(
-                  badge,
-                  style: const TextStyle(
-                    color: Color(0xFFFFB74D),
-                    fontSize: 7.5,
-                    fontWeight: FontWeight.bold,
-                    fontFamily: 'monospace',
+            if (activeSection == UltronSection.home) ...[
+              IconButton(
+                tooltip: 'Notificações e avisos',
+                onPressed: _showNotificationsSheet,
+                icon: Badge(
+                  isLabelVisible: hasNotifBadge,
+                  backgroundColor: UltronColors.crimson,
+                  smallSize: 7,
+                  child: const Icon(
+                    Icons.notifications_none_rounded,
+                    size: 21,
+                    color: UltronColors.textSecondary,
                   ),
                 ),
               ),
-            ],
-          ],
-        ),
-      );
-
-  Widget _buildMainPanel() => Column(
-        children: [
-          // Operational Header
-          Container(
-            padding: const EdgeInsets.only(bottom: 8),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: _border)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      GestureDetector(
-                        onTap: widget.gate.hasBiometricAccess
-                            ? null
-                            : () => _elevateSessionTo(
-                                  AccessLevel.sovereign,
-                                  'Eleve seu acesso usando NFC (Nível 2) ou Biometria (Nível 3).',
-                                ),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF2E0305),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: widget.gate.hasBiometricAccess
-                                  ? const Color(0xFF5CE69C).withValues(alpha: 0.6)
-                                  : _crimson.withValues(alpha: 0.5),
-                            ),
-                          ),
-                          child: Text(
-                            widget.gate.levelBadge,
-                            style: TextStyle(
-                              color: widget.gate.hasBiometricAccess
-                                  ? const Color(0xFF5CE69C)
-                                  : _crimson,
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        'PROVEDOR: $activeProviderUsed',
-                        style: const TextStyle(
-                          color: Color(0xFFA89698),
-                          fontSize: 10,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
-                      ),
-                      tooltip: torchOn
-                          ? 'Desligar Lanterna (/lanterna)'
-                          : 'Ligar Lanterna (/lanterna)',
-                      onPressed: _toggleTorchQuick,
-                      icon: Icon(
-                        torchOn
-                            ? Icons.flashlight_on
-                            : Icons.flashlight_off_outlined,
-                        size: 16,
-                        color: torchOn ? _crimson : const Color(0xFFA89698),
-                      ),
-                    ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
-                      ),
-                      tooltip: 'Controles do Celular (/device)',
-                      onPressed: () {
-                        _refreshDeviceStatus();
-                        _setPanel(_ActivePanel.device);
-                      },
-                      icon: const Icon(
-                        Icons.phonelink_setup,
-                        size: 16,
-                        color: Color(0xFFA89698),
-                      ),
-                    ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
-                      ),
-                      tooltip: 'Comandos Rápidos (/help)',
-                      onPressed: () => _setPanel(_ActivePanel.help),
-                      icon: const Icon(
-                        Icons.help_outline,
-                        size: 16,
-                        color: Color(0xFFA89698),
-                      ),
-                    ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
-                      ),
-                      tooltip: 'Painel de Segurança (/security)',
-                      onPressed: () => _runCommand(UltronCommand.security),
-                      icon: const Icon(
-                        Icons.shield_outlined,
-                        size: 16,
-                        color: Color(0xFFA89698),
-                      ),
-                    ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
-                      ),
-                      tooltip: hasUpdate
-                          ? 'Atualização disponível'
-                          : 'Atualizador GitHub',
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const UpdateScreen(),
-                        ),
-                      ),
-                      icon: Badge(
-                        isLabelVisible: hasUpdate,
-                        child: const Icon(
-                          Icons.cloud_download_outlined,
-                          size: 16,
-                          color: Color(0xFFA89698),
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 28,
-                        minHeight: 28,
-                      ),
-                      tooltip: 'Bloquear Sessão',
-                      onPressed: _lockSession,
-                      icon: const Icon(
-                        Icons.lock_outline,
-                        size: 16,
-                        color: Color(0xFFFFA0A0),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          // Tactical Telemetry Bar (Cockpit AMOLED Carmesim)
-          _buildTelemetryBar(),
-
-          // Dynamic Center Area: Normal vs Palco vs Fullscreen
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: switch (stage) {
-                CoreStage.center => _buildNormalStage(),
-                CoreStage.corner => _buildPalcoStage(),
-                CoreStage.hidden => _buildFullscreenStage(),
-              },
-            ),
-          ),
-
-          // Main Command Bar: 'EI, ULTRON ›'
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: const Color(0xFF2E0305),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _border),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (pendingVisionImage != null)
-                  Container(
-                    margin: const EdgeInsets.only(top: 4, bottom: 6),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1A0204),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: _crimson.withValues(alpha: 0.45),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
-                          child: Image.memory(
-                            base64Decode(pendingVisionImage!.base64),
-                            width: 40,
-                            height: 40,
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'VISÃO MULTIMODAL ANEXADA',
-                                style: TextStyle(
-                                  color: _rose,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              Text(
-                                '${pendingVisionImage!.width}x${pendingVisionImage!.height} · ${pendingVisionImage!.sizeKbLabel} · JPEG VLM',
-                                style: const TextStyle(
-                                  color: Color(0xFFA89698),
-                                  fontSize: 9,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Remover imagem anexada',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 28,
-                            minHeight: 28,
-                          ),
-                          onPressed: () =>
-                              setState(() => pendingVisionImage = null),
-                          icon: const Icon(
-                            Icons.close,
-                            size: 16,
-                            color: _rose,
-                          ),
-                        ),
-                      ],
+              const SizedBox(width: 2),
+              Tooltip(
+                message: continuousActive
+                    ? 'Desativar escuta contínua ("Ultron")'
+                    : 'Ativar escuta contínua ("Ultron")',
+                child: Material(
+                  color: continuousActive
+                      ? UltronColors.crimsonDark
+                      : UltronColors.surface,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    side: BorderSide(
+                      color: continuousActive
+                          ? UltronColors.crimsonBorder
+                          : UltronColors.border,
                     ),
                   ),
-                Row(
-                  children: [
-                    const Text(
-                      '›',
-                      style: TextStyle(
-                        color: _crimson,
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: sending ? null : _toggleContinuousListening,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: TextField(
-                        controller: commandController,
-                        enabled: !sending,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => saveCommand(),
-                        style: const TextStyle(
-                          color: Color(0xFFF0E6E7),
-                          fontSize: 12,
-                        ),
-                        decoration: InputDecoration(
-                          isDense: true,
-                          border: InputBorder.none,
-                          hintText: voicePipeline.isPushToTalkActive
-                              ? '🎤 Gravando Push-to-Talk…'
-                              : listeningVoice
-                                  ? '🎤 Ouvindo ao vivo (toque no 🎤 para concluir)…'
-                                  : sending
-                                      ? 'Consultando provedor ativo…'
-                                      : pendingVisionImage != null
-                                          ? 'Pergunte sobre a imagem anexada…'
-                                          : 'Comando ou toque/segure 🎤...',
-                          hintStyle: TextStyle(
-                            color: (listeningVoice ||
-                                    voicePipeline.isPushToTalkActive)
-                                ? _crimson
-                                : const Color(0xFF635355),
-                            fontSize: 11,
-                          ),
-                        ),
-                      ),
-                    ),
-                    Tooltip(
-                      message: 'Visão Multimodal (Câmera / Galeria)',
-                      child: InkWell(
-                        onTap: sending ? null : _openVisionPicker,
-                        borderRadius: BorderRadius.circular(8),
-                        child: Container(
-                          padding: const EdgeInsets.all(6),
-                          margin: const EdgeInsets.only(right: 5),
-                          decoration: BoxDecoration(
-                            color: pendingVisionImage != null
-                                ? _crimson.withValues(alpha: 0.25)
-                                : const Color(0xFF2E0305),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: pendingVisionImage != null
-                                  ? _crimson
-                                  : _crimson.withValues(alpha: 0.25),
-                            ),
-                          ),
-                          child: Icon(
-                            Icons.photo_camera_outlined,
-                            size: 14,
-                            color: pendingVisionImage != null
-                                ? _rose
-                                : const Color(0xFF993036),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Builder(
-                      builder: (context) {
-                        final continuousActive =
-                            voicePipeline.isContinuousEnabled ||
-                                ecoVadSentinelRunning;
-                        return Tooltip(
-                          message: continuousActive
-                              ? 'Desativar escuta contínua ("Ultron")'
-                              : 'Ativar escuta contínua ("Ultron")',
-                          child: InkWell(
-                            onTap: sending ? null : _toggleContinuousListening,
-                            borderRadius: BorderRadius.circular(8),
-                            child: Container(
-                              padding: const EdgeInsets.all(6),
-                              margin: const EdgeInsets.only(right: 5),
-                              decoration: BoxDecoration(
-                                color: continuousActive
-                                    ? _crimson.withValues(alpha: 0.25)
-                                    : const Color(0xFF2E0305),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: continuousActive
-                                      ? _crimson
-                                      : _crimson.withValues(alpha: 0.25),
-                                ),
-                              ),
-                              child: Icon(
-                                continuousActive
-                                    ? Icons.hearing
-                                    : Icons.hearing_disabled,
-                                size: 14,
-                                color: continuousActive
-                                    ? _rose
-                                    : const Color(0xFF993036),
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    GestureDetector(
-                      onLongPressStart: sending
-                          ? null
-                          : (_) async {
-                              HapticFeedback.mediumImpact();
-                              await voicePipeline.startPushToTalk();
-                            },
-                      onLongPressEnd: (_) async {
-                        await voicePipeline.stopPushToTalk();
-                      },
-                      onLongPressCancel: () async {
-                        await voicePipeline.stopPushToTalk();
-                      },
-                      child: InkWell(
-                        onTap: sending
-                            ? null
-                            : () => voicePipeline.isPushToTalkActive
-                                ? _togglePushToTalk()
-                                : _startVoiceInput(),
-                        borderRadius: BorderRadius.circular(8),
-                        child: Container(
-                          padding: const EdgeInsets.all(6),
-                          margin: const EdgeInsets.only(right: 5),
-                          decoration: BoxDecoration(
-                            color: (listeningVoice ||
-                                    voicePipeline.isPushToTalkActive)
-                                ? _crimson.withValues(alpha: 0.25)
-                                : const Color(0xFF2E0305),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: (listeningVoice ||
-                                      voicePipeline.isPushToTalkActive)
-                                  ? _crimson
-                                  : _crimson.withValues(alpha: 0.35),
-                            ),
-                          ),
-                          child: Icon(
-                            (listeningVoice || voicePipeline.isPushToTalkActive)
-                                ? Icons.graphic_eq
-                                : Icons.mic,
-                            size: 14,
-                            color: (listeningVoice ||
-                                    voicePipeline.isPushToTalkActive)
-                                ? _rose
-                                : _crimson,
-                          ),
-                        ),
-                      ),
-                    ),
-                    InkWell(
-                      onTap: sending ? null : saveCommand,
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        padding: const EdgeInsets.all(7),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2E0305),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(
-                          Icons.send,
-                          size: 14,
-                          color: _crimson,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      );
-
-  Widget _buildNormalStage() => Column(
-        children: [
-          // Large Central Crimson Orbital Core
-          Column(
-            children: [
-              GestureDetector(
-                onTap: () => _setStage(CoreStage.corner),
-                child: SizedBox(
-                  width: 210,
-                  height: 210,
-                  child: CoreOrb(
-                    stage: stage,
-                    shaderProgram: widget.shaderProgram,
-                    energy: nightFocusMode
-                        ? 0.12
-                        : voiceService.isSpeaking
-                            ? 0.95
-                            : (listeningVoice || voicePipeline.isCapturing)
-                                ? (0.55 + speechRms * 0.65).clamp(0.4, 1.2)
-                                : sending
-                                    ? 0.65
-                                    : 0.22,
-                  ),
-                ),
-              ),
-              Text(
-                nightFocusMode
-                    ? 'U.L.T.R.O.N. CORE [FOCO NOTURNO]'
-                    : listeningVoice
-                        ? 'U.L.T.R.O.N. CORE [ESCUTANDO AO VIVO]'
-                        : 'U.L.T.R.O.N. CORE',
-                style: const TextStyle(
-                  color: _rose,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 2.5,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                nightFocusMode
-                    ? 'Modo Sussurro TTS Ativo • Flip-to-Shush Pronto'
-                    : 'Voz Neural (${selectedVoiceProfile.label}) • Anti-Eco Half-Duplex • Flip-to-Shush',
-                style: const TextStyle(
-                  color: Color(0xFF635355),
-                  fontSize: 9,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 6,
-                runSpacing: 4,
-                children: [
-                  _StageChip(
-                    label: listeningVoice ? 'CONCLUIR FALA' : 'FALAR POR VOZ',
-                    icon: listeningVoice ? Icons.graphic_eq : Icons.mic,
-                    onTap: _startVoiceInput,
-                  ),
-                  _StageChip(
-                    label: 'CALAR VOZ',
-                    icon: Icons.volume_off_outlined,
-                    onTap: () {
-                      HapticFeedback.selectionClick();
-                      voiceService.stop();
-                    },
-                  ),
-                  _StageChip(
-                    label: 'MODO PALCO',
-                    icon: Icons.picture_in_picture_alt_outlined,
-                    onTap: () => _setStage(CoreStage.corner),
-                  ),
-                  _StageChip(
-                    label: 'TELA CHEIA',
-                    icon: Icons.open_in_full,
-                    onTap: () => _setStage(CoreStage.hidden),
-                  ),
-                  _StageChip(
-                    label: nightFocusMode ? 'NOTURNO ON' : 'NOTURNO',
-                    icon: Icons.nights_stay_outlined,
-                    onTap: _toggleNightFocusMode,
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-
-          // Live Chat / Telemetry Feed
-          Expanded(
-            child: ListView.builder(
-              controller: scrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              itemCount: feed.length + (sending ? 1 : 0),
-              itemBuilder: (context, index) {
-                if (index == feed.length) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 10,
-                          height: 10,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: _crimson,
-                          ),
-                        ),
-                        SizedBox(width: 8),
-                        Text(
-                          'Consultando provedor ativo com failover...',
-                          style: TextStyle(
-                            color: _crimson,
-                            fontSize: 10,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                final msg = feed[index];
-                return Align(
-                  alignment:
-                      msg.isUser ? Alignment.centerRight : Alignment.centerLeft,
-                  child: GestureDetector(
-                    onLongPress: () {
-                      HapticFeedback.selectionClick();
-                      Clipboard.setData(ClipboardData(text: msg.text));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Mensagem copiada para a área de transferência.',
-                            style: TextStyle(fontSize: 11),
-                          ),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                    child: Container(
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.84,
-                      ),
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: msg.isUser
-                            ? const Color(0xFF2E0305)
-                            : const Color(0xFF0A0002),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: msg.isUser
-                              ? _crimson.withValues(alpha: 0.4)
-                              : _border,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                msg.senderLabel,
-                                style: TextStyle(
-                                  color: msg.isUser ? _rose : _crimson,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              Text(
-                                msg.timestamp,
-                                style: const TextStyle(
-                                  color: Color(0xFF635355),
-                                  fontSize: 9,
-                                ),
-                              ),
-                            ],
+                          Icon(
+                            continuousActive
+                                ? Icons.hearing
+                                : Icons.hearing_disabled,
+                            size: 16,
+                            color: continuousActive
+                                ? UltronColors.textPrimary
+                                : UltronColors.textSecondary,
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            msg.text,
-                            style: TextStyle(
-                              color: msg.isUser
-                                  ? const Color(0xFFF0E6E7)
-                                  : const Color(0xFFF0E6E7),
-                              fontSize: 11,
-                              height: 1.4,
+                          const SizedBox(width: 5),
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: (continuousActive || listeningVoice)
+                                  ? UltronColors.positive
+                                  : UltronColors.textMuted,
                             ),
                           ),
                         ],
                       ),
                     ),
                   ),
-                );
-              },
+                ),
+              ),
+            ] else if (activeSection == UltronSection.device) ...[
+              IconButton(
+                tooltip: 'Atualizar telemetria',
+                onPressed: _refreshDeviceStatus,
+                icon: const Icon(
+                  Icons.refresh_rounded,
+                  size: 20,
+                  color: UltronColors.textSecondary,
+                ),
+              ),
+            ] else if (activeSection == UltronSection.intelligence) ...[
+              IconButton(
+                tooltip: 'Configurações avançadas de IA',
+                onPressed: _openSettings,
+                icon: const Icon(
+                  Icons.tune_rounded,
+                  size: 20,
+                  color: UltronColors.textSecondary,
+                ),
+              ),
+            ] else if (showHelp) ...[
+              TextButton(
+                onPressed: () => setState(() => showHelp = false),
+                child: const Text('Fechar'),
+              ),
+            ] else ...[
+              IconButton(
+                tooltip: 'Voltar para Início',
+                onPressed: () => _selectSection(
+                  UltronSection.home,
+                  closeDrawer: false,
+                ),
+                icon: const Icon(
+                  Icons.chat_bubble_outline_rounded,
+                  size: 19,
+                  color: UltronColors.textSecondary,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActiveSectionBody() {
+    if (showHelp) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: _buildHelpPanel(),
+      );
+    }
+    return switch (activeSection) {
+      UltronSection.home => _buildMainPanel(),
+      UltronSection.device => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: _buildDevicePanel(),
+        ),
+      UltronSection.intelligence => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: _buildProvidersPanel(),
+        ),
+      UltronSection.memory => MemorySection(
+          quickNoteController: quickNoteController,
+          mobileSkills: mobileSkills,
+          onSaveDailyNote: _saveQuickObsidianNote,
+          onSaveInbox: _saveObsidianInbox,
+          onExecuteSkill: _executeSkillCard,
+          onRunSlashCommand: _executeSlashFromSection,
+          onOpenHistory: _openHistory,
+          onOpenMemorySettings: () => _runCommand(UltronCommand.memory),
+        ),
+      UltronSection.engineering => EngineeringSection(
+          onRunSlashCommand: _executeSlashFromSection,
+        ),
+      UltronSection.files => FilesSection(
+          onRunSlashCommand: _executeSlashFromSection,
+          pcLanConfigured: pcLanConfigured || desktopCommandListener.isRunning,
+        ),
+      UltronSection.automation => AutomationSection(
+          triageConfig: triageConfig,
+          notificationPermissionGranted: notificationSentinelEnabled,
+          onUpdateTriageConfig: (cfg) => unawaited(_updateTriageConfig(cfg)),
+          onOpenNotificationAccessSettings: () =>
+              unawaited(deviceService.openNotificationListenerSettings()),
+          onRunSlashCommand: _executeSlashFromSection,
+        ),
+      UltronSection.desktop => DesktopSection(
+          pcLanConfigured: pcLanConfigured,
+          listenerRunning: desktopCommandListener.isRunning,
+          onOpenPairingScreen: () => _runCommand(UltronCommand.desktop),
+          onRunSlashCommand: _executeSlashFromSection,
+        ),
+      UltronSection.security => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: _buildSecurityPanel(),
+        ),
+      UltronSection.settings => SettingsSection(
+          isAudioOn: isAudioOn,
+          nightFocusMode: nightFocusMode,
+          selectedVoiceProfile: selectedVoiceProfile,
+          vadProfile: vadProfile,
+          vadHangoverMs: vadHangoverMs,
+          vadNoiseFloorDb: voicePipeline.vadSegmenter.noiseFloorDb,
+          vadStartThresholdDb:
+              voicePipeline.vadSegmenter.effectiveStartThresholdDb,
+          installedVersion: installedVersion,
+          hasUpdate: hasUpdate,
+          onToggleAudio: _toggleAudio,
+          onToggleNightFocus: _toggleNightFocusMode,
+          onSelectVadProfile: (p) => unawaited(_updateVadProfile(p)),
+          onSelectVadHangoverMs: (ms) => unawaited(_updateVadHangoverMs(ms)),
+          onOpenVoiceSelector: _openVoiceSelector,
+          onOpenWakeDiagnostics: _showWakeWordDiagnostics,
+          onOpenAiSettings: _openSettings,
+          onOpenUpdates: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const UpdateScreen()),
+          ),
+          onOpenHelp: () => setState(() => showHelp = true),
+        ),
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.gate.isDuressMode) {
+      return _buildCamouflageScreen();
+    }
+    final isWide = MediaQuery.sizeOf(context).width >= 840;
+
+    final mainColumn = SafeArea(
+      child: Column(
+        children: [
+          _buildTopBar(isWide: isWide),
+          Expanded(child: _buildActiveSectionBody()),
+        ],
+      ),
+    );
+
+    return Scaffold(
+      key: _scaffoldKey,
+      backgroundColor: UltronColors.bg,
+      drawer: isWide
+          ? null
+          : Drawer(
+              width: 276,
+              backgroundColor: UltronColors.surface,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.zero,
+              ),
+              child: _buildNavigationContent(isDrawer: true),
+            ),
+      body: isWide
+          ? Row(
+              children: [
+                SizedBox(
+                  width: 260,
+                  child: _buildNavigationContent(isDrawer: false),
+                ),
+                const VerticalDivider(
+                  width: 1,
+                  thickness: 1,
+                  color: UltronColors.borderSubtle,
+                ),
+                Expanded(child: mainColumn),
+              ],
+            )
+          : mainColumn,
+    );
+  }
+
+  Widget _buildTelemetryBar() {
+    final t = sessionTelemetry;
+    final latStr = t.lastLatencyMs > 0 ? '${t.lastLatencyMs}ms' : '--';
+    final voiceLabel = _currentVoiceTelemetryLabel();
+    final providerShort = t.lastProvider.length > 16
+        ? '${t.lastProvider.substring(0, 15)}…'
+        : t.lastProvider;
+
+    return Container(
+      key: const Key('cockpit_telemetry_bar'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Center(
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GestureDetector(
+                key: const Key('cockpit_mode_chip'),
+                onTap: _showTacticalModePicker,
+                child: _telemetryDatum(
+                  label: 'Modo',
+                  value: activeTacticalMode.shortLabel,
+                  valueColor: activeTacticalMode.isGeneral
+                      ? UltronColors.textSecondary
+                      : UltronColors.crimson,
+                ),
+              ),
+              _telemetryDot(),
+              _telemetryDatum(
+                label: 'Brain',
+                value: providerShort,
+                valueColor: t.lastUsedFailover
+                    ? UltronColors.warning
+                    : UltronColors.textSecondary,
+              ),
+              _telemetryDot(),
+              _telemetryDatum(
+                label: 'Latência',
+                value: latStr,
+                valueColor: t.lastLatencyMs > 4000
+                    ? UltronColors.warning
+                    : UltronColors.textSecondary,
+              ),
+              _telemetryDot(),
+              _telemetryDatum(
+                label: 'Voz',
+                value: voiceLabel,
+                valueColor: (listeningVoice ||
+                        voicePipeline.isContinuousEnabled ||
+                        ecoVadSentinelRunning)
+                    ? UltronColors.positive
+                    : UltronColors.textSecondary,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _telemetryDot() => const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 7),
+        child: Text(
+          '·',
+          style: TextStyle(
+            color: UltronColors.textMuted,
+            fontSize: 11,
+          ),
+        ),
+      );
+
+  Widget _telemetryDatum({
+    required String label,
+    required String value,
+    required Color valueColor,
+  }) =>
+      Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$label: ',
+            style: UltronTheme.mono.copyWith(
+              color: UltronColors.textMuted,
+              fontSize: 10.5,
+            ),
+          ),
+          Text(
+            value,
+            style: UltronTheme.mono.copyWith(
+              color: valueColor,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
       );
+
+  Widget _buildMainPanel() => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: Column(
+          children: [
+            // Área central dinâmica: Início limpo / Conversa / Palco / Tela Cheia
+            Expanded(
+              child: switch (stage) {
+                CoreStage.center => _buildNormalStage(),
+                CoreStage.corner => _buildPalcoStage(),
+                CoreStage.hidden => _buildFullscreenStage(),
+              },
+            ),
+
+            // Campo único de interação (texto, voz e imagem anexada)
+            Container(
+              padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+              decoration: BoxDecoration(
+                color: UltronColors.surface,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(
+                  color: (listeningVoice || voicePipeline.isPushToTalkActive)
+                      ? UltronColors.crimson
+                      : UltronColors.border,
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (pendingVisionImage != null)
+                    Container(
+                      margin: const EdgeInsets.only(top: 4, bottom: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: UltronColors.surfaceElevated,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: UltronColors.crimsonBorder),
+                      ),
+                      child: Row(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.memory(
+                              base64Decode(pendingVisionImage!.base64),
+                              width: 40,
+                              height: 40,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Imagem anexada',
+                                  style: TextStyle(
+                                    color: UltronColors.textPrimary,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                Text(
+                                  '${pendingVisionImage!.width}x${pendingVisionImage!.height} · ${pendingVisionImage!.sizeKbLabel}',
+                                  style: UltronTheme.mono.copyWith(
+                                    color: UltronColors.textSecondary,
+                                    fontSize: 10.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Remover imagem anexada',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
+                            onPressed: () =>
+                                setState(() => pendingVisionImage = null),
+                            icon: const Icon(
+                              Icons.close_rounded,
+                              size: 18,
+                              color: UltronColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: commandController,
+                          enabled: !sending,
+                          textInputAction: TextInputAction.send,
+                          onSubmitted: (_) => saveCommand(),
+                          style: const TextStyle(
+                            color: UltronColors.textPrimary,
+                            fontSize: 14,
+                          ),
+                          decoration: InputDecoration(
+                            isDense: true,
+                            filled: false,
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            contentPadding:
+                                const EdgeInsets.symmetric(vertical: 10),
+                            hintText: voicePipeline.isPushToTalkActive
+                                ? 'Gravando Push-to-Talk...'
+                                : listeningVoice
+                                    ? 'Ouvindo... toque no microfone para concluir'
+                                    : sending
+                                        ? 'Processando resposta...'
+                                        : pendingVisionImage != null
+                                            ? 'Pergunte sobre a imagem anexada...'
+                                            : 'Pergunte ou digite um /comando...',
+                            hintStyle: TextStyle(
+                              color: (listeningVoice ||
+                                      voicePipeline.isPushToTalkActive)
+                                  ? UltronColors.crimson
+                                  : UltronColors.textMuted,
+                              fontSize: 13.5,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      GestureDetector(
+                        onLongPressStart: sending
+                            ? null
+                            : (_) async {
+                                HapticFeedback.mediumImpact();
+                                await voicePipeline.startPushToTalk();
+                              },
+                        onLongPressEnd: (_) async {
+                          await voicePipeline.stopPushToTalk();
+                        },
+                        onLongPressCancel: () async {
+                          await voicePipeline.stopPushToTalk();
+                        },
+                        child: IconButton(
+                          tooltip: 'Falar por voz (segure para Push-to-Talk)',
+                          onPressed: sending
+                              ? null
+                              : () => voicePipeline.isPushToTalkActive
+                                  ? _togglePushToTalk()
+                                  : _startVoiceInput(),
+                          style: IconButton.styleFrom(
+                            backgroundColor: (listeningVoice ||
+                                    voicePipeline.isPushToTalkActive)
+                                ? UltronColors.crimsonDark
+                                : Colors.transparent,
+                            minimumSize: const Size(38, 38),
+                            padding: EdgeInsets.zero,
+                          ),
+                          icon: Icon(
+                            (listeningVoice || voicePipeline.isPushToTalkActive)
+                                ? Icons.graphic_eq_rounded
+                                : Icons.mic_none_rounded,
+                            size: 20,
+                            color: (listeningVoice ||
+                                    voicePipeline.isPushToTalkActive)
+                                ? UltronColors.crimson
+                                : UltronColors.textSecondary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Material(
+                        color: sending
+                            ? UltronColors.surfaceElevated
+                            : UltronColors.crimson,
+                        shape: const CircleBorder(),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: sending ? null : saveCommand,
+                          child: SizedBox(
+                            width: 36,
+                            height: 36,
+                            child: Center(
+                              child: sending
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: UltronColors.crimson,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.arrow_upward_rounded,
+                                      size: 18,
+                                      color: UltronColors.textPrimary,
+                                    ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 10),
+
+            // Apenas 3 atalhos rápidos essenciais
+            Row(
+              children: [
+                Expanded(
+                  child: _HomeQuickAction(
+                    icon: listeningVoice
+                        ? Icons.graphic_eq_rounded
+                        : Icons.mic_none_rounded,
+                    label: listeningVoice ? 'Concluir' : 'Voz',
+                    active: listeningVoice,
+                    onTap: _startVoiceInput,
+                    onLongPress: _openVoiceSelector,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _HomeQuickAction(
+                    icon: Icons.center_focus_weak_rounded,
+                    label: 'Visão',
+                    active: pendingVisionImage != null,
+                    onTap: _openVisionPicker,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _HomeQuickAction(
+                    icon: Icons.devices_outlined,
+                    label: 'Dispositivos',
+                    active: false,
+                    onTap: () => _selectSection(
+                      UltronSection.device,
+                      closeDrawer: false,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 4),
+
+            // Telemetria compacta inferior (dados reais dos serviços)
+            _buildTelemetryBar(),
+          ],
+        ),
+      );
+
+  Widget _buildNormalStage() {
+    final hasConversation = feed.length > 1 || sending;
+    final statusText = _currentAssistantStatus();
+    final orbEnergy = _currentOrbEnergy();
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 120;
+
+    if (!hasConversation) {
+      final idleSize = keyboardOpen ? 120.0 : 220.0;
+      return Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GestureDetector(
+                onTap: _startVoiceInput,
+                onLongPress: () => _setStage(CoreStage.corner),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  width: idleSize,
+                  height: idleSize,
+                  child: CoreOrb(
+                    stage: stage,
+                    shaderProgram: widget.shaderProgram,
+                    energy: orbEnergy,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                statusText,
+                style: TextStyle(
+                  color: (listeningVoice || sending)
+                      ? UltronColors.crimson
+                      : UltronColors.textPrimary,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                nightFocusMode
+                    ? 'Modo sussurro ativo. Toque no núcleo para falar.'
+                    : 'Toque no núcleo para falar ou envie um comando abaixo.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: UltronColors.textSecondary,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final chatOrbSize = keyboardOpen ? 84.0 : 176.0;
+
+    return Column(
+      children: [
+        // Núcleo geodésico 3D sempre visível na tela do chat
+        Padding(
+          padding: const EdgeInsets.only(top: 2, bottom: 8),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GestureDetector(
+                    onTap: _startVoiceInput,
+                    onLongPress: () => _setStage(CoreStage.corner),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeOutCubic,
+                      width: chatOrbSize,
+                      height: chatOrbSize,
+                      child: CoreOrb(
+                        stage: stage,
+                        shaderProgram: widget.shaderProgram,
+                        energy: orbEnergy,
+                      ),
+                    ),
+                  ),
+                  if (!keyboardOpen) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      statusText,
+                      style: TextStyle(
+                        color: (listeningVoice || sending)
+                            ? UltronColors.crimson
+                            : UltronColors.textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              Positioned(
+                top: 0,
+                right: 0,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (voiceService.isSpeaking)
+                      IconButton(
+                        tooltip: 'Silenciar resposta',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () {
+                          HapticFeedback.selectionClick();
+                          voiceService.stop();
+                        },
+                        icon: const Icon(
+                          Icons.stop_circle_outlined,
+                          size: 19,
+                          color: UltronColors.crimson,
+                        ),
+                      ),
+                    IconButton(
+                      tooltip: 'Nova conversa limpa',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () {
+                        HapticFeedback.selectionClick();
+                        setState(() => feed = _defaultFeed);
+                      },
+                      icon: const Icon(
+                        Icons.refresh_rounded,
+                        size: 18,
+                        color: UltronColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Feed limpo de mensagens
+        Expanded(
+          child: ListView.builder(
+            controller: scrollController,
+            padding: const EdgeInsets.only(bottom: 12),
+            itemCount: feed.length + (sending ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index == feed.length) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: UltronColors.crimson,
+                        ),
+                      ),
+                      SizedBox(width: 10),
+                      Text(
+                        'Processando resposta...',
+                        style: TextStyle(
+                          color: UltronColors.textSecondary,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              final msg = feed[index];
+              // Oculta o placeholder inicial assim que a conversa real começa
+              if (index == 0 &&
+                  !msg.isUser &&
+                  msg.timestamp == 'ONLINE' &&
+                  feed.length > 1) {
+                return const SizedBox.shrink();
+              }
+              return Align(
+                alignment:
+                    msg.isUser ? Alignment.centerRight : Alignment.centerLeft,
+                child: GestureDetector(
+                  onLongPress: () {
+                    HapticFeedback.selectionClick();
+                    Clipboard.setData(ClipboardData(text: msg.text));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Mensagem copiada para a área de transferência.',
+                        ),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    constraints: BoxConstraints(
+                      maxWidth: MediaQuery.sizeOf(context).width * 0.85,
+                    ),
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 11,
+                    ),
+                    decoration: BoxDecoration(
+                      color: msg.isUser
+                          ? UltronColors.surfaceElevated
+                          : UltronColors.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: msg.isUser
+                            ? UltronColors.border
+                            : UltronColors.borderSubtle,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              msg.isUser ? 'Você' : msg.senderLabel,
+                              style: TextStyle(
+                                color: msg.isUser
+                                    ? UltronColors.textSecondary
+                                    : UltronColors.textPrimary,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              msg.timestamp,
+                              style: UltronTheme.mono.copyWith(
+                                color: UltronColors.textMuted,
+                                fontSize: 10,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          msg.text,
+                          style: const TextStyle(
+                            color: UltronColors.textPrimary,
+                            fontSize: 14,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
 
   Widget _buildPalcoStage() => Column(
         children: [
@@ -4407,7 +4829,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             child: Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFF0A0002),
+                color: const Color(0xFF080808),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: _border),
               ),
@@ -4448,7 +4870,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                 child: Icon(
                                   Icons.open_in_full,
                                   size: 14,
-                                  color: Color(0xFFA89698),
+                                  color: Color(0xFF9A9AA3),
                                 ),
                               ),
                             ),
@@ -4460,7 +4882,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                 child: Icon(
                                   Icons.close,
                                   size: 15,
-                                  color: Color(0xFFA89698),
+                                  color: Color(0xFF9A9AA3),
                                 ),
                               ),
                             ),
@@ -4473,7 +4895,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   const Text(
                     'Relatório de Telemetria e Comandos',
                     style: TextStyle(
-                      color: Color(0xFFF0E6E7),
+                      color: Color(0xFFEEEEEE),
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
                     ),
@@ -4482,7 +4904,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   const Text(
                     'O Palco isola documentos e saídas sem abrir novas janelas. Toque nos comandos rápidos abaixo para executar localmente:',
                     style: TextStyle(
-                      color: Color(0xFFA89698),
+                      color: Color(0xFF9A9AA3),
                       fontSize: 11,
                       height: 1.4,
                     ),
@@ -4523,7 +4945,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF2E0305),
+                        color: const Color(0xFF18181D),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: _border),
                       ),
@@ -4542,7 +4964,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           Text(
                             feed.last.text,
                             style: const TextStyle(
-                              color: Color(0xFFF0E6E7),
+                              color: Color(0xFFEEEEEE),
                               fontSize: 11,
                               height: 1.4,
                             ),
@@ -4562,7 +4984,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               const Text(
                 'Núcleo em modo sentinela (toque para restaurar)',
                 style: TextStyle(
-                  color: Color(0xFF635355),
+                  color: Color(0xFF686872),
                   fontSize: 10,
                 ),
               ),
@@ -4586,9 +5008,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   Widget _buildFullscreenStage() => Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFF2E0305),
+          color: const Color(0xFF18181D),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _crimson.withValues(alpha: 0.3)),
+          border: Border.all(color: _border),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -4616,13 +5038,13 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                         Icon(
                           Icons.close_fullscreen,
                           size: 13,
-                          color: Color(0xFFA89698),
+                          color: Color(0xFF9A9AA3),
                         ),
                         SizedBox(width: 4),
                         Text(
                           'REDUZIR',
                           style: TextStyle(
-                            color: Color(0xFFA89698),
+                            color: Color(0xFF9A9AA3),
                             fontSize: 10,
                           ),
                         ),
@@ -4643,14 +5065,14 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 const SizedBox(height: 10),
                 _TelemetryBox(
                   title: 'FAILOVER DE PROVEDORES:',
-                  titleColor: const Color(0xFFFFA0A0),
+                  titleColor: const Color(0xFF9A9AA3),
                   body:
                       'Ativo: $activeProviderUsed • Chave protegida no Keystore Android',
                 ),
                 const SizedBox(height: 10),
                 _TelemetryBox(
                   title: 'ATUALIZAÇÃO GITHUB:',
-                  titleColor: const Color(0xFFA89698),
+                  titleColor: const Color(0xFF9A9AA3),
                   body:
                       'Versão instalada $installedVersion (${hasUpdate ? 'Nova release disponível' : 'Release verificado'})',
                 ),
@@ -4662,7 +5084,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 onPressed: () => _setStage(CoreStage.center),
                 style: FilledButton.styleFrom(
                   backgroundColor: _crimson,
-                  foregroundColor: const Color(0xFFF0E6E7),
+                  foregroundColor: const Color(0xFFEEEEEE),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -4691,52 +5113,6 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     return Column(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Container(
-          padding: const EdgeInsets.only(bottom: 10),
-          decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: _border)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              InkWell(
-                onTap: () => _setPanel(_ActivePanel.main),
-                child: const Row(
-                  children: [
-                    Icon(Icons.arrow_back, size: 15, color: _crimson),
-                    SizedBox(width: 4),
-                    Text(
-                      'VOLTAR',
-                      style: TextStyle(
-                        color: _crimson,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Row(
-                children: [
-                  Icon(
-                    Icons.verified_user_outlined,
-                    size: 15,
-                    color: Colors.white,
-                  ),
-                  SizedBox(width: 6),
-                  Text(
-                    'PAINEL DE SEGURANÇA',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
         Expanded(
           child: ListView(
             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -4744,11 +5120,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0A0002),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: _crimson.withValues(alpha: 0.35),
-                  ),
+                  color: UltronColors.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: _border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -4756,9 +5130,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     const Text(
                       'STATUS DO AUTHGATE',
                       style: TextStyle(
-                        color: _crimson,
+                        color: UltronColors.textMuted,
                         fontSize: 11,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.8,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -4767,29 +5142,29 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                       value: widget.gate.isAuthenticated
                           ? 'DESBLOQUEADO'
                           : 'BLOQUEADO',
-                      valueColor: const Color(0xFFFFA0A0),
+                      valueColor: const Color(0xFF9A9AA3),
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
                       label: 'Estágio de Acesso:',
                       value: widget.gate.levelBadge,
                       valueColor: widget.gate.hasBiometricAccess
-                          ? const Color(0xFF5CE69C)
+                          ? const Color(0xFF22C55E)
                           : _rose,
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
                       label: 'Cofre de PIN Principal:',
                       value: pinLabel,
-                      valueColor: const Color(0xFFF0E6E7),
+                      valueColor: const Color(0xFFEEEEEE),
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
                       label: 'PIN de Coação (Duress):',
                       value: duressLabel,
                       valueColor: hasDuressPinConfigured
-                          ? const Color(0xFFFFA0A0)
-                          : const Color(0xFFA89698),
+                          ? const Color(0xFF9A9AA3)
+                          : const Color(0xFF9A9AA3),
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
@@ -4798,14 +5173,14 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           ? 'Nenhuma cadastrada'
                           : '${nfcTags.length} tag(s) ativa(s)',
                       valueColor: nfcTags.isNotEmpty
-                          ? const Color(0xFF5CE69C)
-                          : const Color(0xFFA89698),
+                          ? const Color(0xFF22C55E)
+                          : const Color(0xFF9A9AA3),
                     ),
                     const SizedBox(height: 6),
                     _SecurityRow(
                       label: 'Tentativas Falhas:',
                       value: '$authFailures',
-                      valueColor: const Color(0xFFF0E6E7),
+                      valueColor: const Color(0xFFEEEEEE),
                     ),
                     if (!widget.gate.hasBiometricAccess) ...[
                       const SizedBox(height: 10),
@@ -4818,7 +5193,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           ),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: _rose,
-                            side: const BorderSide(color: _crimson),
+                            side: const BorderSide(color: _border),
                             visualDensity: VisualDensity.compact,
                           ),
                           icon: const Icon(Icons.upgrade, size: 15),
@@ -4841,7 +5216,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
+                  color: const Color(0xFF18181D),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -4870,7 +5245,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                       '• Nível 2 (NFC): libera WhatsApp/SMS/agenda/HTTP no celular (sem /pc e críticos).\n'
                       '• Nível 3 (Biometria): acesso total sem popup, só confirma críticos/autodestrutivos.',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 10,
                         height: 1.4,
                       ),
@@ -4884,8 +5259,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               ? 'Ativo e pronto'
                               : 'Desativado nas configurações'),
                       valueColor: nfcStatus.enabled
-                          ? const Color(0xFF5CE69C)
-                          : const Color(0xFFFFA0A0),
+                          ? const Color(0xFF22C55E)
+                          : const Color(0xFF9A9AA3),
                     ),
                     if (nfcStatus.available && !nfcStatus.enabled) ...[
                       const SizedBox(height: 6),
@@ -4976,7 +5351,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
+                  color: const Color(0xFF18181D),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -4995,7 +5370,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     const Text(
                       'Se digitado na tela de desbloqueio, limpa o histórico de conversas silenciosamente e abre um Bloco de Notas falso.',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 10,
                         height: 1.4,
                       ),
@@ -5018,7 +5393,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               isDense: true,
                               hintText: 'Novo PIN de Coação (4 a 8 dígitos)',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
+                                color: Color(0xFF686872),
                                 fontSize: 11,
                               ),
                             ),
@@ -5062,7 +5437,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           },
                           style: FilledButton.styleFrom(
                             backgroundColor: _crimson,
-                            foregroundColor: const Color(0xFFF0E6E7),
+                            foregroundColor: const Color(0xFFEEEEEE),
                             visualDensity: VisualDensity.compact,
                           ),
                           child: const Text(
@@ -5091,7 +5466,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             icon: const Icon(
                               Icons.delete_outline,
                               size: 16,
-                              color: Color(0xFFFFA0A0),
+                              color: Color(0xFF9A9AA3),
                             ),
                           ),
                         ],
@@ -5106,7 +5481,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
+                  color: const Color(0xFF18181D),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -5125,7 +5500,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     const Text(
                       'Cadeia criptográfica append-only de todas as ações sensíveis, Kill Switches, /pc e webhooks HTTP em Skills/*.md.',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 10,
                         height: 1.4,
                       ),
@@ -5140,7 +5515,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                         },
                         style: OutlinedButton.styleFrom(
                           foregroundColor: _rose,
-                          side: const BorderSide(color: _crimson),
+                          side: const BorderSide(color: _border),
                           visualDensity: VisualDensity.compact,
                         ),
                         icon:
@@ -5163,7 +5538,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
+                  color: const Color(0xFF18181D),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -5182,7 +5557,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     const Text(
                       'Envia pacote assinado (HMAC-SHA256) para suspender/travar seu PC na rede local e bloqueia o celular.',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 10,
                         height: 1.4,
                       ),
@@ -5201,7 +5576,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               isDense: true,
                               hintText: 'http://192.168.1.100:8765/kill',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
+                                color: Color(0xFF686872),
                                 fontSize: 11,
                               ),
                             ),
@@ -5244,7 +5619,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           },
                           style: OutlinedButton.styleFrom(
                             foregroundColor: _crimson,
-                            side: const BorderSide(color: _crimson),
+                            side: const BorderSide(color: _border),
                             visualDensity: VisualDensity.compact,
                           ),
                           child: const Text(
@@ -5272,7 +5647,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               isDense: true,
                               hintText: 'Chave secreta HMAC LAN (obrigatória)',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
+                                color: Color(0xFF686872),
                                 fontSize: 11,
                               ),
                             ),
@@ -5301,7 +5676,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           },
                           style: OutlinedButton.styleFrom(
                             foregroundColor: _crimson,
-                            side: const BorderSide(color: _crimson),
+                            side: const BorderSide(color: _border),
                             visualDensity: VisualDensity.compact,
                           ),
                           child: const Text(
@@ -5378,7 +5753,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text(
-                                  '🚫 Kill Switch cancelado pelo Operador.',
+                                  'Kill Switch cancelado pelo Operador.',
                                   style: TextStyle(fontSize: 11),
                                 ),
                               ),
@@ -5391,7 +5766,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               reason: 'security_panel_panic',
                             );
                           } catch (e) {
-                            msg = '⚠️ Erro no Kill Switch remoto: $e';
+                            msg = 'Erro no Kill Switch remoto: $e';
                           }
                           if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -5405,7 +5780,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           _lockSession();
                         },
                         style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFE50914),
+                          backgroundColor: const Color(0xFFF10D28),
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 10),
                         ),
@@ -5427,7 +5802,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
+                  color: const Color(0xFF18181D),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -5437,7 +5812,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Text(
                       'POLÍTICAS LOCAIS FAIL-CLOSED',
                       style: TextStyle(
-                        color: Color(0xFFF0E6E7),
+                        color: Color(0xFFEEEEEE),
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
                       ),
@@ -5446,7 +5821,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Text(
                       'Nenhuma ordem da IA sobrepõe a validação do dispositivo. O comando /security audita e bloqueia privilégios a qualquer momento.',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 10,
                         height: 1.4,
                       ),
@@ -5455,7 +5830,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Text(
                       '✓ Cifragem PBKDF2-HMAC-SHA256 (120k iter): Ativa',
                       style: TextStyle(
-                        color: Color(0xFFFFA0A0),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 10,
                       ),
                     ),
@@ -5463,7 +5838,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Text(
                       '✓ Isolação de Chaves de API no Keystore: Ativa',
                       style: TextStyle(
-                        color: Color(0xFFFFA0A0),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 10,
                       ),
                     ),
@@ -5471,7 +5846,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Text(
                       '✓ Exclusão de Backup em Nuvem (allowBackup=false): Ativa',
                       style: TextStyle(
-                        color: Color(0xFFFFA0A0),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 10,
                       ),
                     ),
@@ -5487,7 +5862,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             onPressed: _lockSession,
             style: FilledButton.styleFrom(
               backgroundColor: _crimson,
-              foregroundColor: const Color(0xFFF0E6E7),
+              foregroundColor: const Color(0xFFEEEEEE),
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -5508,141 +5883,72 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
 
   Widget _buildDevicePanel() {
     final s = deviceStatus;
-    final batLevel = s != null && s.batteryLevel >= 0 ? s.batteryLevel : 84;
+    final hasBat = s != null && s.batteryLevel >= 0;
+    final batLevel = hasBat ? s.batteryLevel : 0;
     final batCharging = s?.isCharging ?? false;
-    final batTemp = s != null && s.batteryTempC > 0 ? s.batteryTempC : 31.2;
-    final batPct = batLevel / 100.0;
+    final hasTemp = s != null && s.batteryTempC > 0;
+    final batTemp = hasTemp ? s.batteryTempC : 0.0;
+    final batPct = hasBat ? (batLevel / 100.0).clamp(0.0, 1.0) : 0.0;
 
-    final ramTotal = s != null && s.ramTotalMb > 0 ? s.ramTotalMb : 8192;
-    final ramUsed = s != null && s.ramUsedMb > 0 ? s.ramUsedMb : 4915;
-    final ramPct = ramTotal > 0 ? (ramUsed / ramTotal) : 0.6;
-    final ramVal = '${(ramPct * 100).toInt()}%';
-    final ramSub = '${(ramUsed / 1024).toStringAsFixed(1)} GB';
+    final hasRam = s != null && s.ramTotalMb > 0;
+    final ramTotal = hasRam ? s.ramTotalMb : 0;
+    final ramUsed = hasRam ? s.ramUsedMb : 0;
+    final ramPct = hasRam ? (ramUsed / ramTotal).clamp(0.0, 1.0) : 0.0;
+    final ramVal = hasRam ? '${(ramPct * 100).round()}%' : '--';
+    final ramSub =
+        hasRam ? '${(ramUsed / 1024).toStringAsFixed(1)} GB' : 'Aguardando';
 
-    final netType = s != null
-        ? (s.wifiConnected
-            ? 'WI-FI 6'
-            : (s.cellularConnected ? '4G/5G' : 'OFFLINE'))
-        : 'WI-FI 6';
+    final netType = s == null
+        ? 'REDE'
+        : (s.wifiConnected
+            ? 'WI-FI'
+            : (s.cellularConnected ? 'MÓVEL' : 'OFFLINE'));
+    final netState = s == null
+        ? '--'
+        : (s.wifiConnected || s.cellularConnected ? 'ON' : 'OFF');
+    final netPct =
+        s == null ? 0.0 : ((s.wifiConnected || s.cellularConnected) ? 1.0 : 0.0);
 
-    final batText = s != null && s.batteryLevel >= 0
-        ? '${s.batteryLevel}% ${s.isCharging ? '(Carregando ⚡)' : ''}'
-        : 'Consultando…';
-    final ramText = s != null && s.ramTotalMb > 0
+    final batText = hasBat
+        ? '$batLevel%${batCharging ? ' (carregando)' : ''}'
+        : 'Aguardando leitura';
+    final ramText = hasRam
         ? '${s.ramUsedMb} / ${s.ramTotalMb} MB (${s.ramFreeMb} MB livres)'
-        : 'Consultando…';
-    final volText = s != null ? '${s.volumePercent}% (${s.ringerMode})' : '…';
-    final modelText =
-        s != null ? '${s.deviceModel} • ${s.androidVersion}' : 'Android Node';
+        : 'Aguardando leitura';
+    final volText = s != null ? '${s.volumePercent}% (${s.ringerMode})' : '--';
+    final modelText = s != null
+        ? '${s.deviceModel} · Android ${s.androidVersion}'
+        : 'Dispositivo Android';
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Container(
-          padding: const EdgeInsets.only(bottom: 10),
-          decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: _border)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              InkWell(
-                onTap: () => _setPanel(_ActivePanel.main),
-                child: const Row(
-                  children: [
-                    Icon(Icons.arrow_back, size: 15, color: _crimson),
-                    SizedBox(width: 4),
-                    Text(
-                      'VOLTAR',
-                      style: TextStyle(
-                        color: _crimson,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Row(
-                children: [
-                  const Icon(
-                    Icons.phonelink_setup,
-                    size: 15,
-                    color: Colors.white,
-                  ),
-                  const SizedBox(width: 6),
-                  const Text(
-                    'CONTROLE DO DISPOSITIVO',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  InkWell(
-                    onTap: _refreshDeviceStatus,
-                    child: const Icon(
-                      Icons.refresh,
-                      size: 15,
-                      color: _crimson,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 10),
+            padding: const EdgeInsets.symmetric(vertical: 8),
             children: [
-              // 0. Cockpit de Telemetria Circular (AMOLED Carmesim HUD)
-              Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: _crimson.withValues(alpha: 0.4)),
-                ),
+              // 0. Telemetria Real do Hardware (sem valores simulados)
+              UltronSurfaceCard(
+                padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          '📡 COCKPIT DE TELEMETRIA EM TEMPO REAL',
-                          style: TextStyle(
-                            color: _crimson,
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                        Text(
-                          'AMOLED HUD',
-                          style: TextStyle(
-                            color: _rose,
-                            fontSize: 8.5,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
+                    const UltronSectionLabel('Telemetria real do hardware'),
                     Row(
                       children: [
                         Expanded(
                           child: _CircularTelemetryGauge(
-                            value: '$batLevel%${batCharging ? '⚡' : ''}',
+                            value: hasBat ? '$batLevel%' : '--',
                             label: 'BATERIA',
-                            subLabel: '${batTemp.toStringAsFixed(1)}°C',
+                            subLabel: batCharging
+                                ? 'Carregando'
+                                : (hasTemp
+                                    ? '${batTemp.toStringAsFixed(1)}°C'
+                                    : 'Sem leitura'),
                             percentage: batPct,
-                            color: batLevel < 20
-                                ? const Color(0xFFFFA0A0)
-                                : const Color(0xFFE50914),
+                            color: hasBat && batLevel < 20
+                                ? UltronColors.warning
+                                : UltronColors.crimson,
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -5652,27 +5958,34 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             label: 'RAM',
                             subLabel: ramSub,
                             percentage: ramPct,
-                            color: const Color(0xFFE50914),
+                            color: UltronColors.crimson,
                           ),
                         ),
                         const SizedBox(width: 6),
                         Expanded(
                           child: _CircularTelemetryGauge(
-                            value: '${batTemp.toInt()}°C',
+                            value: hasTemp ? '${batTemp.round()}°C' : '--',
                             label: 'TEMP',
-                            subLabel: 'ESTÁVEL',
-                            percentage: 0.35,
-                            color: const Color(0xFFFFA0A0),
+                            subLabel: !hasTemp
+                                ? 'Sem sensor'
+                                : (batTemp >= 42 ? 'Elevada' : 'Normal'),
+                            percentage:
+                                hasTemp ? (batTemp / 60.0).clamp(0.0, 1.0) : 0,
+                            color: batTemp >= 42
+                                ? UltronColors.warning
+                                : UltronColors.textSecondary,
                           ),
                         ),
                         const SizedBox(width: 6),
                         Expanded(
                           child: _CircularTelemetryGauge(
-                            value: '92%',
+                            value: netState,
                             label: netType,
-                            subLabel: s?.ringerMode ?? 'ONLINE',
-                            percentage: 0.92,
-                            color: const Color(0xFFE50914),
+                            subLabel: s?.ringerMode ?? 'Aguardando',
+                            percentage: netPct,
+                            color: netPct > 0
+                                ? UltronColors.positive
+                                : UltronColors.textMuted,
                           ),
                         ),
                       ],
@@ -5680,13 +5993,14 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   ],
                 ),
               ),
+              const SizedBox(height: 10),
               // 1. Hardware Telemetry Card
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0A0002),
+                  color: UltronColors.surface,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _crimson.withValues(alpha: 0.35)),
+                  border: Border.all(color: _border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -5694,22 +6008,22 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Text(
                       modelText,
                       style: const TextStyle(
-                        color: _crimson,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
+                        color: UltronColors.textPrimary,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                     const SizedBox(height: 8),
                     _SecurityRow(
                       label: 'Bateria:',
                       value: batText,
-                      valueColor: const Color(0xFFFFA0A0),
+                      valueColor: const Color(0xFF9A9AA3),
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
                       label: 'Memória RAM:',
                       value: ramText,
-                      valueColor: const Color(0xFFF0E6E7),
+                      valueColor: const Color(0xFFEEEEEE),
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
@@ -5722,14 +6036,14 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                       label: 'Lanterna Traseira:',
                       value: torchOn ? 'LIGADA (ON)' : 'DESLIGADA (OFF)',
                       valueColor: torchOn
-                          ? const Color(0xFFFFA0A0)
-                          : const Color(0xFFA89698),
+                          ? const Color(0xFF9A9AA3)
+                          : const Color(0xFF9A9AA3),
                     ),
                     const SizedBox(height: 4),
                     const _SecurityRow(
                       label: 'Flip-to-Shush (Acelerômetro):',
                       value: 'ATIVO (Virar tela p/ baixo silencia)',
-                      valueColor: Color(0xFFFFA0A0),
+                      valueColor: Color(0xFF9A9AA3),
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
@@ -5737,8 +6051,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                       value:
                           nightFocusMode ? 'ATIVO (Sussurro TTS)' : 'INATIVO',
                       valueColor: nightFocusMode
-                          ? const Color(0xFFFFA0A0)
-                          : const Color(0xFFA89698),
+                          ? const Color(0xFF9A9AA3)
+                          : const Color(0xFF9A9AA3),
                     ),
                     const SizedBox(height: 4),
                     _SecurityRow(
@@ -5747,8 +6061,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           ? 'ATIVO (VAD adaptativo)'
                           : 'EM REPOUSO',
                       valueColor: ecoVadSentinelRunning
-                          ? const Color(0xFFFFA0A0)
-                          : const Color(0xFFA89698),
+                          ? const Color(0xFF9A9AA3)
+                          : const Color(0xFF9A9AA3),
                     ),
                     const SizedBox(height: 8),
                     Row(
@@ -5760,10 +6074,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             ),
                             style: FilledButton.styleFrom(
                               backgroundColor: ecoVadSentinelRunning
-                                  ? const Color(0xFFE50914)
-                                  : const Color(0xFF2E0305),
+                                  ? const Color(0xFFF10D28)
+                                  : const Color(0xFF18181D),
                               foregroundColor: ecoVadSentinelRunning
-                                  ? const Color(0xFFFFA0A0)
+                                  ? const Color(0xFF9A9AA3)
                                   : _rose,
                               visualDensity: VisualDensity.compact,
                             ),
@@ -5802,7 +6116,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             },
                             style: FilledButton.styleFrom(
                               backgroundColor: _crimson,
-                              foregroundColor: const Color(0xFFF0E6E7),
+                              foregroundColor: const Color(0xFFEEEEEE),
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.graphic_eq, size: 13),
@@ -5841,7 +6155,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     const Text(
                       'PERFIL DE TIMBRE NEURAL (PT-BR LIMPO SEM ROBÔ):',
                       style: TextStyle(
-                        color: Color(0xFFA89698),
+                        color: Color(0xFF9A9AA3),
                         fontSize: 9,
                         fontWeight: FontWeight.bold,
                       ),
@@ -5864,7 +6178,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                 style: OutlinedButton.styleFrom(
                                   backgroundColor: selectedVoiceProfile == prof
                                       ? _crimson
-                                      : const Color(0xFF2E0305),
+                                      : const Color(0xFF18181D),
                                   foregroundColor: selectedVoiceProfile == prof
                                       ? Colors.black
                                       : _rose,
@@ -5895,8 +6209,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             voiceService.stop();
                           },
                           style: OutlinedButton.styleFrom(
-                            backgroundColor: const Color(0xFF2E0305),
-                            foregroundColor: const Color(0xFFFFA0A0),
+                            backgroundColor: const Color(0xFF18181D),
+                            foregroundColor: const Color(0xFF9A9AA3),
                             side: const BorderSide(color: _border),
                             visualDensity: VisualDensity.compact,
                             padding: const EdgeInsets.symmetric(
@@ -5920,9 +6234,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                       child: OutlinedButton.icon(
                         onPressed: _openVoiceSelector,
                         style: OutlinedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2E0305),
+                          backgroundColor: const Color(0xFF18181D),
                           foregroundColor: _rose,
-                          side: const BorderSide(color: _crimson),
+                          side: const BorderSide(color: _border),
                           visualDensity: VisualDensity.compact,
                         ),
                         icon: const Icon(Icons.record_voice_over, size: 14),
@@ -5945,11 +6259,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
+                  color: const Color(0xFF18181D),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: _crimson.withValues(alpha: 0.45),
-                  ),
+                  border: Border.all(color: _border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -5974,9 +6286,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             },
                             style: OutlinedButton.styleFrom(
                               foregroundColor: _rose,
-                              side: BorderSide(
-                                color: _crimson.withValues(alpha: 0.5),
-                              ),
+                              side: const BorderSide(color: _border),
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.calendar_today, size: 13),
@@ -5995,7 +6305,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             },
                             style: FilledButton.styleFrom(
                               backgroundColor: _crimson,
-                              foregroundColor: const Color(0xFFF0E6E7),
+                              foregroundColor: const Color(0xFFEEEEEE),
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.wb_sunny_outlined, size: 14),
@@ -6019,11 +6329,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
+                  color: const Color(0xFF18181D),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: _crimson.withValues(alpha: 0.45),
-                  ),
+                  border: Border.all(color: _border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -6046,8 +6354,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           ),
                           decoration: BoxDecoration(
                             color: notificationSentinelEnabled
-                                ? const Color(0xFFE50914)
-                                : const Color(0xFF2E0305),
+                                ? const Color(0xFFF10D28)
+                                : const Color(0xFF18181D),
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
@@ -6056,7 +6364,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                 : 'PERMISSÃO PENDENTE',
                             style: TextStyle(
                               color: notificationSentinelEnabled
-                                  ? const Color(0xFFFFA0A0)
+                                  ? const Color(0xFF9A9AA3)
                                   : _rose,
                               fontSize: 8,
                               fontWeight: FontWeight.bold,
@@ -6074,7 +6382,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               deviceService.openNotificationListenerSettings(),
                           style: FilledButton.styleFrom(
                             backgroundColor: _crimson,
-                            foregroundColor: const Color(0xFFF0E6E7),
+                            foregroundColor: const Color(0xFFEEEEEE),
                             visualDensity: VisualDensity.compact,
                           ),
                           icon: const Icon(
@@ -6137,7 +6445,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                         const Text(
                           '📭 Nenhuma mensagem capturada ainda. Quando chegar WhatsApp, Telegram, Instagram ou SMS, o U.L.T.R.O.N. exibirá aqui para leitura ou resposta em 2º plano.',
                           style: TextStyle(
-                            color: Color(0xFFA89698),
+                            color: Color(0xFF9A9AA3),
                             fontSize: 9.5,
                           ),
                         )
@@ -6147,7 +6455,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             margin: const EdgeInsets.only(bottom: 6),
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF0A0002),
+                              color: const Color(0xFF080808),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(color: _border),
                             ),
@@ -6171,7 +6479,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                       Text(
                                         m.text,
                                         style: const TextStyle(
-                                          color: Color(0xFFF0E6E7),
+                                          color: Color(0xFFEEEEEE),
                                           fontSize: 10.5,
                                         ),
                                         maxLines: 2,
@@ -6189,15 +6497,12 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                         vertical: 4,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFF2E0305),
+                                        color: const Color(0xFF18181D),
                                         borderRadius: BorderRadius.circular(6),
-                                        border: Border.all(
-                                          color:
-                                              _crimson.withValues(alpha: 0.5),
-                                        ),
+                                        border: Border.all(color: _border),
                                       ),
                                       child: const Text(
-                                        '↩️ RESPONDER',
+                                        'RESPONDER',
                                         style: TextStyle(
                                           color: _crimson,
                                           fontSize: 8.5,
@@ -6234,7 +6539,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               isDense: true,
                               hintText: 'Contato ou 1199999...',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
+                                color: Color(0xFF686872),
                                 fontSize: 10,
                               ),
                             ),
@@ -6253,7 +6558,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               isDense: true,
                               hintText: 'Texto da mensagem…',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
+                                color: Color(0xFF686872),
                                 fontSize: 10,
                               ),
                             ),
@@ -6269,7 +6574,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             onPressed: () => _sendQuickMessage(viaSms: false),
                             style: FilledButton.styleFrom(
                               backgroundColor: _crimson,
-                              foregroundColor: const Color(0xFFF0E6E7),
+                              foregroundColor: const Color(0xFFEEEEEE),
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.chat_bubble, size: 13),
@@ -6287,7 +6592,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           child: FilledButton.icon(
                             onPressed: () => _sendQuickMessage(viaSms: true),
                             style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF2E0305),
+                              backgroundColor: const Color(0xFF18181D),
                               foregroundColor: _rose,
                               visualDensity: VisualDensity.compact,
                             ),
@@ -6312,7 +6617,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
+                  color: const Color(0xFF18181D),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -6340,8 +6645,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               SnackBar(
                                 content: Text(
                                   opened
-                                      ? '📓 Abrindo cofre no app oficial Obsidian…'
-                                      : '⚠️ Aplicativo Obsidian não encontrado.',
+                                      ? 'Abrindo cofre no app oficial Obsidian…'
+                                      : 'Aplicativo Obsidian não encontrado.',
                                   style: const TextStyle(fontSize: 11),
                                 ),
                               ),
@@ -6385,7 +6690,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               isDense: true,
                               hintText: 'Nota rápida para o Diário ou Inbox…',
                               hintStyle: TextStyle(
-                                color: Color(0xFF635355),
+                                color: Color(0xFF686872),
                                 fontSize: 10,
                               ),
                             ),
@@ -6397,7 +6702,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               _saveQuickObsidianNote(quickNoteController.text),
                           style: FilledButton.styleFrom(
                             backgroundColor: _crimson,
-                            foregroundColor: const Color(0xFFF0E6E7),
+                            foregroundColor: const Color(0xFFEEEEEE),
                             visualDensity: VisualDensity.compact,
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                           ),
@@ -6414,7 +6719,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           onPressed: () =>
                               _saveObsidianInbox(quickNoteController.text),
                           style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF4A0A12),
+                            backgroundColor: const Color(0xFF18181D),
                             foregroundColor: _rose,
                             visualDensity: VisualDensity.compact,
                             padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -6446,7 +6751,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                         children: [
                           for (final skill in mobileSkills)
                             _StageChip(
-                              label: '⚡ ${skill.title}',
+                              label: skill.title,
                               icon: Icons.auto_awesome_outlined,
                               onTap: () => _executeSkillCard(skill),
                             ),
@@ -6465,8 +6770,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   onPressed: _toggleTorchQuick,
                   style: FilledButton.styleFrom(
                     backgroundColor:
-                        torchOn ? const Color(0xFFFFA0A0) : _crimson,
-                    foregroundColor: const Color(0xFFF0E6E7),
+                        torchOn ? const Color(0xFF9A9AA3) : _crimson,
+                    foregroundColor: const Color(0xFFEEEEEE),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -6493,7 +6798,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF2E0305),
+                  color: const Color(0xFF18181D),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: _border),
                 ),
@@ -6690,9 +6995,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           child: OutlinedButton(
             onPressed: () => _setPanel(_ActivePanel.main),
             style: OutlinedButton.styleFrom(
-              backgroundColor: const Color(0xFF2E0305),
+              backgroundColor: const Color(0xFF18181D),
               foregroundColor: _crimson,
-              side: BorderSide(color: _crimson.withValues(alpha: 0.35)),
+              side: const BorderSide(color: _border),
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -6748,275 +7053,197 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '⚡ Provedor ativado: ${preset.name}',
+          'Provedor ativado: ${preset.name}',
           style: const TextStyle(fontSize: 11),
         ),
-        backgroundColor: const Color(0xFF2E0305),
+        backgroundColor: const Color(0xFF18181D),
         duration: const Duration(seconds: 2),
       ),
     );
   }
 
   Widget _buildProvidersPanel() {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    final t = sessionTelemetry;
+    final tokPrefix = t.hasEstimatedTokens ? '~' : '';
+    final promptStr = SessionTelemetry.formatCompactTokens(t.promptTokens);
+    final compStr = SessionTelemetry.formatCompactTokens(t.completionTokens);
+    final latStr = t.lastLatencyMs > 0 ? '${t.lastLatencyMs}ms' : '--';
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(2, 8, 2, 24),
       children: [
-        Container(
-          padding: const EdgeInsets.only(bottom: 10),
-          decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: _border)),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        const UltronSectionLabel('Sessão de IA atual'),
+        UltronSurfaceCard(
+          highlighted: true,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              InkWell(
-                onTap: () => _setPanel(_ActivePanel.main),
-                child: const Row(
-                  children: [
-                    Icon(Icons.arrow_back, size: 15, color: _crimson),
-                    SizedBox(width: 4),
-                    Text(
-                      'VOLTAR',
-                      style: TextStyle(
-                        color: _crimson,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      activeProviderUsed,
+                      style: const TextStyle(
+                        color: UltronColors.textPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (t.lastUsedFailover)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: UltronColors.warning.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        'Failover',
+                        style: TextStyle(
+                          color: UltronColors.warning,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  ],
-                ),
-              ),
-              const Row(
-                children: [
-                  Icon(
-                    Icons.hub_outlined,
-                    size: 15,
-                    color: Colors.white,
-                  ),
-                  SizedBox(width: 6),
-                  Text(
-                    'CENTRAL DE PROVEDORES DE IA',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
                 ],
               ),
-              InkWell(
-                onTap: _openSettings,
-                child: const Icon(
-                  Icons.settings,
-                  size: 16,
-                  color: _rose,
+              const SizedBox(height: 8),
+              Text(
+                'Turnos: ${t.turns}  ·  Tokens: $tokPrefix↑$promptStr ↓$compStr  ·  Latência: $latStr',
+                style: UltronTheme.mono.copyWith(
+                  color: UltronColors.textSecondary,
+                  fontSize: 11.5,
                 ),
               ),
             ],
           ),
         ),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            children: [
-              // Hero Banner - Zero-Key
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF2E0305), Color(0xFF0A0002)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _crimson.withValues(alpha: 0.5)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _crimson.withValues(alpha: 0.12),
-                      blurRadius: 10,
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE50914),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFFFFA0A0)),
-                          ),
-                          child: const Text(
-                            'ZERO-KEY NATIVO',
-                            style: TextStyle(
-                              color: Color(0xFFFFA0A0),
-                              fontSize: 8.5,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          'USANDO: $activeProviderUsed',
-                          style: const TextStyle(
-                            color: _rose,
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      '9 Provedores Gratuitos com Failover Automático. Toque em qualquer satélite abaixo para ativar ou alternar.',
-                      style: TextStyle(
-                        color: Color(0xFFF0E6E7),
-                        fontSize: 9.5,
-                      ),
-                    ),
-                  ],
-                ),
+        const SizedBox(height: 14),
+        const UltronSectionLabel('Visão computacional e OCR'),
+        UltronActionTile(
+          icon: Icons.center_focus_weak_rounded,
+          title: 'Analisar imagem (Câmera ou Galeria)',
+          subtitle: 'Anexa foto ao chat para leitura OCR ou inspeção visual',
+          onTap: () {
+            _selectSection(UltronSection.home, closeDrawer: false);
+            unawaited(_openVisionPicker());
+          },
+        ),
+        const SizedBox(height: 16),
+        const UltronSectionLabel('Provedores e failover'),
+        for (final preset in FreeProviderPreset.catalog)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: UltronColors.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: activeProviderUsed.contains(preset.name.split(' ').first)
+                    ? UltronColors.crimsonBorder
+                    : UltronColors.borderSubtle,
               ),
-              const SizedBox(height: 12),
-              const Text(
-                'SATÉLITES & PROVEDORES CONECTADOS (9 OPÇÕES)',
-                style: TextStyle(
-                  color: _crimson,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.8,
-                ),
-              ),
-              const SizedBox(height: 8),
-              // Grid of 9 providers
-              for (final preset in FreeProviderPreset.catalog)
-                Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0A0002),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: activeProviderUsed
-                              .contains(preset.name.split(' ').first)
-                          ? _crimson
-                          : _border,
-                      width: activeProviderUsed
-                              .contains(preset.name.split(' ').first)
-                          ? 1.3
-                          : 1.0,
-                    ),
-                  ),
-                  child: Row(
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Text(
-                                  preset.name,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 5,
-                                    vertical: 1.5,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: preset.requiresKey
-                                        ? const Color(0xFF2E0305)
-                                        : const Color(0xFFE50914),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    preset.badge,
-                                    style: TextStyle(
-                                      color: preset.requiresKey
-                                          ? _rose
-                                          : const Color(0xFFFFA0A0),
-                                      fontSize: 7.5,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              'Modelos: ${preset.recommendedModels.take(2).join(', ')}',
-                              style: const TextStyle(
-                                color: Color(0xFFA89698),
-                                fontSize: 8.5,
+                      Row(
+                        children: [
+                          if (activeProviderUsed
+                              .contains(preset.name.split(' ').first)) ...[
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: const BoxDecoration(
+                                color: UltronColors.positive,
+                                shape: BoxShape.circle,
                               ),
-                              maxLines: 1,
+                            ),
+                            const SizedBox(width: 7),
+                          ],
+                          Flexible(
+                            child: Text(
+                              preset.name,
+                              style: const TextStyle(
+                                color: UltronColors.textPrimary,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w600,
+                              ),
                               overflow: TextOverflow.ellipsis,
                             ),
-                          ],
-                        ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: UltronColors.surfaceElevated,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: UltronColors.border,
+                              ),
+                            ),
+                            child: Text(
+                              preset.badge,
+                              style: const TextStyle(
+                                color: UltronColors.textSecondary,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        onPressed: () => _activatePreset(preset),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _crimson,
-                          foregroundColor: const Color(0xFFF0E6E7),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          visualDensity: VisualDensity.compact,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
-                          ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Modelos: ${preset.recommendedModels.take(2).join(', ')}',
+                        style: const TextStyle(
+                          color: UltronColors.textSecondary,
+                          fontSize: 11.5,
                         ),
-                        child: const Text(
-                          'ATIVAR',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _openSettings,
+                const SizedBox(width: 10),
+                OutlinedButton(
+                  onPressed: () => _activatePreset(preset),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: _rose,
-                    side: const BorderSide(color: _border),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+                    foregroundColor: UltronColors.textPrimary,
+                    side: const BorderSide(color: UltronColors.border),
+                    backgroundColor: UltronColors.surfaceElevated,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
                     ),
+                    visualDensity: VisualDensity.compact,
                   ),
-                  icon: const Icon(Icons.tune, size: 14),
-                  label: const Text(
-                    'CONFIGURAR CHAVES DE API DETALHADAS (/settings)',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                  child: const Text('Ativar'),
                 ),
-              ),
-            ],
+              ],
+            ),
+          ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _openSettings,
+            icon: const Icon(Icons.tune_rounded, size: 16),
+            label: const Text('Configurar chaves, STT e diagnóstico acústico'),
           ),
         ),
       ],
@@ -7026,48 +7253,6 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   Widget _buildHelpPanel() => Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Container(
-            padding: const EdgeInsets.only(bottom: 10),
-            decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: _border)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                InkWell(
-                  onTap: () => _setPanel(_ActivePanel.main),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.arrow_back, size: 15, color: _crimson),
-                      SizedBox(width: 4),
-                      Text(
-                        'VOLTAR',
-                        style: TextStyle(
-                          color: _crimson,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Row(
-                  children: [
-                    Icon(Icons.help_outline, size: 15, color: Colors.white),
-                    SizedBox(width: 6),
-                    Text(
-                      'SINTAXE DE COMANDOS',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(vertical: 10),
@@ -7075,7 +7260,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 Text(
                   'Comandos rápidos e controles do celular (funcionam offline e pela IA):',
                   style: TextStyle(
-                    color: Color(0xFFA89698),
+                    color: Color(0xFF9A9AA3),
                     fontSize: 10,
                   ),
                 ),
@@ -7141,9 +7326,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             child: OutlinedButton(
               onPressed: () => _setPanel(_ActivePanel.main),
               style: OutlinedButton.styleFrom(
-                backgroundColor: const Color(0xFF2E0305),
+                backgroundColor: const Color(0xFF18181D),
                 foregroundColor: _crimson,
-                side: BorderSide(color: _crimson.withValues(alpha: 0.35)),
+                side: const BorderSide(color: _border),
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -7162,38 +7347,67 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       );
 }
 
-class _TopNavPill extends StatelessWidget {
-  const _TopNavPill({
+class _HomeQuickAction extends StatelessWidget {
+  const _HomeQuickAction({
+    required this.icon,
     required this.label,
-    required this.selected,
+    required this.active,
     required this.onTap,
+    this.onLongPress,
   });
 
+  final IconData icon;
   final String label;
-  final bool selected;
+  final bool active;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   @override
-  Widget build(BuildContext context) => InkWell(
+  Widget build(BuildContext context) {
+    return Material(
+      color: active ? UltronColors.crimsonDark : UltronColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+          color: active ? UltronColors.crimsonBorder : UltronColors.border,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-          decoration: BoxDecoration(
-            color: selected ? const Color(0xFFE50914) : Colors.transparent,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color:
-                  selected ? const Color(0xFFF0E6E7) : const Color(0xFFA89698),
-              fontSize: 10,
-              fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-            ),
+        onLongPress: onLongPress,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color:
+                    active ? UltronColors.crimson : UltronColors.textSecondary,
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: active
+                        ? UltronColors.textPrimary
+                        : UltronColors.textSecondary,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 class _StageChip extends StatelessWidget {
@@ -7210,25 +7424,25 @@ class _StageChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) => InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(
-            color: const Color(0xFF2E0305),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFF51080D)),
+            color: UltronColors.surfaceElevated,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: UltronColors.border),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 12, color: const Color(0xFFFFA0A0)),
-              const SizedBox(width: 4),
+              Icon(icon, size: 13, color: UltronColors.textSecondary),
+              const SizedBox(width: 6),
               Text(
                 label,
                 style: const TextStyle(
-                  color: Color(0xFFF0E6E7),
-                  fontSize: 9,
-                  fontWeight: FontWeight.bold,
+                  color: UltronColors.textPrimary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ],
@@ -7255,9 +7469,9 @@ class _QuickCommandCard extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFF2E0305),
+            color: const Color(0xFF18181D),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: const Color(0xFF51080D)),
+            border: Border.all(color: const Color(0xFF222228)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -7266,7 +7480,7 @@ class _QuickCommandCard extends StatelessWidget {
               Text(
                 command,
                 style: const TextStyle(
-                  color: Color(0xFFFFA0A0),
+                  color: Color(0xFF9A9AA3),
                   fontSize: 10,
                   fontWeight: FontWeight.bold,
                 ),
@@ -7275,7 +7489,7 @@ class _QuickCommandCard extends StatelessWidget {
               Text(
                 description,
                 style: const TextStyle(
-                  color: Color(0xFFA89698),
+                  color: Color(0xFF9A9AA3),
                   fontSize: 9,
                 ),
                 overflow: TextOverflow.ellipsis,
@@ -7302,9 +7516,9 @@ class _TelemetryBox extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: const Color(0xFF2E0305),
+          color: const Color(0xFF18181D),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFF51080D)),
+          border: Border.all(color: const Color(0xFF222228)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -7321,7 +7535,7 @@ class _TelemetryBox extends StatelessWidget {
             Text(
               body,
               style: const TextStyle(
-                color: Color(0xFFF0E6E7),
+                color: Color(0xFFEEEEEE),
                 fontSize: 11,
               ),
             ),
@@ -7348,7 +7562,7 @@ class _SecurityRow extends StatelessWidget {
           Text(
             label,
             style: const TextStyle(
-              color: Color(0xFFA89698),
+              color: Color(0xFF9A9AA3),
               fontSize: 10,
             ),
           ),
@@ -7380,9 +7594,9 @@ class _HelpSyntaxItem extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: const Color(0xFF2E0305),
+          color: const Color(0xFF18181D),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFF51080D)),
+          border: Border.all(color: const Color(0xFF222228)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -7391,8 +7605,8 @@ class _HelpSyntaxItem extends StatelessWidget {
               cmd,
               style: TextStyle(
                 color: highlight
-                    ? const Color(0xFFFFA0A0)
-                    : const Color(0xFFF0E6E7),
+                    ? const Color(0xFF9A9AA3)
+                    : const Color(0xFFEEEEEE),
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
               ),
@@ -7401,7 +7615,7 @@ class _HelpSyntaxItem extends StatelessWidget {
             Text(
               desc,
               style: const TextStyle(
-                color: Color(0xFFA89698),
+                color: Color(0xFF9A9AA3),
                 fontSize: 10,
               ),
             ),
@@ -7430,9 +7644,9 @@ class _CircularTelemetryGauge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFF2E0305),
+        color: const Color(0xFF18181D),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF51080D)),
+        border: Border.all(color: const Color(0xFF222228)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -7446,7 +7660,7 @@ class _CircularTelemetryGauge extends StatelessWidget {
                 const CircularProgressIndicator(
                   value: 1.0,
                   strokeWidth: 4.5,
-                  color: Color(0xFF51080D),
+                  color: Color(0xFF222228),
                 ),
                 CircularProgressIndicator(
                   value: percentage.clamp(0.0, 1.0),
@@ -7469,7 +7683,7 @@ class _CircularTelemetryGauge extends StatelessWidget {
           Text(
             label,
             style: const TextStyle(
-              color: Color(0xFFA89698),
+              color: Color(0xFF9A9AA3),
               fontSize: 8.5,
               fontWeight: FontWeight.bold,
               letterSpacing: 0.5,

@@ -470,6 +470,9 @@ class DeviceControlService {
     void Function(int flowId)? onWorkflowTriggered,
     void Function(String uri)? onSpotifyCallbackReceived,
     void Function(bool requiresUnlock)? onFloatingOrbTapped,
+    VoidCallback? onStopSpeakingRequested,
+    VoidCallback? onUrgentNotificationDetected,
+    VoidCallback? onTriageConfigChanged,
   }) {
     _channel.setMethodCallHandler((call) async {
       switch (call.method) {
@@ -507,9 +510,79 @@ class DeviceControlService {
           final map = call.arguments as Map<Object?, Object?>?;
           final requiresUnlock = (map?['requiresUnlock'] as bool?) ?? false;
           onFloatingOrbTapped?.call(requiresUnlock);
+        case 'onStopSpeakingRequested':
+          onStopSpeakingRequested?.call();
+        case 'onUrgentNotificationDetected':
+          onUrgentNotificationDetected?.call();
+        case 'onTriageConfigChanged':
+          onTriageConfigChanged?.call();
       }
       return null;
     });
+  }
+
+  /// Mantém respostas longas da IA e a fala (TTS) ativas em segundo plano no Android.
+  Future<void> setBackgroundResponseState({
+    required bool active,
+    String phase = 'speaking',
+    String preview = '',
+  }) async {
+    try {
+      await _channel.invokeMethod<bool>('setBackgroundResponseState', {
+        'active': active,
+        'phase': phase,
+        'preview': preview,
+      });
+    } catch (_) {}
+  }
+
+  /// Publica uma notificação expansível quando uma resposta termina em segundo plano no mudo.
+  Future<void> notifyBackgroundResponseReady({
+    required String title,
+    required String body,
+  }) async {
+    try {
+      await _channel.invokeMethod<bool>('notifyBackgroundResponseReady', {
+        'title': title,
+        'body': body,
+      });
+    } catch (_) {}
+  }
+
+  /// Sincroniza a configuração da Triagem Inteligente de Notificações com o Android nativo.
+  Future<void> configureSmartNotificationTriage(
+    Map<String, dynamic> config,
+  ) async {
+    try {
+      await _channel.invokeMethod<bool>(
+        'configureSmartNotificationTriage',
+        config,
+      );
+    } catch (_) {}
+  }
+
+  /// Lê a configuração atual da Triagem Inteligente salva no Android nativo.
+  Future<Map<Object?, Object?>?> getSmartNotificationTriageConfig() async {
+    try {
+      return await _channel.invokeMethod<Map<Object?, Object?>>(
+        'getSmartNotificationTriageConfig',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Consome eventos urgentes triados em tempo real para persistir no Obsidian e no feed.
+  Future<List<Map<Object?, Object?>>> consumePendingUrgentNotifications() async {
+    try {
+      final raw = await _channel.invokeMethod<List<Object?>>(
+        'consumePendingUrgentNotifications',
+      );
+      if (raw == null) return const [];
+      return raw.whereType<Map<Object?, Object?>>().toList(growable: false);
+    } catch (_) {
+      return const [];
+    }
   }
 
   void setFlipToShushHandler(VoidCallback? onFlip) {

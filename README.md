@@ -1,8 +1,16 @@
-# 🔴 U.L.T.R.O.N. 2.0 — Mobile (`v1.5.0`)
+# U.L.T.R.O.N. 2.0 — Mobile (`v1.5.0`)
 
-Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado com **Núcleo Holográfico Shader (`CoreOrb`)**, estética tática **AMOLED Carmesim**, **Telemetria Tática ao vivo no Cockpit**, **Camada Cognitiva & Guardrails Anti-Alucinação**, **Modos Táticos Isolados (`/modo`)**, **Segundo Cérebro Obsidian (`Inventario/`, `Pessoas/`, RAG FTS5/BM25)**, **Projetista Elétrico Industrial (`/eletrica` NBR 5410 + Ponte CADe_SIMU)**, **ETL em Lote (`/etl`)**, **Recibos Epistemológicos (SHA-256) + Checkpoints de Fluxo**, **Segurança Fail-Closed (SQLCipher + Auth Composta Biometria/NFC NDEF)**, **Sentinela de Voz não-Google (`AudioRecord` + Eco-VAD + `sherpa-onnx` KWS)** e **Bridge Bidirecional Desktop LAN / Tailscale (incl. Mini-Apps Sandboxed)**.
+Nó autônomo Android desenvolvido em **Flutter / Dart + Kotlin Nativo**, projetado com **Núcleo Geodésico 3D (`CoreOrb` + GLSL Shader)**, interface limpa **AMOLED Carmesim contido** com **Navegação Lateral responsiva (10 seções)**, **Auto-VAD Adaptativo**, **Continuidade de Resposta/TTS em Segundo Plano**, **Triagem Inteligente de Notificações em Tempo Real + Obsidian**, **Camada Cognitiva & Guardrails Anti-Alucinação**, **Modos Táticos Isolados (`/modo`)**, **Segundo Cérebro Obsidian (`Inventario/`, `Pessoas/`, RAG FTS5/BM25)**, **Projetista Elétrico Industrial (`/eletrica` NBR 5410 + Ponte CADe_SIMU)**, **ETL em Lote (`/etl`)**, **Recibos Epistemológicos (SHA-256) + Checkpoints de Fluxo**, **Segurança Fail-Closed (SQLCipher + Auth Composta Biometria/NFC NDEF)**, **Sentinela de Voz não-Google (`AudioRecord` + `sherpa-onnx` KWS)** e **Bridge Bidirecional Desktop LAN / Tailscale (incl. Mini-Apps Sandboxed)**.
 
 > **Alvo de Referência**: Dispositivos Android `arm64-v8a` (validado em **Samsung Galaxy A34 5G — `SM_A346M`**), mantendo inferência pesada na nuvem gratuita (9 provedores) ou no PC Desktop via LAN para preservar bateria, RAM e temperatura.
+
+---
+
+## Novidades Recentes (`v1.5.x`)
+- **Nova Interface Limpa + Núcleo Geodésico 3D (`CoreOrb`)**: Superfícies AMOLED neutras (`#080808` / `#111114` / `#18181D`) com carmesim `#F10D28` contido, malha icosaédrica 3D subdividida sempre visível na tela do chat, apenas 3 atalhos essenciais (`Voz`, `Visão`, `Dispositivos`), telemetria compacta no rodapé e gaveta lateral com 10 seções (barra fixa em tablets).
+- **Auto-VAD Adaptativo (Primeiro e Segundo Plano)**: Remoção de offset DC (`dcRemovedRmsInt16`), piso de ruído ambiente com EMA assimétrico, histerese dupla para não cortar finais de fala, filtro de cliques/batidas no início, 3 perfis configuráveis (`Silencioso`, `Balanceado`, `Ruidoso`) e pausa ajustável em **Configurações**, além de `AcousticEchoCanceler` + `NoiseSuppressor` no `BackgroundVoiceResponder.kt`.
+- **Continuidade em Segundo Plano (`ResponseContinuityService`)**: Respostas longas da IA e síntese de voz (TTS) continuam executando e falando mesmo ao sair do app ou bloquear a tela, com notificação de controle **Parar fala** e entrega de notificação expansível caso o áudio esteja no mudo.
+- **Triagem Inteligente de Notificações em Tempo Real (`UltronNotificationService` + `SmartNotificationTriageService`)**: Monitoramento orientado a eventos (zero polling) para WhatsApp, Telegram e E-mail, com score composto offline (palavras-chave PT-BR, contatos VIP, detecção de rajada 3+ msgs/60s, anti-loop, deduplicação SHA-256, filtro de promoções/OTP e Foco Noturno), alertas acionáveis (*Ouvir* / *Silenciar*) e registro automático em `Inbox/Urgencias_AAAA-MM-DD.md` no Obsidian.
 
 ---
 

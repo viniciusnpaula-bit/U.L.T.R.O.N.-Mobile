@@ -7,6 +7,8 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,7 +35,7 @@ object BackgroundVoiceResponder {
     private const val CHUNK_SAMPLES = 1600 // 100 ms
     private const val CHUNK_BYTES = CHUNK_SAMPLES * 2
     private const val MAX_WAIT_SPEECH_CHUNKS = 75 // 7.5 s esperando começar a falar
-    private const val SILENCE_END_CHUNKS = 7 // 0.7 s de silêncio encerra comando
+    private const val SILENCE_END_CHUNKS = 8 // 0.8 s de silêncio encerra comando com folga natural
     private const val MAX_SPEECH_CHUNKS = 100 // 10 s máx. por turno
     private const val PRE_SPEECH_CHUNKS = 4 // 400 ms pré-fala
 
@@ -191,6 +193,19 @@ object BackgroundVoiceResponder {
         }
 
         val activeRec = recorder ?: return null
+        var aec: AcousticEchoCanceler? = null
+        var ns: NoiseSuppressor? = null
+        try {
+            val sessionId = activeRec.audioSessionId
+            if (AcousticEchoCanceler.isAvailable()) {
+                aec = AcousticEchoCanceler.create(sessionId)?.apply { enabled = true }
+            }
+            if (NoiseSuppressor.isAvailable()) {
+                ns = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
+            }
+        } catch (_: Throwable) {
+        }
+
         val out = ByteArrayOutputStream()
         val preRing = ArrayDeque<ByteArray>()
         val chunkBuf = ByteArray(CHUNK_BYTES)
@@ -198,7 +213,8 @@ object BackgroundVoiceResponder {
         var silenceChunks = 0
         var speechChunks = 0
         var waitChunks = 0
-        var noiseFloor = 220.0
+        var noiseFloor = 160.0
+        var noiseInitialized = false
 
         try {
             while (true) {
@@ -210,41 +226,64 @@ object BackgroundVoiceResponder {
 
                 if (!speechStarted) {
                     waitChunks++
-                    if (waitChunks == 1 && rms < 450.0) {
-                        noiseFloor = max(180.0, rms)
+                    val clampedRms = rms.coerceIn(20.0, 2200.0)
+                    if (!noiseInitialized) {
+                        noiseFloor = clampedRms
+                        noiseInitialized = true
+                    } else if (waitChunks <= 3) {
+                        noiseFloor = noiseFloor * 0.6 + clampedRms * 0.4
                     }
                     preRing.addLast(chunk)
                     while (preRing.size > PRE_SPEECH_CHUNKS) {
                         preRing.removeFirst()
                     }
-                    val threshold = max(240.0, noiseFloor * 2.1)
-                    if (rms >= threshold) {
+                    val startThreshold = max(180.0, noiseFloor * 2.25 + 65.0)
+                    if (rms >= startThreshold) {
                         speechStarted = true
                         for (pre in preRing) {
                             out.write(pre)
                         }
                         preRing.clear()
                         speechChunks = 1
-                    } else if (waitChunks >= MAX_WAIT_SPEECH_CHUNKS) {
-                        return null
+                    } else {
+                        // EMA assimétrico contínuo durante espera de fala
+                        val alpha = if (clampedRms < noiseFloor) 0.2 else 0.06
+                        noiseFloor = (noiseFloor * (1.0 - alpha) + clampedRms * alpha)
+                            .coerceIn(20.0, 2200.0)
+                        if (waitChunks >= MAX_WAIT_SPEECH_CHUNKS) {
+                            return null
+                        }
                     }
                 } else {
                     out.write(chunk)
                     speechChunks++
-                    val keepThreshold = max(180.0, noiseFloor * 1.55)
+                    val keepThreshold = max(125.0, noiseFloor * 1.45 + 30.0)
                     if (rms < keepThreshold) {
                         silenceChunks++
-                        if (silenceChunks >= SILENCE_END_CHUNKS) break
+                        val requiredSilence = if (speechChunks >= 35) 6 else SILENCE_END_CHUNKS
+                        if (silenceChunks >= requiredSilence) break
                     } else {
                         silenceChunks = 0
                     }
                     if (speechChunks >= MAX_SPEECH_CHUNKS) break
                 }
             }
-            return if (speechStarted && out.size() > CHUNK_BYTES) out.toByteArray() else null
+            return if (speechStarted && speechChunks >= 2 && out.size() > CHUNK_BYTES) {
+                out.toByteArray()
+            } else {
+                null
+            }
         } catch (_: Throwable) {
             return null
         } finally {
+            try {
+                aec?.release()
+            } catch (_: Throwable) {
+            }
+            try {
+                ns?.release()
+            } catch (_: Throwable) {
+            }
             try {
                 activeRec.stop()
             } catch (_: Throwable) {
@@ -259,13 +298,22 @@ object BackgroundVoiceResponder {
     private fun computeRmsInt16(pcm: ByteArray): Double {
         val count = pcm.size / 2
         if (count <= 0) return 0.0
-        var sumSq = 0.0
+        var sum = 0.0
         var i = 0
         while (i + 1 < pcm.size) {
             val lo = pcm[i].toInt() and 0xFF
             val hi = pcm[i + 1].toInt()
-            val sample = (hi shl 8) or lo
-            sumSq += sample.toDouble() * sample.toDouble()
+            sum += ((hi shl 8) or lo).toDouble()
+            i += 2
+        }
+        val mean = sum / count
+        var sumSq = 0.0
+        i = 0
+        while (i + 1 < pcm.size) {
+            val lo = pcm[i].toInt() and 0xFF
+            val hi = pcm[i + 1].toInt()
+            val centered = ((hi shl 8) or lo).toDouble() - mean
+            sumSq += centered * centered
             i += 2
         }
         return sqrt(sumSq / count)

@@ -142,4 +142,95 @@ void main() {
     expect(header.getUint32(40, Endian.little), pcm.length);
     expect(wav.sublist(44), pcm);
   });
+
+  test('PcmEnergy.dcRemovedRmsInt16 eliminates microphone DC bias', () {
+    final dcOnly = Uint8List(640);
+    final data = ByteData.sublistView(dcOnly);
+    for (var i = 0; i < 320; i++) {
+      data.setInt16(i * 2, 1500, Endian.little);
+    }
+    expect(PcmEnergy.rmsInt16(dcOnly), closeTo(1500.0, 0.1));
+    expect(PcmEnergy.dcRemovedRmsInt16(dcOnly), closeTo(0.0, 0.01));
+    expect(PcmEnergy.zeroCrossingRate(dcOnly), 0.0);
+  });
+
+  test('Adaptive Auto-VAD adapts to steady room noise, rejects 20ms clicks, and preserves speech with hysteresis', () async {
+    final vad = VadSegmenter.adaptive(
+      sampleRate: 16000,
+      profile: VadProfile.balanced,
+      preSpeechDuration: const Duration(milliseconds: 60),
+      silenceHangover: const Duration(milliseconds: 80),
+      maxTurnDuration: const Duration(seconds: 5),
+    );
+
+    final roomHum = _sineFrame(320, 220.0); // 20ms steady fan/AC hum
+    final loudClick = _sineFrame(320, 2000.0); // 20ms single click/tap
+    final strongSpeech = _sineFrame(320, 1800.0); // clear voice
+    final softEnding = _sineFrame(320, 560.0); // below startThreshold, above continueThreshold
+
+    final emitted = <Uint8List>[];
+
+    // 1. Feed 25 frames (500ms) of steady room hum -> noise floor adapts, ZERO false triggers
+    for (var i = 0; i < 25; i++) {
+      await for (final seg in vad.processFrame(roomHum)) {
+        emitted.add(seg);
+      }
+    }
+    expect(emitted, isEmpty);
+    expect(vad.isInSpeech, isFalse);
+    expect(vad.noiseFloorRms, greaterThan(100.0));
+    expect(vad.effectiveStartThreshold, greaterThan(vad.effectiveContinueThreshold));
+
+    // 2. Single 20ms click followed by room hum -> rejected by onset debounce
+    await for (final seg in vad.processFrame(loudClick)) {
+      emitted.add(seg);
+    }
+    for (var i = 0; i < 6; i++) {
+      await for (final seg in vad.processFrame(roomHum)) {
+        emitted.add(seg);
+      }
+    }
+    expect(emitted, isEmpty);
+    expect(vad.isInSpeech, isFalse);
+
+    // 3. Sustained speech (14 frames = 280ms) + soft syllable ending (4 frames = 80ms)
+    for (var i = 0; i < 14; i++) {
+      await for (final seg in vad.processFrame(strongSpeech)) {
+        emitted.add(seg);
+      }
+    }
+    expect(vad.isInSpeech, isTrue);
+
+    for (var i = 0; i < 4; i++) {
+      await for (final seg in vad.processFrame(softEnding)) {
+        emitted.add(seg);
+      }
+    }
+    // Hysteresis keeps speech active through soft ending
+    expect(vad.isInSpeech, isTrue);
+    expect(emitted, isEmpty);
+
+    // 4. Return to room hum for hangover (4 frames = 80ms) -> cleanly emits 1 full utterance
+    for (var i = 0; i < 5; i++) {
+      await for (final seg in vad.processFrame(roomHum)) {
+        emitted.add(seg);
+      }
+    }
+    expect(emitted, hasLength(1));
+    expect(vad.isInSpeech, isFalse);
+    expect(emitted.single.length, greaterThan(14 * 640));
+  });
+
+  test('VadSegmenter.applyProfile updates thresholds and hangover live', () {
+    final vad = VadSegmenter.adaptive(profile: VadProfile.quiet);
+    final quietStart = vad.effectiveStartThreshold;
+
+    vad.applyProfile(
+      VadProfile.noisy,
+      silenceHangover: const Duration(milliseconds: 1200),
+    );
+    expect(vad.profile, VadProfile.noisy);
+    expect(vad.silenceHangover, const Duration(milliseconds: 1200));
+    expect(vad.effectiveStartThreshold, greaterThan(quietStart));
+  });
 }

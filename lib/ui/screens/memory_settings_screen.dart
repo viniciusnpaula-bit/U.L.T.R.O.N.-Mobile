@@ -74,7 +74,7 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF160509),
+        backgroundColor: const Color(0xFF111114),
         title: const Text('Nova correção de voz'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -121,7 +121,7 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0002),
+      backgroundColor: const Color(0xFF080808),
       appBar: AppBar(
         title: const Text('Memória & Voz'),
         actions: [
@@ -149,7 +149,7 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
                       child: ListTile(
                         leading: const Icon(
                           Icons.record_voice_over,
-                          color: Color(0xFFE50914),
+                          color: Color(0xFFF10D28),
                         ),
                         title: Text(
                           'Voz: ${_voiceService.activeVoiceLabel}',
@@ -261,7 +261,7 @@ class _SectionHeader extends StatelessWidget {
       child: Text(
         title,
         style: const TextStyle(
-          color: Color(0xFFFFA0A0),
+          color: Color(0xFF9A9AA3),
           fontWeight: FontWeight.w600,
           letterSpacing: 0.6,
         ),
@@ -281,7 +281,7 @@ class _EmptyHint extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Text(
         message,
-        style: const TextStyle(color: Color(0xFF9E6A70)),
+        style: const TextStyle(color: Color(0xFF9A9AA3)),
       ),
     );
   }

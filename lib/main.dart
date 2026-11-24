@@ -10,6 +10,7 @@ import 'ui/screens/ai_settings_screen.dart';
 import 'ui/screens/auth_screen.dart';
 import 'ui/screens/boot_loading_screen.dart';
 import 'ui/screens/core_screen.dart';
+import 'ui/theme/ultron_theme.dart';
 
 void main() => runApp(UltronApp(gate: AuthGate(), vault: PinVault()));
 
@@ -69,26 +70,7 @@ class _UltronAppState extends State<UltronApp> {
   Widget build(BuildContext context) => MaterialApp(
         title: 'U.L.T.R.O.N.',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          brightness: Brightness.dark,
-          fontFamily: 'monospace',
-          scaffoldBackgroundColor: const Color(0xFF0A0002),
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFFE50914),
-            primary: const Color(0xFFE50914),
-            secondary: const Color(0xFFFF1A24),
-            surface: const Color(0xFF2E0305),
-            brightness: Brightness.dark,
-          ),
-          appBarTheme: const AppBarTheme(
-            backgroundColor: Color(0xFF0A0002),
-            foregroundColor: Color(0xFFF0E6E7),
-            elevation: 0,
-            centerTitle: false,
-          ),
-          dividerColor: const Color(0xFF51080D),
-          useMaterial3: true,
-        ),
+        theme: UltronTheme.dark(),
         home: AnimatedBuilder(
           animation: Listenable.merge([widget.gate, _coordinator]),
           builder: (context, child) {

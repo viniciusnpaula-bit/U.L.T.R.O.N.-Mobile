@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../services/startup_coordinator.dart';
+import '../theme/ultron_theme.dart';
 
 class BootLoadingScreen extends StatefulWidget {
   const BootLoadingScreen({super.key, required this.coordinator});
@@ -14,7 +15,7 @@ class BootLoadingScreen extends StatefulWidget {
 }
 
 class _BootLoadingScreenState extends State<BootLoadingScreen> {
-  static const _crimson = Color(0xFFE50914);
+  static const _crimson = UltronColors.crimson;
 
   @override
   void initState() {
@@ -36,7 +37,7 @@ class _BootLoadingScreenState extends State<BootLoadingScreen> {
         final error = coordinator.error;
 
         return Scaffold(
-          backgroundColor: const Color(0xFF0A0002),
+          backgroundColor: UltronColors.bg,
           body: SafeArea(
             child: Center(
               child: Padding(
@@ -44,28 +45,28 @@ class _BootLoadingScreenState extends State<BootLoadingScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.radar, size: 72, color: _crimson),
+                    const UltronMark(size: 56),
                     const SizedBox(height: 16),
                     const Text(
                       'U.L.T.R.O.N.',
                       style: TextStyle(
-                        color: Color(0xFFFFD0D3),
-                        fontSize: 22,
+                        color: UltronColors.textPrimary,
+                        fontSize: 20,
                         fontWeight: FontWeight.w600,
-                        letterSpacing: 6,
+                        letterSpacing: 4,
                       ),
                     ),
                     const SizedBox(height: 20),
                     LinearProgressIndicator(
                       value: coordinator.progress,
-                      backgroundColor: const Color(0xFF28050A),
+                      backgroundColor: UltronColors.surfaceElevated,
                       color: _crimson,
                     ),
                     const SizedBox(height: 14),
                     Text(
                       coordinator.statusLabel,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Color(0xFFFFA0A0)),
+                      style: const TextStyle(color: UltronColors.textSecondary),
                     ),
                     const SizedBox(height: 20),
                     _StageRow(
@@ -98,7 +99,7 @@ class _BootLoadingScreenState extends State<BootLoadingScreen> {
                         error,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
-                          color: Color(0xFFFF6B73),
+                          color: Color(0xFFF10D28),
                           fontSize: 12,
                         ),
                       ),
@@ -147,10 +148,10 @@ class _StageRow extends StatelessWidget {
                 ? Icons.radio_button_checked
                 : Icons.radio_button_unchecked;
     final color = completed
-        ? const Color(0xFFFF4D57)
+        ? const Color(0xFFF10D28)
         : active
-            ? const Color(0xFFFFA0A0)
-            : const Color(0xFF5A2227);
+            ? const Color(0xFF9A9AA3)
+            : const Color(0xFF222228);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),

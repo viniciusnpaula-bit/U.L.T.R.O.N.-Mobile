@@ -130,6 +130,27 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             }
         }
 
+        /** Solicita ao Flutter que silencie a fala ativa (botão "Parar fala" na notificação). */
+        fun notifyStopSpeakingRequested() {
+            instance?.runOnUiThread {
+                instance?.deviceChannel?.invokeMethod("onStopSpeakingRequested", null)
+            }
+        }
+
+        /** Notifica o Flutter que uma notificação urgente foi triada em tempo real. */
+        fun notifyUrgentNotificationDetected() {
+            instance?.runOnUiThread {
+                instance?.deviceChannel?.invokeMethod("onUrgentNotificationDetected", null)
+            }
+        }
+
+        /** Notifica o Flutter que a configuração de triagem mudou via ação de notificação. */
+        fun notifyTriageConfigChanged() {
+            instance?.runOnUiThread {
+                instance?.deviceChannel?.invokeMethod("onTriageConfigChanged", null)
+            }
+        }
+
         private val pendingWorkflowIds = mutableListOf<Int>()
 
         fun notifyWorkflowTriggered(flowId: Int) {
@@ -866,6 +887,37 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     }
                 }
                 result.success(true)
+            }
+            "setBackgroundResponseState" -> {
+                val active = call.argument<Boolean>("active") ?: false
+                val phase = call.argument<String>("phase") ?: "speaking"
+                val preview = call.argument<String>("preview") ?: ""
+                if (active) {
+                    ResponseContinuityService.startOrUpdate(this, phase, preview)
+                } else {
+                    ResponseContinuityService.stop(this)
+                }
+                result.success(true)
+            }
+            "notifyBackgroundResponseReady" -> {
+                val title = call.argument<String>("title") ?: "U.L.T.R.O.N."
+                val body = call.argument<String>("body") ?: ""
+                if (body.isNotBlank()) {
+                    ResponseContinuityService.postBackgroundAnswerReady(this, title, body)
+                }
+                result.success(true)
+            }
+            "configureSmartNotificationTriage" -> {
+                @Suppress("UNCHECKED_CAST")
+                val cfg = call.arguments as? Map<String, Any?> ?: emptyMap()
+                UltronNotificationService.saveTriageConfig(this, cfg)
+                result.success(true)
+            }
+            "getSmartNotificationTriageConfig" -> {
+                result.success(UltronNotificationService.loadTriageConfig(this))
+            }
+            "consumePendingUrgentNotifications" -> {
+                result.success(UltronNotificationService.consumePendingUrgentEvents(this))
             }
             "isNotificationListenerEnabled" -> {
                 result.success(isNotificationServiceEnabled())

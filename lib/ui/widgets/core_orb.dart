@@ -7,9 +7,10 @@ import 'package:flutter/scheduler.dart';
 
 enum CoreStage { center, corner, hidden }
 
-/// Renders the animated crimson U.L.T.R.O.N. holographic reactor core using a
-/// runtime [FragmentProgram] plasma sphere layered with crisp 2D tactical HUD
-/// gyroscopes, or falling back cleanly to [CorePainter].
+/// Renders the animated crimson 3D geodesic U.L.T.R.O.N. holographic core using
+/// a runtime [FragmentProgram] volumetric glow layered with a real-time 3D
+/// subdivided icosahedron wireframe mesh, luminous nodes, and tilted orbital
+/// rings, or falling back cleanly to [CorePainter].
 /// Automatically pauses its [Ticker] when hidden or when the app leaves
 /// [AppLifecycleState.resumed].
 class CoreOrb extends StatefulWidget {
@@ -169,7 +170,7 @@ class _ShaderCorePainter extends CustomPainter {
       return;
     }
     if (shaderDrawn) {
-      _paintTacticalGyroscope(canvas, size, time, energy);
+      _paintGeodesicCore(canvas, size, time, energy);
     }
   }
 
@@ -188,23 +189,13 @@ class CorePainter extends CustomPainter {
 
   static const _auraGradient = RadialGradient(
     colors: [
-      Color(0x669E0616),
-      Color(0x3851080D),
-      Color(0x142B0307),
-      Color(0x0019171B),
+      Color(0xEEFFF0F2),
+      Color(0xBBFF7A8C),
+      Color(0x66B01A32),
+      Color(0x28490812),
+      Color(0x00080808),
     ],
-    stops: [0.0, 0.36, 0.72, 1.0],
-  );
-
-  static const _sphereGradient = RadialGradient(
-    colors: [
-      Color(0xFFFFD8D6),
-      Color(0xFFFF4A4E),
-      Color(0xFFB80714),
-      Color(0xFF280207),
-      Color(0xFF0E0003),
-    ],
-    stops: [0.0, 0.18, 0.45, 0.82, 1.0],
+    stops: [0.0, 0.14, 0.36, 0.68, 1.0],
   );
 
   @override
@@ -212,9 +203,9 @@ class CorePainter extends CustomPainter {
     if (size.isEmpty) return;
     final side = size.shortestSide;
     final center = size.center(Offset.zero);
-    final pulse = 1.0 + 0.03 * (0.4 + energy) * math.sin(time * 3.6);
+    final pulse = 1.0 + 0.025 * (0.35 + energy) * math.sin(time * 2.8);
 
-    final auraRadius = side * 0.49;
+    final auraRadius = side * 0.44 * pulse;
     final auraRect = Rect.fromCircle(center: center, radius: auraRadius);
     canvas.drawCircle(
       center,
@@ -222,23 +213,21 @@ class CorePainter extends CustomPainter {
       Paint()..shader = _auraGradient.createShader(auraRect),
     );
 
-    final sphereR = side * 0.235 * pulse;
-    final sphereRect = Rect.fromCircle(center: center, radius: sphereR);
-    canvas.drawCircle(
-      center,
-      sphereR,
-      Paint()..shader = _sphereGradient.createShader(sphereRect),
-    );
-    canvas.drawCircle(
-      center,
-      sphereR,
-      Paint()
-        ..color = const Color(0xCCFF3B47)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4,
-    );
+    // Subtle horizontal scanlines inside the geodesic core aura
+    final scanR = side * 0.28;
+    final scanPaint = Paint()
+      ..color = const Color(0x14FF8A98)
+      ..strokeWidth = 0.7;
+    for (var dy = -scanR; dy <= scanR; dy += 4.2) {
+      final chord = math.sqrt(math.max(0.0, scanR * scanR - dy * dy));
+      canvas.drawLine(
+        Offset(center.dx - chord, center.dy + dy),
+        Offset(center.dx + chord, center.dy + dy),
+        scanPaint,
+      );
+    }
 
-    _paintTacticalGyroscope(canvas, size, time, energy);
+    _paintGeodesicCore(canvas, size, time, energy);
   }
 
   @override
@@ -246,7 +235,177 @@ class CorePainter extends CustomPainter {
       oldDelegate.time != time || oldDelegate.energy != energy;
 }
 
-void _paintTacticalGyroscope(
+class _Vec3 {
+  const _Vec3(this.x, this.y, this.z);
+  final double x;
+  final double y;
+  final double z;
+
+  _Vec3 normalized() {
+    final len = math.sqrt(x * x + y * y + z * z);
+    if (len == 0) return const _Vec3(0, 0, 1);
+    return _Vec3(x / len, y / len, z / len);
+  }
+}
+
+class _ProjectedVertex {
+  const _ProjectedVertex(this.offset, this.z);
+  final Offset offset;
+  final double z;
+}
+
+class _GeodesicMesh {
+  const _GeodesicMesh(this.vertices, this.edges);
+  final List<_Vec3> vertices;
+  final List<(int, int)> edges;
+}
+
+/// Precomputed 3D icosahedron (outer ghost shell) and frequency-2 subdivided
+/// geodesic sphere (42 vertices, 120 edges) for zero-allocation 60 FPS rendering.
+final _GeodesicMesh _outerIcoMesh = _buildIcosahedronMesh(subdivisions: 0);
+final _GeodesicMesh _innerGeodesicMesh = _buildIcosahedronMesh(subdivisions: 1);
+
+_GeodesicMesh _buildIcosahedronMesh({required int subdivisions}) {
+  final t = (1.0 + math.sqrt(5.0)) / 2.0;
+  final rawVerts = <_Vec3>[
+    const _Vec3(-1, 0, 0), // replaced below
+  ]..clear();
+
+  final baseCoords = <(double, double, double)>[
+    (-1, t, 0),
+    (1, t, 0),
+    (-1, -t, 0),
+    (1, -t, 0),
+    (0, -1, t),
+    (0, 1, t),
+    (0, -1, -t),
+    (0, 1, -t),
+    (t, 0, -1),
+    (t, 0, 1),
+    (-t, 0, -1),
+    (-t, 0, 1),
+  ];
+  for (final c in baseCoords) {
+    rawVerts.add(_Vec3(c.$1, c.$2, c.$3).normalized());
+  }
+
+  var faces = <(int, int, int)>[
+    (0, 11, 5),
+    (0, 5, 1),
+    (0, 1, 7),
+    (0, 7, 10),
+    (0, 10, 11),
+    (1, 5, 9),
+    (5, 11, 4),
+    (11, 10, 2),
+    (10, 7, 6),
+    (7, 1, 8),
+    (3, 9, 4),
+    (3, 4, 2),
+    (3, 2, 6),
+    (3, 6, 8),
+    (3, 8, 9),
+    (4, 9, 5),
+    (2, 4, 11),
+    (6, 2, 10),
+    (8, 6, 7),
+    (9, 8, 1),
+  ];
+
+  final verts = List<_Vec3>.from(rawVerts);
+  for (var s = 0; s < subdivisions; s++) {
+    final midpointCache = <int, int>{};
+    int getMidpoint(int i1, int i2) {
+      final a = math.min(i1, i2);
+      final b = math.max(i1, i2);
+      final key = (a << 16) | b;
+      final existing = midpointCache[key];
+      if (existing != null) return existing;
+      final v1 = verts[a];
+      final v2 = verts[b];
+      final mid = _Vec3(
+        (v1.x + v2.x) * 0.5,
+        (v1.y + v2.y) * 0.5,
+        (v1.z + v2.z) * 0.5,
+      ).normalized();
+      final idx = verts.length;
+      verts.add(mid);
+      midpointCache[key] = idx;
+      return idx;
+    }
+
+    final nextFaces = <(int, int, int)>[];
+    for (final f in faces) {
+      final a = getMidpoint(f.$1, f.$2);
+      final b = getMidpoint(f.$2, f.$3);
+      final c = getMidpoint(f.$3, f.$1);
+      nextFaces.add((f.$1, a, c));
+      nextFaces.add((f.$2, b, a));
+      nextFaces.add((f.$3, c, b));
+      nextFaces.add((a, b, c));
+    }
+    faces = nextFaces;
+  }
+
+  final edgeSet = <int>{};
+  final edges = <(int, int)>[];
+  void addEdge(int i1, int i2) {
+    final a = math.min(i1, i2);
+    final b = math.max(i1, i2);
+    final key = (a << 16) | b;
+    if (edgeSet.add(key)) {
+      edges.add((a, b));
+    }
+  }
+
+  for (final f in faces) {
+    addEdge(f.$1, f.$2);
+    addEdge(f.$2, f.$3);
+    addEdge(f.$3, f.$1);
+  }
+
+  return _GeodesicMesh(verts, edges);
+}
+
+List<_ProjectedVertex> _projectMesh(
+  _GeodesicMesh mesh, {
+  required double radius,
+  required double rotX,
+  required double rotY,
+  required double rotZ,
+}) {
+  final cx = math.cos(rotX);
+  final sx = math.sin(rotX);
+  final cy = math.cos(rotY);
+  final sy = math.sin(rotY);
+  final cz = math.cos(rotZ);
+  final sz = math.sin(rotZ);
+  const focal = 3.4;
+
+  return List<_ProjectedVertex>.generate(mesh.vertices.length, (i) {
+    final v = mesh.vertices[i];
+    // Rotate around Y
+    final x1 = v.x * cy + v.z * sy;
+    final y1 = v.y;
+    final z1 = -v.x * sy + v.z * cy;
+    // Rotate around X
+    final x2 = x1;
+    final y2 = y1 * cx - z1 * sx;
+    final z2 = y1 * sx + z1 * cx;
+    // Rotate around Z
+    final x3 = x2 * cz - y2 * sz;
+    final y3 = x2 * sz + y2 * cz;
+    final z3 = z2;
+
+    final perspective = focal / (focal - z3);
+    return _ProjectedVertex(
+      Offset(x3 * radius * perspective, y3 * radius * perspective),
+      z3,
+    );
+  }, growable: false);
+}
+
+void _paintGeodesicCore(
   Canvas canvas,
   Size size,
   double time,
@@ -255,146 +414,211 @@ void _paintTacticalGyroscope(
   final side = size.shortestSide;
   if (side <= 0) return;
   final center = size.center(Offset.zero);
-  final speed = 0.75 + energy * 1.15;
-  final scale = (side / 210.0).clamp(0.35, 2.2);
+  final e = energy.clamp(0.0, 1.2);
+  final speed = 0.28 + e * 0.55;
+  final scale = (side / 200.0).clamp(0.32, 2.2);
+  final breathe = 1.0 + 0.022 * (0.4 + e) * math.sin(time * 2.8);
 
   canvas.save();
   canvas.translate(center.dx, center.dy);
 
-  // 1. Segmented outer tactical brackets (4 arcs rotating slowly)
-  final bracketR = side * 0.435;
-  final bracketRect = Rect.fromCircle(center: Offset.zero, radius: bracketR);
-  final bracketPaint = Paint()
-    ..color = Color.lerp(
-      const Color(0x99E50914),
-      const Color(0xFFFF6B73),
-      (energy * 0.6).clamp(0.0, 1.0),
-    )!
-    ..style = PaintingStyle.stroke
-    ..strokeCap = StrokeCap.round
-    ..strokeWidth = 2.1 * scale;
-
-  final bracketAngle = time * 0.35 * speed;
-  for (var i = 0; i < 4; i++) {
-    final start = bracketAngle + i * (math.pi / 2) + 0.16;
-    canvas.drawArc(bracketRect, start, math.pi / 2 - 0.32, false, bracketPaint);
-  }
-
-  // 2. Precision 24-tick azimuth dial
-  final dialR = side * 0.375;
-  final majorTickPaint = Paint()
-    ..color = const Color(0xDDE50914)
-    ..strokeCap = StrokeCap.round
-    ..strokeWidth = 1.6 * scale;
-  final minorTickPaint = Paint()
-    ..color = const Color(0x66FFA0A0)
-    ..strokeWidth = 1.0 * scale;
-
-  const tickCount = 24;
-  for (var i = 0; i < tickCount; i++) {
-    final theta = -time * 0.18 * speed + (i / tickCount) * math.pi * 2;
-    final isMajor = i % 6 == 0;
-    final inner = dialR - (isMajor ? 6.5 : 3.2) * scale;
-    final outer = dialR + (isMajor ? 2.5 : 0.5) * scale;
-    canvas.drawLine(
-      Offset(math.cos(theta) * inner, math.sin(theta) * inner),
-      Offset(math.cos(theta) * outer, math.sin(theta) * outer),
-      isMajor ? majorTickPaint : minorTickPaint,
+  // 1. Subtle floating micro-particles around the outer perimeter
+  final particlePaint = Paint()..style = PaintingStyle.fill;
+  for (var i = 0; i < 16; i++) {
+    final seed = i * 1.61803398875;
+    final angle = seed * 6.2831 + time * (0.04 + (i % 3) * 0.015);
+    final dist = side * (0.37 + (i % 5) * 0.026);
+    final alpha = (0.18 + 0.25 * (0.5 + 0.5 * math.sin(time * 1.4 + i)))
+        .clamp(0.0, 0.55);
+    particlePaint.color =
+        const Color(0xFFFF8896).withValues(alpha: alpha);
+    canvas.drawCircle(
+      Offset(math.cos(angle) * dist, math.sin(angle) * dist),
+      (i % 3 == 0 ? 1.15 : 0.75) * scale,
+      particlePaint,
     );
   }
 
-  // 3. Primary 3D-tilted elliptical orbital ring + glowing orbital nodes
-  final baseR = side * 0.25;
-  canvas.save();
-  canvas.rotate(0.42 + time * 0.82 * speed);
-  final orbit1Rect = Rect.fromCenter(
-    center: Offset.zero,
-    width: baseR * 1.48 * 2,
-    height: baseR * 0.72 * 2,
+  // 2. Delicate tilted orbital rings & diagonal axis ellipse (matches reference photo)
+  _paintOrbitalRings(canvas, side, time, speed, e, scale);
+
+  // 3. Outer ghost wireframe geodesic cage (counter-rotating, faint burgundy-rose)
+  final outerRadius = side * 0.315 * breathe;
+  final outerProjected = _projectMesh(
+    _outerIcoMesh,
+    radius: outerRadius,
+    rotX: -0.32 - time * 0.14 * speed,
+    rotY: -time * 0.22 * speed,
+    rotZ: 0.18,
   );
-  canvas.drawOval(
-    orbit1Rect,
-    Paint()
-      ..color = const Color(0xB8FF2E3A)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5 * scale,
-  );
-  final nodeGlowPaint = Paint()..color = const Color(0x55FF3B47);
-  final nodeCorePaint = Paint()..color = const Color(0xFFFFD8D6);
-  for (var i = 0; i < 2; i++) {
-    final th = time * 1.6 * speed + i * math.pi;
-    final pos =
-        Offset(math.cos(th) * baseR * 1.48, math.sin(th) * baseR * 0.72);
-    canvas.drawCircle(pos, 4.6 * scale, nodeGlowPaint);
-    canvas.drawCircle(pos, 2.0 * scale, nodeCorePaint);
+  final ghostEdgePaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 0.65 * scale;
+  for (final edge in _outerIcoMesh.edges) {
+    final p1 = outerProjected[edge.$1];
+    final p2 = outerProjected[edge.$2];
+    final avgZ = (p1.z + p2.z) * 0.5;
+    final depthT = ((avgZ + 1.0) * 0.5).clamp(0.0, 1.0);
+    ghostEdgePaint.color = const Color(0xFF9C3848)
+        .withValues(alpha: 0.08 + depthT * (0.18 + 0.08 * e));
+    canvas.drawLine(p1.offset, p2.offset, ghostEdgePaint);
   }
-  canvas.restore();
 
-  // 4. Counter-rotating secondary orbital ring
-  canvas.save();
-  canvas.rotate(-0.55 - time * 1.05 * speed);
-  final orbit2Rect = Rect.fromCenter(
-    center: Offset.zero,
-    width: baseR * 0.78 * 2,
-    height: baseR * 1.44 * 2,
+  // 4. Primary 3D subdivided geodesic wireframe sphere (42 vertices, 120 edges)
+  final innerRadius = side * 0.222 * breathe;
+  final innerProjected = _projectMesh(
+    _innerGeodesicMesh,
+    radius: innerRadius,
+    rotX: 0.28 + math.sin(time * 0.35 * speed) * 0.18,
+    rotY: time * 0.42 * speed,
+    rotZ: -0.14 + time * 0.09 * speed,
   );
-  canvas.drawOval(
-    orbit2Rect,
-    Paint()
-      ..color = const Color(0x8CE50914)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2 * scale,
-  );
-  canvas.restore();
 
-  // 5. Dual counter-rotating Ultron hexagonal containment lattice
-  _drawPolygon(
-    canvas,
-    radius: side * 0.165,
-    sides: 6,
-    rotation: time * 0.45 * speed,
-    color: const Color(0xB0FF5560),
-    strokeWidth: 1.3 * scale,
-  );
-  _drawPolygon(
-    canvas,
-    radius: side * 0.125,
-    sides: 6,
-    rotation: -time * 0.65 * speed + math.pi / 6,
-    color: const Color(0xCCFFA0A0),
-    strokeWidth: 1.0 * scale,
-  );
+  final backEdgePaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 0.7 * scale;
+  final frontGlowPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeWidth = 2.4 * scale;
+  final frontEdgePaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeWidth = 0.95 * scale;
+
+  // Back hemisphere edges first (translucent crystal depth)
+  for (final edge in _innerGeodesicMesh.edges) {
+    final p1 = innerProjected[edge.$1];
+    final p2 = innerProjected[edge.$2];
+    final avgZ = (p1.z + p2.z) * 0.5;
+    if (avgZ >= 0.0) continue;
+    final depthT = ((avgZ + 1.0)).clamp(0.0, 1.0);
+    backEdgePaint.color = const Color(0xFF8C2535)
+        .withValues(alpha: 0.14 + depthT * 0.24);
+    canvas.drawLine(p1.offset, p2.offset, backEdgePaint);
+  }
+
+  // Front hemisphere edges on top (crisp luminous rose-crimson)
+  for (final edge in _innerGeodesicMesh.edges) {
+    final p1 = innerProjected[edge.$1];
+    final p2 = innerProjected[edge.$2];
+    final avgZ = (p1.z + p2.z) * 0.5;
+    if (avgZ < 0.0) continue;
+    final depthT = avgZ.clamp(0.0, 1.0);
+
+    frontGlowPaint.color = const Color(0xFFF10D28)
+        .withValues(alpha: 0.10 + depthT * (0.18 + 0.12 * e));
+    canvas.drawLine(p1.offset, p2.offset, frontGlowPaint);
+
+    frontEdgePaint.color = Color.lerp(
+      const Color(0xFFB83C4E),
+      const Color(0xFFFFB5C0),
+      (depthT * 0.85 + e * 0.15).clamp(0.0, 1.0),
+    )!
+        .withValues(alpha: 0.52 + depthT * 0.44);
+    canvas.drawLine(p1.offset, p2.offset, frontEdgePaint);
+  }
+
+  // 5. Luminous vertex nodes (bright white-pink stars on front intersections)
+  final nodeHaloPaint = Paint()..style = PaintingStyle.fill;
+  final nodeCorePaint = Paint()..style = PaintingStyle.fill;
+  for (final p in innerProjected) {
+    if (p.z < -0.15) {
+      nodeCorePaint.color = const Color(0x55D46878);
+      canvas.drawCircle(p.offset, 0.85 * scale, nodeCorePaint);
+      continue;
+    }
+    final depthT = ((p.z + 0.15) / 1.15).clamp(0.0, 1.0);
+    nodeHaloPaint.color = const Color(0xFFFF4D66)
+        .withValues(alpha: 0.16 + depthT * (0.32 + 0.16 * e));
+    canvas.drawCircle(p.offset, (2.2 + depthT * 1.8) * scale, nodeHaloPaint);
+
+    nodeCorePaint.color = Color.lerp(
+      const Color(0xFFFFA8B4),
+      const Color(0xFFFFFFFF),
+      depthT,
+    )!
+        .withValues(alpha: 0.55 + depthT * 0.45);
+    canvas.drawCircle(p.offset, (0.9 + depthT * 0.85) * scale, nodeCorePaint);
+  }
 
   canvas.restore();
 }
 
-void _drawPolygon(
-  Canvas canvas, {
-  required double radius,
-  required int sides,
-  required double rotation,
-  required Color color,
-  required double strokeWidth,
-}) {
-  canvas.save();
-  canvas.rotate(rotation);
-  final path = Path();
-  for (var i = 0; i <= sides; i++) {
-    final angle = (i / sides) * math.pi * 2;
-    final pt = Offset(math.cos(angle) * radius, math.sin(angle) * radius);
-    if (i == 0) {
-      path.moveTo(pt.dx, pt.dy);
-    } else {
-      path.lineTo(pt.dx, pt.dy);
-    }
-  }
-  path.close();
-  canvas.drawPath(
-    path,
+void _paintOrbitalRings(
+  Canvas canvas,
+  double side,
+  double time,
+  double speed,
+  double energy,
+  double scale,
+) {
+  // Subtle outermost faint circular halo
+  canvas.drawCircle(
+    Offset.zero,
+    side * 0.445,
     Paint()
-      ..color = color
+      ..color = const Color(0x22A83C4C)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth,
+      ..strokeWidth = 0.7 * scale,
+  );
+
+  // Primary crisp tilted orbital ellipse
+  canvas.save();
+  canvas.rotate(-0.42 + time * 0.12 * speed);
+  final ring1 = Rect.fromCenter(
+    center: Offset.zero,
+    width: side * 0.82,
+    height: side * 0.69,
+  );
+  canvas.drawOval(
+    ring1,
+    Paint()
+      ..color = Color.lerp(
+        const Color(0x88D96A7A),
+        const Color(0xDDFFA6B2),
+        (energy * 0.55).clamp(0.0, 1.0),
+      )!
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.15 * scale,
+  );
+  canvas.restore();
+
+  // Secondary counter-tilted thin orbital ring
+  canvas.save();
+  canvas.rotate(0.58 - time * 0.09 * speed);
+  final ring2 = Rect.fromCenter(
+    center: Offset.zero,
+    width: side * 0.76,
+    height: side * 0.63,
+  );
+  canvas.drawOval(
+    ring2,
+    Paint()
+      ..color = const Color(0x4CB84A5A)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.85 * scale,
+  );
+  canvas.restore();
+
+  // Signature razor-thin diagonal orbital axis ellipse (top-left to bottom-right)
+  canvas.save();
+  canvas.rotate(0.78 + math.sin(time * 0.18 * speed) * 0.04);
+  final diagRing = Rect.fromCenter(
+    center: Offset.zero,
+    width: side * 0.94,
+    height: side * 0.032,
+  );
+  canvas.drawOval(
+    diagRing,
+    Paint()
+      ..color = Color.lerp(
+        const Color(0x66D66272),
+        const Color(0xBBFFAAB6),
+        (energy * 0.5).clamp(0.0, 1.0),
+      )!
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.9 * scale,
   );
   canvas.restore();
 }

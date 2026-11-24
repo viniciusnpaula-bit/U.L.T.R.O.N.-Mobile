@@ -1,0 +1,262 @@
+import 'package:flutter/material.dart';
+
+import '../../services/audio_vad_buffer.dart';
+import '../../services/voice_service.dart';
+import '../theme/ultron_theme.dart';
+
+/// Seção Configurações: voz, Auto-VAD adaptativo, foco noturno, diagnóstico e atualizações.
+class SettingsSection extends StatelessWidget {
+  const SettingsSection({
+    super.key,
+    required this.isAudioOn,
+    required this.nightFocusMode,
+    required this.selectedVoiceProfile,
+    required this.vadProfile,
+    required this.vadHangoverMs,
+    required this.vadNoiseFloorDb,
+    required this.vadStartThresholdDb,
+    required this.installedVersion,
+    required this.hasUpdate,
+    required this.onToggleAudio,
+    required this.onToggleNightFocus,
+    required this.onSelectVadProfile,
+    required this.onSelectVadHangoverMs,
+    required this.onOpenVoiceSelector,
+    required this.onOpenWakeDiagnostics,
+    required this.onOpenAiSettings,
+    required this.onOpenUpdates,
+    required this.onOpenHelp,
+  });
+
+  final bool isAudioOn;
+  final bool nightFocusMode;
+  final VoiceProfile selectedVoiceProfile;
+  final VadProfile vadProfile;
+  final int vadHangoverMs;
+  final double vadNoiseFloorDb;
+  final double vadStartThresholdDb;
+  final String installedVersion;
+  final bool hasUpdate;
+  final VoidCallback onToggleAudio;
+  final VoidCallback onToggleNightFocus;
+  final ValueChanged<VadProfile> onSelectVadProfile;
+  final ValueChanged<int> onSelectVadHangoverMs;
+  final VoidCallback onOpenVoiceSelector;
+  final VoidCallback onOpenWakeDiagnostics;
+  final VoidCallback onOpenAiSettings;
+  final VoidCallback onOpenUpdates;
+  final VoidCallback onOpenHelp;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        const UltronSectionLabel('Voz e áudio (microfone nativo)'),
+        UltronActionTile(
+          icon: Icons.record_voice_over_outlined,
+          title: 'Perfil de voz e síntese',
+          subtitle: 'Ativo: ${selectedVoiceProfile.label}',
+          onTap: onOpenVoiceSelector,
+        ),
+        const SizedBox(height: 8),
+        UltronSurfaceCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Auto-VAD adaptativo',
+                style: TextStyle(
+                  color: UltronColors.textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                vadProfile.description,
+                style: const TextStyle(
+                  color: UltronColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: VadProfile.values.map((p) {
+                  final selected = vadProfile == p;
+                  return ChoiceChip(
+                    label: Text(p.label),
+                    selected: selected,
+                    onSelected: (_) => onSelectVadProfile(p),
+                    selectedColor: UltronColors.surfaceElevated,
+                    backgroundColor: UltronColors.bg,
+                    side: BorderSide(
+                      color: selected
+                          ? UltronColors.crimson
+                          : UltronColors.borderSubtle,
+                    ),
+                    labelStyle: TextStyle(
+                      color: selected
+                          ? UltronColors.textPrimary
+                          : UltronColors.textSecondary,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                      fontSize: 12,
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Pausa para encerrar fala',
+                style: TextStyle(
+                  color: UltronColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: const [
+                  (600, 'Rápido (0,6s)'),
+                  (850, 'Natural (0,85s)'),
+                  (1200, 'Longo (1,2s)'),
+                ].map((opt) {
+                  final selected = vadHangoverMs == opt.$1;
+                  return ChoiceChip(
+                    label: Text(opt.$2),
+                    selected: selected,
+                    onSelected: (_) => onSelectVadHangoverMs(opt.$1),
+                    selectedColor: UltronColors.surfaceElevated,
+                    backgroundColor: UltronColors.bg,
+                    side: BorderSide(
+                      color: selected
+                          ? UltronColors.textSecondary
+                          : UltronColors.borderSubtle,
+                    ),
+                    labelStyle: TextStyle(
+                      color: selected
+                          ? UltronColors.textPrimary
+                          : UltronColors.textSecondary,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                      fontSize: 12,
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Piso ambiente: ${vadNoiseFloorDb.toStringAsFixed(1)} dBFS  ·  Limiar: ${vadStartThresholdDb.toStringAsFixed(1)} dBFS',
+                style: UltronTheme.mono.copyWith(
+                  color: UltronColors.textMuted,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        UltronSurfaceCard(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          child: Column(
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: isAudioOn,
+                onChanged: (_) => onToggleAudio(),
+                activeThumbColor: UltronColors.crimson,
+                title: const Text(
+                  'Respostas por voz',
+                  style: TextStyle(
+                    color: UltronColors.textPrimary,
+                    fontSize: 14,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Ativa ou silencia a fala automática do assistente',
+                  style: TextStyle(
+                    color: UltronColors.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              const Divider(height: 1, color: UltronColors.borderSubtle),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: nightFocusMode,
+                onChanged: (_) => onToggleNightFocus(),
+                activeThumbColor: UltronColors.crimson,
+                title: const Text(
+                  'Modo foco noturno',
+                  style: TextStyle(
+                    color: UltronColors.textPrimary,
+                    fontSize: 14,
+                  ),
+                ),
+                subtitle: const Text(
+                  'Reduz energia do CoreOrb e ativa voz em modo sussurro',
+                  style: TextStyle(
+                    color: UltronColors.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        UltronActionTile(
+          icon: Icons.graphic_eq_rounded,
+          title: 'Diagnóstico da palavra de ativação',
+          subtitle: 'Permissões de segundo plano, bateria e sentinela offline',
+          onTap: onOpenWakeDiagnostics,
+        ),
+        const SizedBox(height: 16),
+        const UltronSectionLabel('Inteligência e sistema'),
+        UltronActionTile(
+          icon: Icons.tune_rounded,
+          title: 'Provedores de IA, STT e diagnóstico acústico',
+          subtitle: 'Chaves seguras, prioridade de failover e medidor dBFS',
+          onTap: onOpenAiSettings,
+        ),
+        const SizedBox(height: 8),
+        UltronActionTile(
+          icon: Icons.system_update_outlined,
+          title: 'Atualizações do aplicativo',
+          subtitle: hasUpdate
+              ? 'Nova versão disponível no GitHub ($installedVersion instalada)'
+              : 'Versão instalada: $installedVersion',
+          trailing: hasUpdate
+              ? Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: UltronColors.surfaceElevated,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: UltronColors.crimsonBorder),
+                  ),
+                  child: const Text(
+                    'Nova',
+                    style: TextStyle(
+                      color: UltronColors.crimson,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                )
+              : null,
+          onTap: onOpenUpdates,
+        ),
+        const SizedBox(height: 8),
+        UltronActionTile(
+          icon: Icons.help_outline_rounded,
+          title: 'Guia de comandos slash',
+          subtitle: 'Lista de comandos rápidos offline e online',
+          onTap: onOpenHelp,
+        ),
+      ],
+    );
+  }
+}

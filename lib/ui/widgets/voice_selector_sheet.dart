@@ -13,7 +13,7 @@ Future<void> showVoiceSelectorSheet(
 }) {
   return showModalBottomSheet<void>(
     context: context,
-    backgroundColor: const Color(0xFF14040A),
+    backgroundColor: const Color(0xFF111114),
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
@@ -52,9 +52,9 @@ class VoiceSelectorSheet extends StatefulWidget {
 }
 
 class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
-  static const _crimson = Color(0xFFE50914);
-  static const _rose = Color(0xFFFFA0A0);
-  static const _border = Color(0xFF51080D);
+  static const _crimson = Color(0xFFF10D28);
+  static const _rose = Color(0xFF9A9AA3);
+  static const _border = Color(0xFF222228);
 
   final _fishKeyCtrl = TextEditingController();
   final _fishRefCtrl = TextEditingController();
@@ -137,7 +137,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '🎙️ Wake-word alterada para "${wakeProfile.label}" (sherpa-onnx KWS atualizado sem reiniciar).',
+          'Wake-word alterada para "${wakeProfile.label}" (sherpa-onnx KWS atualizado sem reiniciar).',
           style: const TextStyle(fontSize: 11),
         ),
         duration: const Duration(seconds: 2),
@@ -238,16 +238,19 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
         children: [
           Row(
             children: [
-              const Icon(Icons.record_voice_over, color: _crimson, size: 18),
+              const Icon(
+                Icons.record_voice_over_outlined,
+                color: Color(0xFFEEEEEE),
+                size: 18,
+              ),
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
-                  'VOZ DO U.L.T.R.O.N.',
+                  'Voz do U.L.T.R.O.N.',
                   style: TextStyle(
-                    color: _crimson,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2,
+                    color: Color(0xFFEEEEEE),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
@@ -261,7 +264,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: const Color(0xFF2E0305),
+              color: const Color(0xFF18181D),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: _border),
             ),
@@ -271,7 +274,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                 Text(
                   'Voz ativa: $activeVoice',
                   style: const TextStyle(
-                    color: Color(0xFFF0E6E7),
+                    color: Color(0xFFEEEEEE),
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
                   ),
@@ -286,7 +289,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                 const SizedBox(height: 2),
                 Text(
                   'Wake-Word ativa: "${currentWakeWord.label}"',
-                  style: const TextStyle(color: Color(0xFFA89698), fontSize: 10),
+                  style: const TextStyle(color: Color(0xFF9A9AA3), fontSize: 10),
                 ),
               ],
             ),
@@ -314,7 +317,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                       style: OutlinedButton.styleFrom(
                         backgroundColor: currentWakeWord == wp
                             ? _crimson
-                            : const Color(0xFF2E0305),
+                            : const Color(0xFF18181D),
                         foregroundColor:
                             currentWakeWord == wp ? Colors.black : _rose,
                         side: BorderSide(
@@ -357,7 +360,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                       style: OutlinedButton.styleFrom(
                         backgroundColor: currentProfile == prof
                             ? _crimson
-                            : const Color(0xFF2E0305),
+                            : const Color(0xFF18181D),
                         foregroundColor:
                             currentProfile == prof ? Colors.black : _rose,
                         side: BorderSide(
@@ -432,7 +435,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
               padding: EdgeInsets.symmetric(vertical: 12),
               child: Text(
                 'Nenhuma voz pt-BR foi retornada pelo motor TTS do Android. Verifique Configurações do Android → Conversão de texto em voz (Google TTS).',
-                style: TextStyle(color: Color(0xFFA89698), fontSize: 11),
+                style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 11),
               ),
             )
           else ...[
@@ -443,7 +446,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                 padding: EdgeInsets.only(top: 6),
                 child: Text(
                   'Dica: este aparelho só possui 1 voz PT instalada. Para trocar entre mais vozes masculinas/femininas, baixe pacotes em Configurações do Android → Idioma/TTS → Vozes.',
-                  style: TextStyle(color: Color(0xFFA89698), fontSize: 10),
+                  style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 10),
                 ),
               ),
           ],
@@ -462,7 +465,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
     }
 
     return Material(
-      color: const Color(0xFF1D0408),
+      color: const Color(0xFF111114),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: fishActive ? _crimson : _border),
@@ -501,7 +504,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                       vertical: 2,
                     ),
                     decoration: BoxDecoration(
-                      color: fishActive ? _crimson : const Color(0xFF2E0305),
+                      color: fishActive ? _crimson : const Color(0xFF18181D),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
@@ -538,14 +541,14 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                     title: const Text(
                       'Usar voz do Fish Studio (API)',
                       style: TextStyle(
-                        color: Color(0xFFF0E6E7),
+                        color: Color(0xFFEEEEEE),
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                     subtitle: const Text(
                       'Com fallback automático para a voz offline se falhar',
-                      style: TextStyle(color: Color(0xFFA89698), fontSize: 10),
+                      style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 10),
                     ),
                     value: _fishEnabled,
                     onChanged: (v) async {
@@ -561,18 +564,18 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                     controller: _fishKeyCtrl,
                     obscureText: _fishObscureKey,
                     style:
-                        const TextStyle(color: Color(0xFFF0E6E7), fontSize: 12),
+                        const TextStyle(color: Color(0xFFEEEEEE), fontSize: 12),
                     decoration: InputDecoration(
                       labelText: 'Fish API Key',
                       hintText: 'Bearer token do Fish Audio',
                       labelStyle: const TextStyle(color: _rose, fontSize: 11),
                       hintStyle: const TextStyle(
-                        color: Color(0xFF7D6B6D),
+                        color: Color(0xFF686872),
                         fontSize: 11,
                       ),
                       isDense: true,
                       filled: true,
-                      fillColor: const Color(0xFF14040A),
+                      fillColor: const Color(0xFF111114),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                         borderSide: const BorderSide(color: _border),
@@ -597,18 +600,18 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                     key: const ValueKey('fish_reference_id_field'),
                     controller: _fishRefCtrl,
                     style:
-                        const TextStyle(color: Color(0xFFF0E6E7), fontSize: 12),
+                        const TextStyle(color: Color(0xFFEEEEEE), fontSize: 12),
                     decoration: InputDecoration(
                       labelText: 'Reference ID (ID da voz no Fish Studio)',
                       hintText: 'Ex.: 933563129e564b19a115bedd57b7406a',
                       labelStyle: const TextStyle(color: _rose, fontSize: 11),
                       hintStyle: const TextStyle(
-                        color: Color(0xFF7D6B6D),
+                        color: Color(0xFF686872),
                         fontSize: 11,
                       ),
                       isDense: true,
                       filled: true,
-                      fillColor: const Color(0xFF14040A),
+                      fillColor: const Color(0xFF111114),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                         borderSide: const BorderSide(color: _border),
@@ -622,9 +625,9 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                         child: DropdownButtonFormField<String>(
                           key: const ValueKey('fish_language_dropdown'),
                           value: safeLang,
-                          dropdownColor: const Color(0xFF1D0408),
+                          dropdownColor: const Color(0xFF111114),
                           style: const TextStyle(
-                            color: Color(0xFFF0E6E7),
+                            color: Color(0xFFEEEEEE),
                             fontSize: 11,
                           ),
                           decoration: InputDecoration(
@@ -635,7 +638,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                             ),
                             isDense: true,
                             filled: true,
-                            fillColor: const Color(0xFF14040A),
+                            fillColor: const Color(0xFF111114),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
@@ -660,9 +663,9 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                         child: DropdownButtonFormField<String>(
                           key: const ValueKey('fish_model_dropdown'),
                           value: _fishModel,
-                          dropdownColor: const Color(0xFF1D0408),
+                          dropdownColor: const Color(0xFF111114),
                           style: const TextStyle(
-                            color: Color(0xFFF0E6E7),
+                            color: Color(0xFFEEEEEE),
                             fontSize: 11,
                           ),
                           decoration: InputDecoration(
@@ -673,7 +676,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                             ),
                             isDense: true,
                             filled: true,
-                            fillColor: const Color(0xFF14040A),
+                            fillColor: const Color(0xFF111114),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
@@ -697,7 +700,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                   const SizedBox(height: 8),
                   const Text(
                     'No Fish Studio (fish.audio), abra a voz desejada (ex.: Ultron), copie o Reference ID da URL/modelo e gere sua API Key nas configurações da conta.',
-                    style: TextStyle(color: Color(0xFFA89698), fontSize: 10),
+                    style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 10),
                   ),
                   if (_fishFeedback != null) ...[
                     const SizedBox(height: 8),
@@ -705,13 +708,13 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         color: _fishFeedbackIsError
-                            ? const Color(0xFF3E050B)
+                            ? const Color(0xFF18181D)
                             : const Color(0xFF122817),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
                           color: _fishFeedbackIsError
                               ? _crimson
-                              : const Color(0xFF4CAF50),
+                              : const Color(0xFF22C55E),
                         ),
                       ),
                       child: Text(
@@ -719,7 +722,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                         style: TextStyle(
                           color: _fishFeedbackIsError
                               ? _rose
-                              : const Color(0xFFA5D6A7),
+                              : const Color(0xFF22C55E),
                           fontSize: 10,
                         ),
                       ),
@@ -787,7 +790,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
         fishActive && voice.name == widget.voiceService.activeVoiceName;
 
     return Card(
-      color: isSelected ? const Color(0xFF3E050B) : const Color(0xFF1D0408),
+      color: isSelected ? const Color(0xFF18181D) : const Color(0xFF111114),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
         side: BorderSide(color: isSelected ? _crimson : _border),
@@ -797,7 +800,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
         title: Text(
           voice.name,
           style: const TextStyle(
-            color: Color(0xFFF0E6E7),
+            color: Color(0xFFEEEEEE),
             fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
@@ -807,7 +810,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
           '${voice.quality.isEmpty ? '' : ' • ${voice.quality}'}'
           '${isFallback ? ' • Fallback' : ''}',
           style: const TextStyle(
-            color: Color(0xFFA89698),
+            color: Color(0xFF9A9AA3),
             fontSize: 10,
           ),
         ),

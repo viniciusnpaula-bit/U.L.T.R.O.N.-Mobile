@@ -28,7 +28,7 @@ Future<bool> showActionConfirmationDialog(
     context: context,
     barrierDismissible: false,
     builder: (context) => AlertDialog(
-      backgroundColor: const Color(0xFF160509),
+      backgroundColor: const Color(0xFF111114),
       title: Text(request.title),
       content: Text(request.description),
       actions: [
@@ -39,7 +39,7 @@ Future<bool> showActionConfirmationDialog(
         FilledButton(
           style: request.danger
               ? FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFFE50914),
+                  backgroundColor: const Color(0xFFF10D28),
                 )
               : null,
           onPressed: () => Navigator.pop(context, true),

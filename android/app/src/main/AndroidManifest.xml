@@ -21,6 +21,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- v1.2.1 Wake Word Reliability: abrir sobre a tela de bloqueio, religar após reboot (opt-in) e isenção de economia de bateria. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
@@ -96,6 +97,22 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="microphone"/>
+        <!-- Continuidade de resposta longa e TTS em segundo plano -->
+        <service
+            android:name=".ResponseContinuityService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"/>
+        <!-- Ações rápidas da Triagem Inteligente de Notificações -->
+        <receiver
+            android:name=".NotificationTriageActionReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.viniciusnpaula.ultron_mobile.TRIAGE_SPEAK_URGENT"/>
+                <action android:name="com.viniciusnpaula.ultron_mobile.TRIAGE_MUTE_SENDER"/>
+            </intent-filter>
+        </receiver>
         <!-- Orbe Flutuante Android (SYSTEM_ALERT_WINDOW / WindowManager) -->
         <service
             android:name=".FloatingOrbService"

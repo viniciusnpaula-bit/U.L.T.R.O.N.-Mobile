@@ -17,10 +17,10 @@ class AiSettingsScreen extends StatefulWidget {
 }
 
 class _AiSettingsScreenState extends State<AiSettingsScreen> {
-  static const _crimson = Color(0xFFE50914);
-  static const _rose = Color(0xFFFFA0A0);
-  static const _emerald = Color(0xFFFFA0A0);
-  static const _border = Color(0xFF51080D);
+  static const _crimson = Color(0xFFF10D28);
+  static const _rose = Color(0xFF9A9AA3);
+  static const _emerald = Color(0xFF9A9AA3);
+  static const _border = Color(0xFF222228);
 
   late final AiProviderStore _store = widget._store ?? AiProviderStore();
   final _deviceService = DeviceControlService();
@@ -94,7 +94,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '🎙️ Wake-word alterada para "${profile.label}" (sherpa-onnx KWS atualizado sem reiniciar serviço).',
+          'Wake-word alterada para "${profile.label}" (sherpa-onnx KWS atualizado sem reiniciar serviço).',
           style: const TextStyle(fontSize: 11),
         ),
         duration: const Duration(seconds: 2),
@@ -158,7 +158,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            '🎵 Abrindo login OAuth 2.0 PKCE do Spotify no navegador...',
+            'Abrindo login OAuth 2.0 PKCE do Spotify no navegador...',
             style: TextStyle(fontSize: 11),
           ),
         ),
@@ -275,7 +275,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
-          '⚡ IA Grátis Sem Chave (Pollinations AI) ativada na fila de failover!',
+          'IA Grátis Sem Chave (Pollinations AI) ativada na fila de failover!',
           style: TextStyle(fontSize: 11),
         ),
         duration: Duration(seconds: 2),
@@ -364,7 +364,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('✅ Conectado ($res)', style: const TextStyle(fontSize: 11)),
+          content: Text('Conectado ($res)', style: const TextStyle(fontSize: 11)),
           duration: const Duration(seconds: 3),
         ),
       );
@@ -402,7 +402,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '✅ Provedor "${added.name}" salvo na fila de failover!',
+          'Provedor "${added.name}" salvo na fila de failover!',
           style: const TextStyle(fontSize: 11),
         ),
         duration: const Duration(seconds: 2),
@@ -421,9 +421,9 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         suffixIcon: suffixIcon,
         isDense: true,
         filled: true,
-        fillColor: const Color(0xFF2E0305),
-        labelStyle: const TextStyle(color: Color(0xFFA89698), fontSize: 11),
-        hintStyle: const TextStyle(color: Color(0xFF635355), fontSize: 11),
+        fillColor: const Color(0xFF18181D),
+        labelStyle: const TextStyle(color: Color(0xFF9A9AA3), fontSize: 11),
+        hintStyle: const TextStyle(color: Color(0xFF686872), fontSize: 11),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: const BorderSide(color: _border),
@@ -434,11 +434,11 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFFFFA0A0)),
+          borderSide: const BorderSide(color: Color(0xFF9A9AA3)),
         ),
         focusedErrorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: Color(0xFFFFA0A0)),
+          borderSide: const BorderSide(color: Color(0xFF9A9AA3)),
         ),
       );
 
@@ -449,28 +449,27 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         : _selectedPreset.recommendedModels;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0002),
+      backgroundColor: const Color(0xFF080808),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0A0002),
-        foregroundColor: _crimson,
+        backgroundColor: const Color(0xFF080808),
+        foregroundColor: const Color(0xFFEEEEEE),
         elevation: 0,
         title: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'CENTRAL DE IA • 100% GRATUITA',
+              'Provedores de IA e áudio',
               style: TextStyle(
-                color: _crimson,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.3,
+                color: Color(0xFFEEEEEE),
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
               ),
             ),
             Text(
-              'Failover Multi-Provedor • Zero-Key & Free Tiers',
+              'Failover multi-provedor, STT e diagnóstico acústico',
               style: TextStyle(
-                color: Color(0xFFA89698),
-                fontSize: 9,
+                color: Color(0xFF9A9AA3),
+                fontSize: 11,
               ),
             ),
           ],
@@ -483,21 +482,11 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
               children: [
                 // 1. Instant Zero-Key Hero Banner
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF2E0305), Color(0xFF0A0002)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                    color: const Color(0xFF111114),
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: _crimson.withValues(alpha: 0.5)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _crimson.withValues(alpha: 0.12),
-                        blurRadius: 12,
-                      ),
-                    ],
+                    border: Border.all(color: const Color(0xFF222228)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -543,7 +532,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                       const Text(
                         'O U.L.T.R.O.N. Mobile já vem com o Pollinations AI (Zero-Key) pré-configurado para responder de graça sem precisar de chave. Para velocidade máxima (2000+ tok/s), adicione chaves gratuitas da Groq, Gemini, OpenRouter (:free) ou Cerebras abaixo!',
                         style: TextStyle(
-                          color: Color(0xFFF0E6E7),
+                          color: Color(0xFFEEEEEE),
                           fontSize: 10,
                           height: 1.35,
                         ),
@@ -553,9 +542,9 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         width: double.infinity,
                         child: FilledButton.icon(
                           style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF2E0305),
+                            backgroundColor: const Color(0xFF18181D),
                             foregroundColor: _rose,
-                            side: const BorderSide(color: _crimson),
+                            side: const BorderSide(color: _border),
                             padding: const EdgeInsets.symmetric(vertical: 9),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10),
@@ -593,7 +582,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                     ),
                     Text(
                       'Deslize ↔',
-                      style: TextStyle(color: Color(0xFF635355), fontSize: 9),
+                      style: TextStyle(color: Color(0xFF686872), fontSize: 9),
                     ),
                   ],
                 ),
@@ -614,8 +603,8 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                           padding: const EdgeInsets.all(11),
                           decoration: BoxDecoration(
                             color: isSelected
-                                ? const Color(0xFF2E0305)
-                                : const Color(0xFF0A0002),
+                                ? const Color(0xFF18181D)
+                                : const Color(0xFF080808),
                             borderRadius: BorderRadius.circular(13),
                             border: Border.all(
                               color: isSelected ? _crimson : _border,
@@ -636,7 +625,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                     ),
                                     decoration: BoxDecoration(
                                       color: preset.requiresKey
-                                          ? const Color(0xFF2E0305)
+                                          ? const Color(0xFF18181D)
                                           : _emerald.withValues(alpha: 0.18),
                                       borderRadius: BorderRadius.circular(5),
                                       border: Border.all(
@@ -668,7 +657,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               Text(
                                 preset.name,
                                 style: const TextStyle(
-                                  color: Color(0xFFF0E6E7),
+                                  color: Color(0xFFEEEEEE),
                                   fontSize: 12,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -680,7 +669,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                 child: Text(
                                   preset.description,
                                   style: const TextStyle(
-                                    color: Color(0xFFA89698),
+                                    color: Color(0xFF9A9AA3),
                                     fontSize: 9.5,
                                     height: 1.25,
                                   ),
@@ -701,7 +690,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                         ),
                                         alignment: Alignment.center,
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFF2E0305),
+                                          color: const Color(0xFF18181D),
                                           borderRadius:
                                               BorderRadius.circular(6),
                                           border: Border.all(
@@ -732,7 +721,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                           vertical: 5,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFF2E0305),
+                                          color: const Color(0xFF18181D),
                                           borderRadius:
                                               BorderRadius.circular(6),
                                           border: Border.all(color: _border),
@@ -784,7 +773,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                     ),
                     const Text(
                       'Ordem de prioridade ↓',
-                      style: TextStyle(color: Color(0xFF635355), fontSize: 9),
+                      style: TextStyle(color: Color(0xFF686872), fontSize: 9),
                     ),
                   ],
                 ),
@@ -795,7 +784,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                     margin: const EdgeInsets.only(bottom: 8),
                     padding: const EdgeInsets.all(11),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0A0002),
+                      color: const Color(0xFF080808),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: _providers[i].enabled
@@ -814,7 +803,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF2E0305),
+                                color: const Color(0xFF18181D),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
@@ -835,7 +824,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               decoration: BoxDecoration(
                                 color: _providers[i].isKeylessProvider
                                     ? _emerald.withValues(alpha: 0.15)
-                                    : const Color(0xFF2E0305),
+                                    : const Color(0xFF18181D),
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
@@ -845,7 +834,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                 style: TextStyle(
                                   color: _providers[i].isKeylessProvider
                                       ? _emerald
-                                      : const Color(0xFFA89698),
+                                      : const Color(0xFF9A9AA3),
                                   fontSize: 8,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -856,7 +845,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               child: Text(
                                 _providers[i].name,
                                 style: const TextStyle(
-                                  color: Color(0xFFF0E6E7),
+                                  color: Color(0xFFEEEEEE),
                                   fontSize: 12,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -887,7 +876,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               child: Text(
                                 '${_providers[i].model}  •  ${_providers[i].baseUrl}',
                                 style: const TextStyle(
-                                  color: Color(0xFFA89698),
+                                  color: Color(0xFF9A9AA3),
                                   fontSize: 10,
                                 ),
                                 overflow: TextOverflow.ellipsis,
@@ -910,11 +899,9 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                   vertical: 4,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF2E0305),
+                                  color: const Color(0xFF18181D),
                                   borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(
-                                    color: _crimson.withValues(alpha: 0.4),
-                                  ),
+                                  border: Border.all(color: _border),
                                 ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
@@ -953,7 +940,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               icon: const Icon(
                                 Icons.arrow_upward,
                                 size: 15,
-                                color: Color(0xFFA89698),
+                                color: Color(0xFF9A9AA3),
                               ),
                               onPressed: i == 0
                                   ? null
@@ -969,7 +956,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               icon: const Icon(
                                 Icons.arrow_downward,
                                 size: 15,
-                                color: Color(0xFFA89698),
+                                color: Color(0xFF9A9AA3),
                               ),
                               onPressed: i == _providers.length - 1
                                   ? null
@@ -985,7 +972,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               icon: const Icon(
                                 Icons.delete_outline,
                                 size: 16,
-                                color: Color(0xFFFFA0A0),
+                                color: Color(0xFF9A9AA3),
                               ),
                               onPressed: () {
                                 final copy = [..._providers]..removeAt(i);
@@ -1003,7 +990,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0A0002),
+                    color: const Color(0xFF080808),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: _border),
                   ),
@@ -1028,7 +1015,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               InkWell(
                                 onTap: () => _openKeyPage(_selectedPreset),
                                 child: const Text(
-                                  '🔑 Criar chave grátis ↗',
+                                  'Criar chave grátis ↗',
                                   style: TextStyle(
                                     color: _emerald,
                                     fontSize: 10,
@@ -1042,7 +1029,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         TextFormField(
                           controller: _name,
                           style: const TextStyle(
-                            color: Color(0xFFF0E6E7),
+                            color: Color(0xFFEEEEEE),
                             fontSize: 12,
                           ),
                           decoration: _hudInputDecoration(
@@ -1057,7 +1044,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         TextFormField(
                           controller: _url,
                           style: const TextStyle(
-                            color: Color(0xFFF0E6E7),
+                            color: Color(0xFFEEEEEE),
                             fontSize: 12,
                           ),
                           decoration: _hudInputDecoration(
@@ -1079,7 +1066,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                           controller: _key,
                           obscureText: true,
                           style: const TextStyle(
-                            color: Color(0xFFF0E6E7),
+                            color: Color(0xFFEEEEEE),
                             fontSize: 12,
                           ),
                           decoration: _hudInputDecoration(
@@ -1101,7 +1088,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         TextFormField(
                           controller: _model,
                           style: const TextStyle(
-                            color: Color(0xFFF0E6E7),
+                            color: Color(0xFFEEEEEE),
                             fontSize: 12,
                           ),
                           decoration: _hudInputDecoration(
@@ -1136,7 +1123,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                           const Text(
                             'MODELOS GRATUITOS RECOMENDADOS (TOQUE PARA SELECIONAR):',
                             style: TextStyle(
-                              color: Color(0xFFA89698),
+                              color: Color(0xFF9A9AA3),
                               fontSize: 9,
                               fontWeight: FontWeight.bold,
                             ),
@@ -1161,7 +1148,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                       decoration: BoxDecoration(
                                         color: _model.text.trim() == m
                                             ? _crimson
-                                            : const Color(0xFF2E0305),
+                                            : const Color(0xFF18181D),
                                         borderRadius: BorderRadius.circular(6),
                                         border: Border.all(
                                           color: _model.text.trim() == m
@@ -1212,7 +1199,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                 ),
                 const SizedBox(height: 16),
                 Card(
-                  color: const Color(0xFF160509),
+                  color: const Color(0xFF111114),
                   child: Padding(
                     padding: const EdgeInsets.all(14),
                     child: Column(
@@ -1231,7 +1218,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         const Text(
                           'Escolha a palavra de ativação do motor offline sherpa-onnx KWS (tolerância Levenshtein ≤ 1 e hot-swap sem reiniciar):',
                           style: TextStyle(
-                            color: Color(0xFFA89698),
+                            color: Color(0xFF9A9AA3),
                             fontSize: 10,
                           ),
                         ),
@@ -1249,7 +1236,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                     style: OutlinedButton.styleFrom(
                                       backgroundColor: _wakeWordProfile == wp
                                           ? _crimson
-                                          : const Color(0xFF2E0305),
+                                          : const Color(0xFF18181D),
                                       foregroundColor: _wakeWordProfile == wp
                                           ? Colors.black
                                           : _rose,
@@ -1284,7 +1271,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                           title: const Text(
                             'Orbe Flutuante Android (SYSTEM_ALERT_WINDOW)',
                             style: TextStyle(
-                              color: Color(0xFFF0E6E7),
+                              color: Color(0xFFEEEEEE),
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
                             ),
@@ -1292,7 +1279,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                           subtitle: const Text(
                             'Bolha arrastável (ocioso, ouvindo, processando, falando) integrada ao AuthGate',
                             style: TextStyle(
-                              color: Color(0xFFA89698),
+                              color: Color(0xFF9A9AA3),
                               fontSize: 10,
                             ),
                           ),
@@ -1305,7 +1292,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                 ),
                 const SizedBox(height: 16),
                 Card(
-                  color: const Color(0xFF160509),
+                  color: const Color(0xFF111114),
                   child: Padding(
                     padding: const EdgeInsets.all(14),
                     child: Column(
@@ -1357,7 +1344,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                 _buildAcousticDiagnosticsCard(),
                 const SizedBox(height: 16),
                 Card(
-                  color: const Color(0xFF160509),
+                  color: const Color(0xFF111114),
                   child: Padding(
                     padding: const EdgeInsets.all(14),
                     child: Column(
@@ -1383,14 +1370,14 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               decoration: BoxDecoration(
                                 color: _spotifyConnected
                                     ? const Color(0xFF10381F)
-                                    : const Color(0xFF2E0305),
+                                    : const Color(0xFF18181D),
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(
                                 _spotifyConnected ? 'CONECTADO' : 'NÃO CONECTADO',
                                 style: TextStyle(
                                   color: _spotifyConnected
-                                      ? const Color(0xFF5CE69C)
+                                      ? const Color(0xFF22C55E)
                                       : _rose,
                                   fontSize: 9,
                                   fontWeight: FontWeight.bold,
@@ -1403,7 +1390,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         const Text(
                           'Configure seu próprio Client ID do Spotify Developer Dashboard (sem client_secret no APK).',
                           style: TextStyle(
-                            color: Color(0xFFA89698),
+                            color: Color(0xFF9A9AA3),
                             fontSize: 10,
                           ),
                         ),
@@ -1431,7 +1418,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               vertical: 8,
                             ),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF2E0305),
+                              color: const Color(0xFF18181D),
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(color: _border),
                             ),
@@ -1443,7 +1430,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                   child: Text(
                                     'Redirect URI: ${SpotifyService.redirectUri} (toque p/ copiar)',
                                     style: TextStyle(
-                                      color: Color(0xFFF0E6E7),
+                                      color: Color(0xFFEEEEEE),
                                       fontSize: 10.5,
                                     ),
                                   ),
@@ -1456,7 +1443,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         TextField(
                           controller: _spotifyClientId,
                           style: const TextStyle(
-                            color: Color(0xFFF0E6E7),
+                            color: Color(0xFFEEEEEE),
                             fontSize: 12,
                           ),
                           decoration: _hudInputDecoration(
@@ -1511,7 +1498,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
     final fpPct = (snap.falsePositiveRate * 100).toStringAsFixed(1);
     return Card(
       key: const Key('acoustic_diagnostics_card'),
-      color: const Color(0xFF160509),
+      color: const Color(0xFF111114),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -1529,7 +1516,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
             const SizedBox(height: 6),
             const Text(
               'Motor 100% nativo não-Google (AudioRecord + VAD pré-roll 600ms + Groq Whisper / sherpa-onnx KWS).',
-              style: TextStyle(color: Color(0xFFA89698), fontSize: 10),
+              style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 10),
             ),
             const SizedBox(height: 10),
             Row(
@@ -1556,9 +1543,9 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
               child: LinearProgressIndicator(
                 value: dbNorm,
                 minHeight: 6,
-                backgroundColor: const Color(0xFF2E0305),
+                backgroundColor: const Color(0xFF18181D),
                 valueColor: AlwaysStoppedAnimation<Color>(
-                  dbNorm > 0.75 ? _crimson : const Color(0xFF5CE69C),
+                  dbNorm > 0.75 ? _crimson : const Color(0xFF22C55E),
                 ),
               ),
             ),
@@ -1613,14 +1600,14 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   Widget _diagMetricPill(String label, String value) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: const Color(0xFF210407),
+          color: const Color(0xFF111114),
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0xFF51080D)),
+          border: Border.all(color: const Color(0xFF222228)),
         ),
         child: Text(
           '$label: $value',
           style: const TextStyle(
-            color: Color(0xFFEADCDD),
+            color: Color(0xFFEEEEEE),
             fontSize: 10,
             fontFamily: 'monospace',
           ),

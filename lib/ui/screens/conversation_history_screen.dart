@@ -13,9 +13,9 @@ class ConversationHistoryScreen extends StatefulWidget {
 }
 
 class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
-  static const _crimson = Color(0xFFE50914);
-  static const _rose = Color(0xFFFFA0A0);
-  static const _border = Color(0xFF51080D);
+  static const _crimson = Color(0xFFF10D28);
+  static const _rose = Color(0xFF9A9AA3);
+  static const _border = Color(0xFF222228);
 
   late Future<List<ChatMessage>> _messages;
 
@@ -34,7 +34,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2E0305),
+        backgroundColor: const Color(0xFF18181D),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: const BorderSide(color: _border),
@@ -49,7 +49,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
         ),
         content: const Text(
           'Todas as conversas salvas neste aparelho serão apagadas permanentemente.',
-          style: TextStyle(color: Color(0xFFF0E6E7), fontSize: 11),
+          style: TextStyle(color: Color(0xFFEEEEEE), fontSize: 11),
         ),
         actions: [
           TextButton(
@@ -74,7 +74,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        backgroundColor: const Color(0xFF0A0002),
+        backgroundColor: const Color(0xFF080808),
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -131,7 +131,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                     child: Text(
                       'Armazenamento local isolado (SQLite sem backup em nuvem).',
                       style: TextStyle(
-                        color: Color(0xFF635355),
+                        color: Color(0xFF686872),
                         fontSize: 10,
                       ),
                     ),
@@ -164,14 +164,14 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                           child: Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF0A0002),
+                              color: const Color(0xFF080808),
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(color: _border),
                             ),
                             child: const Text(
                               'Nenhuma mensagem salva ainda.',
                               style: TextStyle(
-                                color: Color(0xFFA89698),
+                                color: Color(0xFF9A9AA3),
                                 fontSize: 11,
                               ),
                             ),
@@ -209,8 +209,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
                                 color: isUser
-                                    ? const Color(0xFF2E0305)
-                                    : const Color(0xFF0A0002),
+                                    ? const Color(0xFF18181D)
+                                    : const Color(0xFF080808),
                                 borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
                                   color: isUser
@@ -236,7 +236,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                                       Text(
                                         timestamp,
                                         style: const TextStyle(
-                                          color: Color(0xFF635355),
+                                          color: Color(0xFF686872),
                                           fontSize: 9,
                                         ),
                                       ),
@@ -246,7 +246,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                                   Text(
                                     message.content,
                                     style: const TextStyle(
-                                      color: Color(0xFFF0E6E7),
+                                      color: Color(0xFFEEEEEE),
                                       fontSize: 11,
                                       height: 1.4,
                                     ),
@@ -258,7 +258,7 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                                       Text(
                                         'Isolado Localmente',
                                         style: TextStyle(
-                                          color: Color(0xFFFFA0A0),
+                                          color: Color(0xFF9A9AA3),
                                           fontSize: 9,
                                         ),
                                       ),
@@ -280,9 +280,9 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                   child: OutlinedButton.icon(
                     onPressed: _clear,
                     style: OutlinedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2E0305),
-                      foregroundColor: const Color(0xFFFFA0A0),
-                      side: const BorderSide(color: Color(0x6651080D)),
+                      backgroundColor: const Color(0xFF18181D),
+                      foregroundColor: const Color(0xFF9A9AA3),
+                      side: const BorderSide(color: Color(0xFF222228)),
                       padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -304,8 +304,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                   child: OutlinedButton(
                     onPressed: () => Navigator.of(context).pop(),
                     style: OutlinedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2E0305),
-                      foregroundColor: const Color(0xFFF0E6E7),
+                      backgroundColor: const Color(0xFF18181D),
+                      foregroundColor: const Color(0xFFEEEEEE),
                       side: const BorderSide(color: _border),
                       padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: RoundedRectangleBorder(

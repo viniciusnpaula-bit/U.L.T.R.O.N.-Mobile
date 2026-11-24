@@ -222,6 +222,13 @@ class VoicePipelineController extends ChangeNotifier {
   bool get isTranscribing => _isTranscribing;
   String? get lastError => _lastError;
   AudioEffectsReport? get lastEffectsReport => _lastEffectsReport;
+  VadSegmenter get vadSegmenter => _vad;
+
+  /// Updates the live Auto-VAD sensitivity profile and optional silence hangover.
+  void updateVadConfig(VadProfile profile, {Duration? silenceHangover}) {
+    _vad.applyProfile(profile, silenceHangover: silenceHangover);
+    _notifySafely();
+  }
 
   bool get isContinuityWindowActive {
     final until = _continuityUntil;
@@ -528,11 +535,16 @@ class VoicePipelineController extends ChangeNotifier {
 
   Future<void> stopContinuousListening() => stopAll();
 
-  void handleLifecycleState(AppLifecycleState state) {
+  void handleLifecycleState(
+    AppLifecycleState state, {
+    bool stopTtsOnBackground = false,
+  }) {
     _lifecycleState = state;
     if (state != AppLifecycleState.resumed) {
       unawaited(stopAll());
-      unawaited(_voiceService.stop());
+      if (stopTtsOnBackground) {
+        unawaited(_voiceService.stop());
+      }
     }
   }
 
@@ -628,6 +640,8 @@ class VoicePipelineController extends ChangeNotifier {
         prompt: prompt,
       );
       sttSw.stop();
+      AcousticDiagnosticsTracker.instance
+          .recordSttLatency(sttSw.elapsedMilliseconds);
       debugPrint(
         '[ULTRON][LATENCY] STT=${sttSw.elapsedMilliseconds}ms '
         'bytes=${segment.length} ok=${result.hasText}',
@@ -693,6 +707,8 @@ class VoicePipelineController extends ChangeNotifier {
         prompt: prompt,
       );
       sttSw.stop();
+      AcousticDiagnosticsTracker.instance
+          .recordSttLatency(sttSw.elapsedMilliseconds);
       debugPrint(
         '[ULTRON][LATENCY] STT=${sttSw.elapsedMilliseconds}ms '
         'bytes=${pcm.length} ok=${result.hasText}',
@@ -716,9 +732,16 @@ class VoicePipelineController extends ChangeNotifier {
   }
 
   void _emitRms(Uint8List frame) {
+    if (frame.isEmpty) return;
+    final rms = PcmEnergy.dcRemovedRmsInt16(frame);
+    if (_vad.adaptiveNoiseFloor) {
+      AcousticDiagnosticsTracker.instance.recordNoiseFloorDb(_vad.noiseFloorDb);
+    } else {
+      AcousticDiagnosticsTracker.instance.recordPcmNoiseFrame(frame);
+    }
     final cb = _onRmsChanged;
-    if (cb == null || frame.isEmpty) return;
-    final normalized = (PcmEnergy.rmsInt16(frame) / 2500.0).clamp(0.0, 1.0);
+    if (cb == null) return;
+    final normalized = (rms / 2500.0).clamp(0.0, 1.0);
     cb(normalized);
   }
 
