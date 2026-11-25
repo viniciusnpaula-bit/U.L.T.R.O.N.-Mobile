@@ -88,6 +88,11 @@ class ActionGate {
     'PC_RUN_SKILL',
     'PC_STATUS',
     'PC_THERMAL',
+    'PC_TEMP',
+    'PC_DELEGATE_TASK',
+    'PC_TASK_STATUS',
+    'PC_TASK_CANCEL',
+    'PC_SPOTIFY',
     'PC_POWER_PLAN',
     'PC_APP_VOLUME',
     'PC_KILL_FROZEN',
@@ -467,6 +472,9 @@ class ActionGate {
       case 'PC_CLIPBOARD_PUSH':
       case 'PC_CLIPBOARD_PULL':
       case 'PC_RUN_SKILL':
+      case 'PC_DELEGATE_TASK':
+      case 'PC_TASK_CANCEL':
+      case 'PC_SPOTIFY':
       case 'PC_POWER_PLAN':
       case 'PC_APP_VOLUME':
       case 'PC_KILL_FROZEN':
@@ -477,6 +485,12 @@ class ActionGate {
           actionCode: op,
           riskLevel: RiskLevel.sensitive,
           description: switch (op) {
+            'PC_DELEGATE_TASK' =>
+              'Delegação de tarefa longa / pesquisa profunda para subagente no Desktop',
+            'PC_TASK_CANCEL' =>
+              'Cancelamento de tarefa em andamento na fila de subagentes do Desktop',
+            'PC_SPOTIFY' =>
+              'Controle de reprodução ou playlists do Spotify no Desktop via LAN',
             'PC_POWER_PLAN' =>
               'Alteração do plano de energia da estação Desktop (controlar_plano_energia)',
             'PC_APP_VOLUME' =>
@@ -500,15 +514,46 @@ class ActionGate {
         );
 
       case 'PC_THERMAL':
-        return const ActionSimulation(
-          actionCode: 'PC_THERMAL',
+      case 'PC_TEMP':
+        return ActionSimulation(
+          actionCode: op,
           riskLevel: RiskLevel.safe,
-          description:
-              'Consulta de proteção térmica e telemetria CPU/GPU/RAM do Desktop (verificar_protecao_termica)',
+          description: op == 'PC_TEMP'
+              ? 'Leitura de temperatura da CPU/GPU da estação Desktop (processos_ops)'
+              : 'Consulta de proteção térmica e telemetria CPU/GPU/RAM do Desktop (verificar_protecao_termica)',
           targetResource: 'Desktop PC Pareado (Sensores Térmicos)',
           requiresConfirmation: false,
           estimatedImpact:
               'Leitura de temperatura e carga de CPU/GPU/RAM da estação Desktop via LAN.',
+          canDegradeToOffline: false,
+        );
+
+      case 'PC_TASK_STATUS':
+      case 'PC_TASKS':
+        return const ActionSimulation(
+          actionCode: 'PC_TASK_STATUS',
+          riskLevel: RiskLevel.safe,
+          description:
+              'Consulta de status das tarefas/subagentes em execução no Desktop',
+          targetResource: 'Desktop PC (GerenciadorTarefas)',
+          requiresConfirmation: false,
+          estimatedImpact:
+              'Lista tarefas ativas, concluídas e progresso dos subagentes do Desktop via LAN.',
+          canDegradeToOffline: false,
+        );
+
+      case 'DEEP_RESEARCH':
+      case 'PESQUISA_PROFUNDA':
+        return ActionSimulation(
+          actionCode: 'DEEP_RESEARCH',
+          riskLevel: RiskLevel.safe,
+          description:
+              'Execução de pesquisa profunda assíncrona com coleta web e relatório Markdown no Obsidian',
+          targetResource:
+              'DeepResearchService (${arg1.isEmpty ? 'Tema' : arg1})',
+          requiresConfirmation: false,
+          estimatedImpact:
+              'Coleta fontes em paralelo com isolamento [DADOS EXTERNOS] e salva relatório em Memoria/Pesquisas/.',
           canDegradeToOffline: false,
         );
 

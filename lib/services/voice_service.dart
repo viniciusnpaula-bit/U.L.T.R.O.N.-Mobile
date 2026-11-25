@@ -7,8 +7,10 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'fish_audio_tts_service.dart';
 import 'speech_text.dart';
 import 'tts_text_normalizer.dart';
+import 'voice_emotion_parser.dart';
 
 export 'fish_audio_tts_service.dart';
+export 'voice_emotion_parser.dart';
 
 /// Perfis de timbre da voz do U.L.T.R.O.N.
 enum VoiceProfile {
@@ -88,6 +90,7 @@ class VoiceService {
   bool isSpeaking = false;
   VoiceProfile profile = VoiceProfile.grave;
   WakeWordProfile wakeWordProfile = WakeWordProfile.ultron;
+  VoiceEmotion lastDetectedEmotion = VoiceEmotion.neutro;
   String? activeVoiceName;
   String? lastFishError;
 
@@ -314,15 +317,29 @@ class VoiceService {
     _syncNativeTtsConfig();
   }
 
-  /// Fala [text] já higienizado, em blocos curtos e interrompíveis.
+  Future<void> _applyEmotionModulation(VoiceEmotion emotion) async {
+    final basePitch = profile.pitch;
+    final baseRate = whisperMode ? profile.rate * 0.85 : profile.rate;
+    final modulatedPitch = (basePitch * emotion.pitchFactor).clamp(0.45, 1.50);
+    final modulatedRate = (baseRate * emotion.rateFactor).clamp(0.30, 0.85);
+    await _tts.setPitch(modulatedPitch);
+    await _tts.setSpeechRate(modulatedRate);
+  }
+
+  /// Fala [text] já higienizado, em blocos curtos e interrompíveis, modulando
+  /// pitch/rate em até ±15% conforme o registro emocional detectado.
   ///
   /// Uma nova chamada a [speak] ou [stop] cancela a fala em andamento.
   Future<void> speak(
     String text, {
     int maxSpokenChars = SpeechText.defaultMaxSpokenChars,
+    VoiceEmotion? emotionOverride,
   }) async {
     if (!enabled) return;
-    final normalized = TtsTextNormalizer.normalize(text.trim());
+    final parsed = VoiceEmotionParser.parse(text);
+    final emotion = emotionOverride ?? parsed.emotion;
+    lastDetectedEmotion = emotion;
+    final normalized = TtsTextNormalizer.normalize(parsed.cleanText.trim());
     final chunks =
         SpeechText.prepareChunks(normalized, maxSpokenChars: maxSpokenChars);
     if (chunks.isEmpty) return;
@@ -331,6 +348,9 @@ class VoiceService {
     if (generation != _generation) return;
     await _tts.stop();
     if (generation != _generation) return;
+    if (emotion != VoiceEmotion.neutro) {
+      await _applyEmotionModulation(emotion);
+    }
     _notifyNativeSpeaking(true);
     var completedNaturally = false;
     try {
@@ -351,6 +371,11 @@ class VoiceService {
       }
       completedNaturally = generation == _generation;
     } finally {
+      if (emotion != VoiceEmotion.neutro) {
+        try {
+          await _applyProfile();
+        } catch (_) {}
+      }
       if (generation == _generation) {
         _notifyNativeSpeaking(false);
         if (completedNaturally) {

@@ -23,10 +23,12 @@ class DesktopSection extends StatefulWidget {
 
 class _DesktopSectionState extends State<DesktopSection> {
   final TextEditingController _miniAppController = TextEditingController();
+  final TextEditingController _taskController = TextEditingController();
 
   @override
   void dispose() {
     _miniAppController.dispose();
+    _taskController.dispose();
     super.dispose();
   }
 
@@ -35,6 +37,13 @@ class _DesktopSectionState extends State<DesktopSection> {
     if (spec.isEmpty) return;
     _miniAppController.clear();
     widget.onRunSlashCommand('/pc miniapp $spec');
+  }
+
+  void _delegatePcTask() {
+    final query = _taskController.text.trim();
+    if (query.isEmpty) return;
+    _taskController.clear();
+    widget.onRunSlashCommand('/pc tarefa $query');
   }
 
   @override
@@ -102,10 +111,68 @@ class _DesktopSectionState extends State<DesktopSection> {
         ),
         const SizedBox(height: 8),
         UltronActionTile(
+          icon: Icons.thermostat_outlined,
+          title: 'Temperatura de CPU e GPU',
+          subtitle: 'Lê sensores térmicos do PC via HMAC (/pc temp)',
+          onTap: () => widget.onRunSlashCommand('/pc temp'),
+        ),
+        const SizedBox(height: 8),
+        UltronActionTile(
+          icon: Icons.pending_actions_outlined,
+          title: 'Tarefas e subagentes no PC',
+          subtitle: 'Consulta fila de pesquisas delegadas (/pc tarefas)',
+          onTap: () => widget.onRunSlashCommand('/pc tarefas'),
+        ),
+        const SizedBox(height: 8),
+        UltronActionTile(
           icon: Icons.terminal_outlined,
           title: 'Listar skills e ferramentas do PC',
           subtitle: 'Consulta recursos disponíveis no U.L.T.R.O.N. Desktop',
           onTap: () => widget.onRunSlashCommand('/pc listar'),
+        ),
+        const SizedBox(height: 16),
+        const UltronSectionLabel('Delegar pesquisa profunda ao PC'),
+        UltronSurfaceCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Executar pesquisa pesada nos subagentes do Desktop',
+                style: TextStyle(
+                  color: UltronColors.textPrimary,
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Envia PC_DELEGATE_TASK assinado com HMAC para poupar bateria no celular.',
+                style: TextStyle(
+                  color: UltronColors.textSecondary,
+                  fontSize: 12,
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _taskController,
+                onSubmitted: (_) => _delegatePcTask(),
+                style: const TextStyle(
+                  color: UltronColors.textPrimary,
+                  fontSize: 13,
+                ),
+                decoration: const InputDecoration(
+                  hintText: 'Ex: comparativo de inversores de frequência 5 cv',
+                ),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: _delegatePcTask,
+                icon: const Icon(Icons.send_rounded, size: 16),
+                label: const Text('Delegar tarefa ao PC'),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 16),
         const UltronSectionLabel('Mini-App local (sandbox)'),

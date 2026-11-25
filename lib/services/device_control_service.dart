@@ -8,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../core/security/action_gate.dart';
 import '../core/security/auth_gate.dart';
+import '../models/assistant_persona.dart';
 import '../models/tactical_mode.dart';
 import 'audit_log_service.dart';
 import 'briefing_service.dart';
@@ -979,12 +980,37 @@ class DeviceControlService {
     String? userQuery,
     DateTime? now,
     TacticalMode? mode,
+    AssistantPersona? persona,
+    SpeechStyle? speechStyle,
+    String? lexicalRecallContext,
+    String? compactedHistoryDigest,
   }) async {
     final activeMode = mode ?? TacticalMode.geral;
     final sections = <String>[
       buildSystemPromptForMode(activeMode),
+      if (persona != null) persona.promptDirective,
+      if (speechStyle != null) 'Estilo de fala ativo: ${speechStyle.promptDirective}',
+      'Registro emocional TTS: você pode abrir sua resposta com UMA tag curta opcional '
+          '([neutro], [lamento], [encorajador], [alerta], [comemorando], [serio] ou [duvida]) '
+          'para modular o tom de voz automaticamente (a tag será removida antes de exibir).',
       formatClockContext(now ?? DateTime.now()),
     ];
+    if (compactedHistoryDigest != null &&
+        compactedHistoryDigest.trim().isNotEmpty) {
+      sections.add(
+        '=== RESUMO COMPACTADO DA SESSÃO ===\n'
+        '${compactedHistoryDigest.trim()}\n'
+        '=== FIM DO RESUMO ===',
+      );
+    }
+    if (lexicalRecallContext != null &&
+        lexicalRecallContext.trim().isNotEmpty) {
+      sections.add(
+        '=== MEMÓRIA LEXICAL LOCAL (ÚLTIMOS 120 DIAS) ===\n'
+        '${lexicalRecallContext.trim()}\n'
+        '=== FIM DA MEMÓRIA LEXICAL ===',
+      );
+    }
     try {
       final vault = await _getObsidian();
       final rawMemory = await vault.readLongTermMemory(
@@ -1680,6 +1706,9 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     return svc.cancelReminder(idOrQuery);
   }
 
+  /// Expõe o serviço de coleta web (clima, RSS e pesquisa resumida).
+  WebInfoService getWebInfoService() => _getWebInfo();
+
   /// WEATHER: Consulta isolada de clima reutilizando `BriefingService.fetchWeather()`.
   Future<WeatherSnapshot?> fetchWeather({String? city}) =>
       _getWebInfo().fetchWeather(city: city);
@@ -2190,6 +2219,138 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     }
 
     try {
+      // 0. Atalhos locais Zero-LLM (hora local, data, clima/temperatura, notícias e temperatura do PC)
+      if (RegExp(
+        r'^(?:que\s+horas?\s+s[aã]o|qual\s+(?:[eé]\s+)?a\s+hora|me\s+(?:diz|fala|informe)\s+as?\s+horas?|horas?\s+agora|que\s+hora\s+[eé]\s+agora)\??$',
+      ).hasMatch(lower)) {
+        try {
+          final nativeReply = await speakOfflineFishVoice('que horas são');
+          if (nativeReply.trim().isNotEmpty) {
+            return DeviceActionResult(
+              handled: true,
+              message: '🔊 [Voz Offline Fish Audio + TTS Nativo]: $nativeReply',
+            );
+          }
+        } catch (_) {
+          // Fallback puro em Dart (0 ms, sem LLM) se canal nativo estiver indisponível.
+        }
+        final now = DateTime.now();
+        final hh = now.hour.toString().padLeft(2, '0');
+        final mm = now.minute.toString().padLeft(2, '0');
+        final spoken = now.minute == 0
+            ? 'São exatamente ${now.hour} horas.'
+            : 'Agora são ${now.hour} horas e ${now.minute} minutos.';
+        return DeviceActionResult(
+          handled: true,
+          message: 'Horário local: $hh:$mm.',
+          speakText: spoken,
+        );
+      }
+
+      if (RegExp(
+        r'^(?:que\s+dia\s+[eé]\s+hoje|qual\s+(?:[eé]\s+)?a\s+data(?:\s+de\s+hoje)?|hoje\s+[eé]\s+que\s+dia)\??$',
+      ).hasMatch(lower)) {
+        final now = DateTime.now();
+        const weekdays = <String>[
+          'segunda-feira',
+          'terça-feira',
+          'quarta-feira',
+          'quinta-feira',
+          'sexta-feira',
+          'sábado',
+          'domingo',
+        ];
+        const months = <String>[
+          'janeiro',
+          'fevereiro',
+          'março',
+          'abril',
+          'maio',
+          'junho',
+          'julho',
+          'agosto',
+          'setembro',
+          'outubro',
+          'novembro',
+          'dezembro',
+        ];
+        final wd = weekdays[now.weekday - 1];
+        final mo = months[now.month - 1];
+        final sentence = 'Hoje é $wd, ${now.day} de $mo de ${now.year}.';
+        return DeviceActionResult(
+          handled: true,
+          message: sentence,
+          speakText: sentence,
+        );
+      }
+
+      if (RegExp(
+        r'\b(?:temperatura|termico|t[eé]rmico|cpu|gpu)\b.*\b(?:pc|computador|desktop)\b|\b(?:pc|computador|desktop)\b.*\b(?:temperatura|quente|cpu|gpu)\b',
+      ).hasMatch(lower)) {
+        final pcRes = await sendDesktopBridgeCommand(
+          command: 'PC_TEMP',
+          args: const <String, dynamic>{'tool': 'verificar_protecao_termica'},
+          confirmAction: confirmAction,
+        );
+        final msg = pcRes.sent
+            ? ((pcRes.responseBody ?? '').trim().isNotEmpty
+                ? pcRes.responseBody!.trim()
+                : 'Temperatura do PC consultada via ponte LAN.')
+            : 'Não foi possível ler a temperatura do PC: ${pcRes.error ?? 'Desktop não pareado ou offline'}.';
+        return DeviceActionResult(
+          handled: true,
+          message: msg,
+          speakText: msg,
+        );
+      }
+
+      final weatherMatch = RegExp(
+        r'^(?:qual\s+(?:[eé]\s+)?a\s+temperatura|como\s+est[aá]\s+o\s+(?:clima|tempo)|previs[aã]o\s+do\s+tempo|vai\s+chover(?:\s+hoje)?)(?:\s+(?:hoje|agora))?(?:\s+(?:em|de|no|na)\s+(.+))?\??$',
+      ).firstMatch(lower);
+      if (weatherMatch != null) {
+        final city = weatherMatch.group(1)?.trim();
+        final snap = await fetchWeather(
+          city: (city == null || city.isEmpty) ? null : city,
+        );
+        if (snap != null) {
+          return DeviceActionResult(
+            handled: true,
+            message: snap.summaryLine,
+            speakText: snap.spokenLine,
+          );
+        }
+        return const DeviceActionResult(
+          handled: true,
+          message: 'Não consegui consultar o clima agora. Verifique a conexão.',
+          speakText: 'Não consegui consultar o clima agora.',
+        );
+      }
+
+      final newsMatch = RegExp(
+        r'^(?:quais\s+(?:s[aã]o\s+)?as\s+not[ií]cias|[uú]ltimas\s+not[ií]cias|me\s+(?:d[eê]|conte|leia)\s+as\s+not[ií]cias)(?:\s+(?:de\s+hoje|hoje))?(?:\s+(?:sobre|de)\s+(.+))?\??$',
+      ).firstMatch(lower);
+      if (newsMatch != null) {
+        final topic = newsMatch.group(1)?.trim() ?? '';
+        final articles = await fetchNews(topic: topic, limit: 4);
+        if (articles.isNotEmpty) {
+          final header = topic.isEmpty
+              ? 'Últimas notícias:'
+              : 'Notícias sobre $topic:';
+          final lines = articles.map((a) => a.formatLine()).join('\n');
+          final spoken = articles.take(3).map((a) => a.title).join('. ');
+          return DeviceActionResult(
+            handled: true,
+            message: '$header\n$lines',
+            speakText: '$header $spoken.',
+          );
+        }
+        return const DeviceActionResult(
+          handled: true,
+          message: 'Nenhuma manchete disponível no momento.',
+          speakText: 'Não encontrei manchetes no momento.',
+        );
+      }
+
       // 1. Flashlight / Torch
       if (RegExp(
         r'\b(ligar|acender|ativar|liga|acende)\b.*\b(lanterna|flash|luz)\b|\b(lanterna|flash)\s+(on|ligar|acesa)\b',
@@ -3642,6 +3803,11 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
           case 'PC_CLIPBOARD_PULL':
           case 'PC_RUN_SKILL':
           case 'PC_THERMAL':
+          case 'PC_TEMP':
+          case 'PC_DELEGATE_TASK':
+          case 'PC_TASK_STATUS':
+          case 'PC_TASK_CANCEL':
+          case 'PC_SPOTIFY':
           case 'PC_POWER_PLAN':
           case 'PC_APP_VOLUME':
           case 'PC_KILL_FROZEN':
@@ -3661,6 +3827,19 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
                   'PC_CLIPBOARD_PUSH' => {'text': pcPayload},
                   'PC_RUN_SKILL' => {'skill': pcPayload},
                   'PC_THERMAL' => {'tool': 'verificar_protecao_termica'},
+                  'PC_TEMP' => const <String, dynamic>{},
+                  'PC_DELEGATE_TASK' => {
+                      'query': pcPayload,
+                      'objective': pcPayload,
+                    },
+                  'PC_TASK_STATUS' => {
+                      if (pcPayload.isNotEmpty) 'task_id': pcPayload,
+                    },
+                  'PC_TASK_CANCEL' => {'task_id': pcPayload},
+                  'PC_SPOTIFY' => {
+                      'action': pcPayload.isEmpty ? 'status' : 'play',
+                      if (pcPayload.isNotEmpty) 'query': pcPayload,
+                    },
                   'PC_POWER_PLAN' => {
                       'tool': 'controlar_plano_energia',
                       'plan': pcPayload.isEmpty ? 'balanced' : pcPayload,

@@ -34,6 +34,7 @@ enum UltronCommand {
   files,
   mode,
   eletrica,
+  research,
 }
 
 class CommandResult {
@@ -167,6 +168,10 @@ class SlashCommandParser {
     '/projetista': UltronCommand.eletrica,
     '/cadesimu': UltronCommand.eletrica,
     '/motor': UltronCommand.eletrica,
+    '/pesquisa': UltronCommand.research,
+    '/pesquisar': UltronCommand.research,
+    '/research': UltronCommand.research,
+    '/deep': UltronCommand.research,
   };
 
   static CommandResult? parse(String input) {
@@ -451,6 +456,12 @@ class SlashCommandParser {
           'aliases': '/projetista, /cadesimu, /motor',
           'description':
               'Projetista Elétrico offline (NBR 5410, auditoria estrutural, Netlist, SVG IEC e envio ao Desktop/CADe_SIMU).',
+        },
+        {
+          'command': '/pesquisa [pc] <tema> | /pesquisa status | /pesquisa cancelar <id>',
+          'aliases': '/pesquisar, /research, /deep',
+          'description':
+              'Executa pesquisa profunda assíncrona (local ou delegada ao PC via LAN) com relatório Markdown no Obsidian.',
         },
       ];
 }

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../../models/assistant_persona.dart';
 import '../../services/audio_vad_buffer.dart';
+import '../../services/speech_text.dart';
 import '../../services/voice_service.dart';
 import '../theme/ultron_theme.dart';
 
-/// Seção Configurações: voz, Auto-VAD adaptativo, foco noturno, diagnóstico e atualizações.
+/// Seção Configurações: voz, personalidade, Auto-VAD adaptativo, foco noturno, diagnóstico e atualizações.
 class SettingsSection extends StatelessWidget {
   const SettingsSection({
     super.key,
@@ -26,6 +28,10 @@ class SettingsSection extends StatelessWidget {
     required this.onOpenAiSettings,
     required this.onOpenUpdates,
     required this.onOpenHelp,
+    this.activePersona = AssistantPersona.ultron,
+    this.speechStyle = SpeechStyle.direto,
+    this.onSelectPersona,
+    this.onSelectSpeechStyle,
   });
 
   final bool isAudioOn;
@@ -46,6 +52,10 @@ class SettingsSection extends StatelessWidget {
   final VoidCallback onOpenAiSettings;
   final VoidCallback onOpenUpdates;
   final VoidCallback onOpenHelp;
+  final AssistantPersona activePersona;
+  final SpeechStyle speechStyle;
+  final ValueChanged<WakeWordProfile>? onSelectPersona;
+  final ValueChanged<SpeechStyle>? onSelectSpeechStyle;
 
   @override
   Widget build(BuildContext context) {
@@ -59,6 +69,115 @@ class SettingsSection extends StatelessWidget {
           subtitle: 'Ativo: ${selectedVoiceProfile.label}',
           onTap: onOpenVoiceSelector,
         ),
+        if (onSelectPersona != null || onSelectSpeechStyle != null) ...[
+          const SizedBox(height: 8),
+          UltronSurfaceCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: activePersona.accentColor,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      'Personalidade e estilo de fala',
+                      style: TextStyle(
+                        color: UltronColors.textPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  activePersona.tagline,
+                  style: const TextStyle(
+                    color: UltronColors.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+                if (onSelectPersona != null) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: AssistantPersona.all.map((persona) {
+                      final selected =
+                          activePersona.wakeProfile == persona.wakeProfile;
+                      return ChoiceChip(
+                        label: Text(persona.displayName),
+                        selected: selected,
+                        onSelected: (_) =>
+                            onSelectPersona!(persona.wakeProfile),
+                        selectedColor: UltronColors.surfaceElevated,
+                        backgroundColor: UltronColors.bg,
+                        side: BorderSide(
+                          color: selected
+                              ? persona.accentColor
+                              : UltronColors.borderSubtle,
+                        ),
+                        labelStyle: TextStyle(
+                          color: selected
+                              ? UltronColors.textPrimary
+                              : UltronColors.textSecondary,
+                          fontWeight:
+                              selected ? FontWeight.w600 : FontWeight.w400,
+                          fontSize: 12,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+                if (onSelectSpeechStyle != null) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Jeito de responder',
+                    style: TextStyle(
+                      color: UltronColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: SpeechStyle.values.map((style) {
+                      final selected = speechStyle == style;
+                      return ChoiceChip(
+                        label: Text(style.label),
+                        selected: selected,
+                        onSelected: (_) => onSelectSpeechStyle!(style),
+                        selectedColor: UltronColors.surfaceElevated,
+                        backgroundColor: UltronColors.bg,
+                        side: BorderSide(
+                          color: selected
+                              ? UltronColors.textSecondary
+                              : UltronColors.borderSubtle,
+                        ),
+                        labelStyle: TextStyle(
+                          color: selected
+                              ? UltronColors.textPrimary
+                              : UltronColors.textSecondary,
+                          fontWeight:
+                              selected ? FontWeight.w600 : FontWeight.w400,
+                          fontSize: 12,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 8),
         UltronSurfaceCard(
           child: Column(

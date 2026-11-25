@@ -488,6 +488,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
     }
 
     private var audioCaptureHandler: AudioCaptureHandler? = null
+    private var pcmStreamPlayerHandler: PcmStreamPlayerHandler? = null
     private var actionsChannel: MethodChannel? = null
     private var pendingTileAction: String? = null
     private var pendingPairingUri: String? = null
@@ -606,6 +607,11 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         audioCaptureHandler?.release()
         audioCaptureHandler = AudioCaptureHandler(
             activity = this,
+            messenger = flutterEngine.dartExecutor.binaryMessenger,
+        )
+
+        pcmStreamPlayerHandler?.release()
+        pcmStreamPlayerHandler = PcmStreamPlayerHandler(
             messenger = flutterEngine.dartExecutor.binaryMessenger,
         )
 
@@ -761,6 +767,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
 
     override fun onStop() {
         audioCaptureHandler?.stopCapture()
+        pcmStreamPlayerHandler?.stopTrack()
         // Ao sair de cena, volta ao comportamento normal da tela de bloqueio.
         applyLockScreenMode(false)
         super.onStop()
@@ -773,6 +780,8 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         actionsChannel = null
         audioCaptureHandler?.release()
         audioCaptureHandler = null
+        pcmStreamPlayerHandler?.release()
+        pcmStreamPlayerHandler = null
         try {
             sensorManager?.unregisterListener(this)
             DeviceHardwareHelper.releaseTorch()

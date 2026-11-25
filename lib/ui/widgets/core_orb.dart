@@ -19,12 +19,14 @@ class CoreOrb extends StatefulWidget {
     required this.stage,
     this.shaderProgram,
     this.energy = 0.2,
+    this.accentColor = const Color(0xFFF10D28),
     this.onTickerStateChanged,
   });
 
   final CoreStage stage;
   final FragmentProgram? shaderProgram;
   final double energy;
+  final Color accentColor;
   final ValueChanged<bool>? onTickerStateChanged;
 
   @override
@@ -116,13 +118,16 @@ class _CoreOrbState extends State<CoreOrb>
       return const SizedBox.shrink();
     }
     final shader = _cachedShader;
-    if (shader != null) {
+    final useCrimsonShader =
+        shader != null && widget.accentColor == const Color(0xFFF10D28);
+    if (useCrimsonShader) {
       return RepaintBoundary(
         child: CustomPaint(
           painter: _ShaderCorePainter(
             shader: shader,
             timeListenable: _time,
             energy: widget.energy,
+            accentColor: widget.accentColor,
           ),
         ),
       );
@@ -132,7 +137,11 @@ class _CoreOrbState extends State<CoreOrb>
         valueListenable: _time,
         builder: (context, time, _) {
           return CustomPaint(
-            painter: CorePainter(time, energy: widget.energy),
+            painter: CorePainter(
+              time,
+              energy: widget.energy,
+              accentColor: widget.accentColor,
+            ),
           );
         },
       ),
@@ -145,11 +154,13 @@ class _ShaderCorePainter extends CustomPainter {
     required this.shader,
     required this.timeListenable,
     required this.energy,
+    this.accentColor = const Color(0xFFF10D28),
   }) : super(repaint: timeListenable);
 
   final FragmentShader shader;
   final ValueListenable<double> timeListenable;
   final double energy;
+  final Color accentColor;
   final Paint _shaderPaint = Paint();
 
   @override
@@ -166,11 +177,12 @@ class _ShaderCorePainter extends CustomPainter {
       canvas.drawRect(Offset.zero & size, _shaderPaint);
       shaderDrawn = true;
     } catch (_) {
-      CorePainter(time, energy: energy).paint(canvas, size);
+      CorePainter(time, energy: energy, accentColor: accentColor)
+          .paint(canvas, size);
       return;
     }
     if (shaderDrawn) {
-      _paintGeodesicCore(canvas, size, time, energy);
+      _paintGeodesicCore(canvas, size, time, energy, accentColor: accentColor);
     }
   }
 
@@ -178,25 +190,20 @@ class _ShaderCorePainter extends CustomPainter {
   bool shouldRepaint(covariant _ShaderCorePainter oldDelegate) =>
       oldDelegate.shader != shader ||
       oldDelegate.timeListenable != timeListenable ||
-      oldDelegate.energy != energy;
+      oldDelegate.energy != energy ||
+      oldDelegate.accentColor != accentColor;
 }
 
 class CorePainter extends CustomPainter {
-  CorePainter(this.time, {this.energy = 0.2});
+  CorePainter(
+    this.time, {
+    this.energy = 0.2,
+    this.accentColor = const Color(0xFFF10D28),
+  });
 
   final double time;
   final double energy;
-
-  static const _auraGradient = RadialGradient(
-    colors: [
-      Color(0xEEFFF0F2),
-      Color(0xBBFF7A8C),
-      Color(0x66B01A32),
-      Color(0x28490812),
-      Color(0x00080808),
-    ],
-    stops: [0.0, 0.14, 0.36, 0.68, 1.0],
-  );
+  final Color accentColor;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -205,18 +212,31 @@ class CorePainter extends CustomPainter {
     final center = size.center(Offset.zero);
     final pulse = 1.0 + 0.025 * (0.35 + energy) * math.sin(time * 2.8);
 
+    final softAccent = Color.lerp(accentColor, Colors.white, 0.45)!;
+    final deepAccent = Color.lerp(accentColor, const Color(0xFF080808), 0.72)!;
+    final auraGradient = RadialGradient(
+      colors: [
+        const Color(0xEEFFF5F6),
+        softAccent.withValues(alpha: 0.72),
+        accentColor.withValues(alpha: 0.36),
+        deepAccent.withValues(alpha: 0.16),
+        const Color(0x00080808),
+      ],
+      stops: const [0.0, 0.14, 0.36, 0.68, 1.0],
+    );
+
     final auraRadius = side * 0.44 * pulse;
     final auraRect = Rect.fromCircle(center: center, radius: auraRadius);
     canvas.drawCircle(
       center,
       auraRadius,
-      Paint()..shader = _auraGradient.createShader(auraRect),
+      Paint()..shader = auraGradient.createShader(auraRect),
     );
 
     // Subtle horizontal scanlines inside the geodesic core aura
     final scanR = side * 0.28;
     final scanPaint = Paint()
-      ..color = const Color(0x14FF8A98)
+      ..color = softAccent.withValues(alpha: 0.08)
       ..strokeWidth = 0.7;
     for (var dy = -scanR; dy <= scanR; dy += 4.2) {
       final chord = math.sqrt(math.max(0.0, scanR * scanR - dy * dy));
@@ -227,12 +247,14 @@ class CorePainter extends CustomPainter {
       );
     }
 
-    _paintGeodesicCore(canvas, size, time, energy);
+    _paintGeodesicCore(canvas, size, time, energy, accentColor: accentColor);
   }
 
   @override
   bool shouldRepaint(covariant CorePainter oldDelegate) =>
-      oldDelegate.time != time || oldDelegate.energy != energy;
+      oldDelegate.time != time ||
+      oldDelegate.energy != energy ||
+      oldDelegate.accentColor != accentColor;
 }
 
 class _Vec3 {
@@ -409,8 +431,9 @@ void _paintGeodesicCore(
   Canvas canvas,
   Size size,
   double time,
-  double energy,
-) {
+  double energy, {
+  Color accentColor = const Color(0xFFF10D28),
+}) {
   final side = size.shortestSide;
   if (side <= 0) return;
   final center = size.center(Offset.zero);
@@ -418,6 +441,9 @@ void _paintGeodesicCore(
   final speed = 0.28 + e * 0.55;
   final scale = (side / 200.0).clamp(0.32, 2.2);
   final breathe = 1.0 + 0.022 * (0.4 + e) * math.sin(time * 2.8);
+  final softAccent = Color.lerp(accentColor, Colors.white, 0.58)!;
+  final midAccent = Color.lerp(accentColor, Colors.white, 0.26)!;
+  final deepAccent = Color.lerp(accentColor, const Color(0xFF080808), 0.42)!;
 
   canvas.save();
   canvas.translate(center.dx, center.dy);
@@ -430,8 +456,7 @@ void _paintGeodesicCore(
     final dist = side * (0.37 + (i % 5) * 0.026);
     final alpha = (0.18 + 0.25 * (0.5 + 0.5 * math.sin(time * 1.4 + i)))
         .clamp(0.0, 0.55);
-    particlePaint.color =
-        const Color(0xFFFF8896).withValues(alpha: alpha);
+    particlePaint.color = softAccent.withValues(alpha: alpha);
     canvas.drawCircle(
       Offset(math.cos(angle) * dist, math.sin(angle) * dist),
       (i % 3 == 0 ? 1.15 : 0.75) * scale,
@@ -439,10 +464,19 @@ void _paintGeodesicCore(
     );
   }
 
-  // 2. Delicate tilted orbital rings & diagonal axis ellipse (matches reference photo)
-  _paintOrbitalRings(canvas, side, time, speed, e, scale);
+  // 2. Delicate tilted orbital rings & diagonal axis ellipse
+  _paintOrbitalRings(
+    canvas,
+    side,
+    time,
+    speed,
+    e,
+    scale,
+    midAccent: midAccent,
+    softAccent: softAccent,
+  );
 
-  // 3. Outer ghost wireframe geodesic cage (counter-rotating, faint burgundy-rose)
+  // 3. Outer ghost wireframe geodesic cage
   final outerRadius = side * 0.315 * breathe;
   final outerProjected = _projectMesh(
     _outerIcoMesh,
@@ -459,8 +493,8 @@ void _paintGeodesicCore(
     final p2 = outerProjected[edge.$2];
     final avgZ = (p1.z + p2.z) * 0.5;
     final depthT = ((avgZ + 1.0) * 0.5).clamp(0.0, 1.0);
-    ghostEdgePaint.color = const Color(0xFF9C3848)
-        .withValues(alpha: 0.08 + depthT * (0.18 + 0.08 * e));
+    ghostEdgePaint.color =
+        deepAccent.withValues(alpha: 0.08 + depthT * (0.18 + 0.08 * e));
     canvas.drawLine(p1.offset, p2.offset, ghostEdgePaint);
   }
 
@@ -486,19 +520,17 @@ void _paintGeodesicCore(
     ..strokeCap = StrokeCap.round
     ..strokeWidth = 0.95 * scale;
 
-  // Back hemisphere edges first (translucent crystal depth)
   for (final edge in _innerGeodesicMesh.edges) {
     final p1 = innerProjected[edge.$1];
     final p2 = innerProjected[edge.$2];
     final avgZ = (p1.z + p2.z) * 0.5;
     if (avgZ >= 0.0) continue;
-    final depthT = ((avgZ + 1.0)).clamp(0.0, 1.0);
-    backEdgePaint.color = const Color(0xFF8C2535)
-        .withValues(alpha: 0.14 + depthT * 0.24);
+    final depthT = (avgZ + 1.0).clamp(0.0, 1.0);
+    backEdgePaint.color =
+        deepAccent.withValues(alpha: 0.14 + depthT * 0.24);
     canvas.drawLine(p1.offset, p2.offset, backEdgePaint);
   }
 
-  // Front hemisphere edges on top (crisp luminous rose-crimson)
   for (final edge in _innerGeodesicMesh.edges) {
     final p1 = innerProjected[edge.$1];
     final p2 = innerProjected[edge.$2];
@@ -506,35 +538,35 @@ void _paintGeodesicCore(
     if (avgZ < 0.0) continue;
     final depthT = avgZ.clamp(0.0, 1.0);
 
-    frontGlowPaint.color = const Color(0xFFF10D28)
-        .withValues(alpha: 0.10 + depthT * (0.18 + 0.12 * e));
+    frontGlowPaint.color =
+        accentColor.withValues(alpha: 0.10 + depthT * (0.18 + 0.12 * e));
     canvas.drawLine(p1.offset, p2.offset, frontGlowPaint);
 
     frontEdgePaint.color = Color.lerp(
-      const Color(0xFFB83C4E),
-      const Color(0xFFFFB5C0),
+      midAccent,
+      softAccent,
       (depthT * 0.85 + e * 0.15).clamp(0.0, 1.0),
     )!
         .withValues(alpha: 0.52 + depthT * 0.44);
     canvas.drawLine(p1.offset, p2.offset, frontEdgePaint);
   }
 
-  // 5. Luminous vertex nodes (bright white-pink stars on front intersections)
+  // 5. Luminous vertex nodes
   final nodeHaloPaint = Paint()..style = PaintingStyle.fill;
   final nodeCorePaint = Paint()..style = PaintingStyle.fill;
   for (final p in innerProjected) {
     if (p.z < -0.15) {
-      nodeCorePaint.color = const Color(0x55D46878);
+      nodeCorePaint.color = midAccent.withValues(alpha: 0.33);
       canvas.drawCircle(p.offset, 0.85 * scale, nodeCorePaint);
       continue;
     }
     final depthT = ((p.z + 0.15) / 1.15).clamp(0.0, 1.0);
-    nodeHaloPaint.color = const Color(0xFFFF4D66)
-        .withValues(alpha: 0.16 + depthT * (0.32 + 0.16 * e));
+    nodeHaloPaint.color =
+        midAccent.withValues(alpha: 0.16 + depthT * (0.32 + 0.16 * e));
     canvas.drawCircle(p.offset, (2.2 + depthT * 1.8) * scale, nodeHaloPaint);
 
     nodeCorePaint.color = Color.lerp(
-      const Color(0xFFFFA8B4),
+      softAccent,
       const Color(0xFFFFFFFF),
       depthT,
     )!
@@ -551,19 +583,19 @@ void _paintOrbitalRings(
   double time,
   double speed,
   double energy,
-  double scale,
-) {
-  // Subtle outermost faint circular halo
+  double scale, {
+  required Color midAccent,
+  required Color softAccent,
+}) {
   canvas.drawCircle(
     Offset.zero,
     side * 0.445,
     Paint()
-      ..color = const Color(0x22A83C4C)
+      ..color = midAccent.withValues(alpha: 0.15)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.7 * scale,
   );
 
-  // Primary crisp tilted orbital ellipse
   canvas.save();
   canvas.rotate(-0.42 + time * 0.12 * speed);
   final ring1 = Rect.fromCenter(
@@ -575,8 +607,8 @@ void _paintOrbitalRings(
     ring1,
     Paint()
       ..color = Color.lerp(
-        const Color(0x88D96A7A),
-        const Color(0xDDFFA6B2),
+        midAccent.withValues(alpha: 0.55),
+        softAccent.withValues(alpha: 0.85),
         (energy * 0.55).clamp(0.0, 1.0),
       )!
       ..style = PaintingStyle.stroke
@@ -584,7 +616,6 @@ void _paintOrbitalRings(
   );
   canvas.restore();
 
-  // Secondary counter-tilted thin orbital ring
   canvas.save();
   canvas.rotate(0.58 - time * 0.09 * speed);
   final ring2 = Rect.fromCenter(
@@ -595,13 +626,12 @@ void _paintOrbitalRings(
   canvas.drawOval(
     ring2,
     Paint()
-      ..color = const Color(0x4CB84A5A)
+      ..color = midAccent.withValues(alpha: 0.30)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.85 * scale,
   );
   canvas.restore();
 
-  // Signature razor-thin diagonal orbital axis ellipse (top-left to bottom-right)
   canvas.save();
   canvas.rotate(0.78 + math.sin(time * 0.18 * speed) * 0.04);
   final diagRing = Rect.fromCenter(
@@ -613,8 +643,8 @@ void _paintOrbitalRings(
     diagRing,
     Paint()
       ..color = Color.lerp(
-        const Color(0x66D66272),
-        const Color(0xBBFFAAB6),
+        midAccent.withValues(alpha: 0.42),
+        softAccent.withValues(alpha: 0.74),
         (energy * 0.5).clamp(0.0, 1.0),
       )!
       ..style = PaintingStyle.stroke

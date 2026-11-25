@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../../core/security/action_gate.dart';
 import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
+import '../../models/assistant_persona.dart';
 import '../../models/chat_message.dart';
 import '../../models/tactical_mode.dart';
 import '../../services/ai_provider_service.dart';
@@ -19,9 +20,11 @@ import '../../services/audit_log_service.dart';
 import '../../services/briefing_service.dart';
 import '../../services/cognicao_service.dart';
 import '../../services/conversation_history.dart';
+import '../../services/deep_research_service.dart';
 import '../../services/desktop_command_listener.dart';
 import '../../services/desktop_pairing_service.dart';
 import '../../services/device_control_service.dart';
+import '../../services/gemini_live_service.dart';
 import '../../services/nfc_auth_service.dart';
 import '../../services/obsidian_service.dart';
 import '../../services/reminder_service.dart';
@@ -120,7 +123,11 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   late final briefingService = BriefingService(deviceService: deviceService);
   final cognicaoService = const CognicaoService();
   final actionGate = const ActionGate();
+  late final AudioCaptureSource _audioCaptureSource =
+      widget.captureSource ?? MethodChannelAudioCaptureSource();
   late final VoicePipelineController voicePipeline;
+  late final GeminiLiveService geminiLiveService;
+  late final DeepResearchService deepResearchService;
   late final AndroidActionsService androidActions;
   final desktopPairing = DesktopPairingService();
   late final DesktopCommandListener desktopCommandListener;
@@ -145,17 +152,21 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   bool ecoVadSentinelRunning = false;
   double speechRms = 0.0;
   VoiceProfile selectedVoiceProfile = VoiceProfile.grave;
+  SpeechStyle selectedSpeechStyle = SpeechStyle.direto;
   VadProfile vadProfile = VadProfile.balanced;
   int vadHangoverMs = 850;
   final UserPreferencesService _userPrefs = UserPreferencesService();
   NotificationTriageConfig triageConfig = const NotificationTriageConfig();
   String _lastResponsePreview = '';
+
+  AssistantPersona get activePersona =>
+      AssistantPersona.forWakeProfile(voiceService.wakeWordProfile);
   DeviceStatus? deviceStatus;
   String activeProviderUsed = 'Failover Pronto';
   SessionTelemetry sessionTelemetry = SessionTelemetry.initial();
   TacticalMode activeTacticalMode = TacticalMode.geral;
   bool pcLanConfigured = false;
-  String installedVersion = 'v1.5.0';
+  String installedVersion = 'v1.6.0';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -192,7 +203,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     androidActions = AndroidActionsService(gate: widget.gate);
     voicePipeline = VoicePipelineController(
       gate: widget.gate,
-      capture: widget.captureSource ?? MethodChannelAudioCaptureSource(),
+      capture: _audioCaptureSource,
       stt: widget.sttService ?? GroqWhisperSttService(),
       voiceService: voiceService,
       vadSegmenter: VadSegmenter.adaptive(
@@ -211,6 +222,23 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       },
     )..addListener(_onVoicePipelineChanged);
     voicePipeline.handleLifecycleState(_lifecycleState);
+    deepResearchService = DeepResearchService(
+      webInfo: deviceService.getWebInfoService(),
+      aiFailover: AiFailover(store: providerStore),
+      obsidianProvider: () => ObsidianService.openDefaultVault(),
+    )..addListener(_onAuxServiceChanged);
+    geminiLiveService = GeminiLiveService(
+      authGate: widget.gate,
+      capture: _audioCaptureSource,
+      actionGate: actionGate,
+      onConfirmTool: _confirmActionSimulation,
+      onExecuteActionTag: _executeGeminiLiveActionTag,
+      onTranscript: _handleGeminiLiveTranscript,
+      onRmsChanged: (rms) {
+        if (!mounted) return;
+        setState(() => speechRms = rms);
+      },
+    )..addListener(_onAuxServiceChanged);
     unawaited(voiceService.initialize().catchError((_) {}));
     unawaited(
       ReminderService.instance()
@@ -831,9 +859,11 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       final desktopCfg = await desktopPairing.loadPairing();
       var loadedVadProfile = vadProfile;
       var loadedVadHangover = vadHangoverMs;
+      var loadedSpeechStyle = selectedSpeechStyle;
       try {
         final savedProfile = await _userPrefs.get('vad_profile');
         final savedHangover = await _userPrefs.get('vad_hangover_ms');
+        final savedStyle = await _userPrefs.get('speech_style');
         if (savedProfile != null) {
           loadedVadProfile = VadProfile.fromId(savedProfile);
         }
@@ -842,6 +872,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             parsedHangover >= 400 &&
             parsedHangover <= 2000) {
           loadedVadHangover = parsedHangover;
+        }
+        if (savedStyle != null) {
+          loadedSpeechStyle = SpeechStyle.fromId(savedStyle);
         }
       } catch (_) {}
       List<MobileSkill> loadedSkills = const [];
@@ -868,6 +901,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         nfcStatus = hwNfc;
         notificationSentinelEnabled = notifEnabled;
         selectedVoiceProfile = voiceService.profile;
+        selectedSpeechStyle = loadedSpeechStyle;
         vadProfile = loadedVadProfile;
         vadHangoverMs = loadedVadHangover;
         voicePipeline.updateVadConfig(
@@ -1026,6 +1060,239 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     try {
       await _userPrefs.set('vad_hangover_ms', '$ms');
     } catch (_) {}
+  }
+
+  void _onAuxServiceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _selectPersonaProfile(WakeWordProfile profile) async {
+    HapticFeedback.selectionClick();
+    await voiceService.setWakeWordProfile(profile);
+    final persona = AssistantPersona.forWakeProfile(profile);
+    if (!mounted) return;
+    setState(() {
+      selectedSpeechStyle = persona.defaultStyle;
+    });
+    try {
+      await _userPrefs.set('speech_style', persona.defaultStyle.id);
+    } catch (_) {}
+    unawaited(_syncBackgroundVoiceConfig());
+  }
+
+  Future<void> _selectSpeechStyle(SpeechStyle style) async {
+    HapticFeedback.selectionClick();
+    setState(() => selectedSpeechStyle = style);
+    try {
+      await _userPrefs.set('speech_style', style.id);
+    } catch (_) {}
+  }
+
+  Future<String> _executeGeminiLiveActionTag(String actionTag) async {
+    final res = await deviceService.executeAiActions(
+      actionTag,
+      confirmAction: _confirmActionSimulation,
+      actor: 'GEMINI_LIVE',
+    );
+    await _refreshDeviceStatus();
+    if (res.executedLogs.isNotEmpty) {
+      return res.executedLogs.join(' | ');
+    }
+    return res.cleanText;
+  }
+
+  void _handleGeminiLiveTranscript(String role, String text) {
+    if (!mounted || text.trim().isEmpty) return;
+    final now = DateTime.now();
+    _appendFeed(
+      _FeedEntry(
+        isUser: role == 'user',
+        senderLabel: role == 'user' ? 'OPERADOR (Live)' : 'Gemini Live',
+        text: text.trim(),
+        timestamp: _formatTime(now),
+      ),
+    );
+    unawaited(
+      ConversationHistory.instance.save(
+        ChatMessage(
+          id: null,
+          conversationId: activeTacticalMode.conversationId,
+          role: role == 'user' ? ChatRole.user : ChatRole.assistant,
+          content: text.trim(),
+          createdAt: now,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleGeminiLive() async {
+    HapticFeedback.mediumImpact();
+    if (geminiLiveService.isActive) {
+      await geminiLiveService.disconnect();
+      return;
+    }
+    if (voicePipeline.isCapturing) {
+      await voicePipeline.stopAll();
+    }
+    await voiceService.stop();
+
+    final providers = await providerStore.load();
+    AiProviderConfig? gemini;
+    for (final p in providers) {
+      final isGemini = p.id.toLowerCase().contains('gemini') ||
+          p.baseUrl.toLowerCase().contains('generativelanguage.googleapis.com');
+      if (isGemini && p.apiKey.trim().isNotEmpty && p.apiKey.trim().toLowerCase() != 'free') {
+        gemini = p;
+        break;
+      }
+    }
+    if (gemini == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Adicione uma chave do Google Gemini Studio em Provedores de IA para ativar o Gemini Live.',
+            style: TextStyle(fontSize: 11),
+          ),
+          duration: Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    final systemPrompt = await deviceService.buildContextualSystemPrompt(
+      mode: activeTacticalMode,
+      persona: activePersona,
+      speechStyle: selectedSpeechStyle,
+    );
+    final ok = await geminiLiveService.connect(
+      apiKey: gemini.apiKey,
+      systemInstruction: systemPrompt,
+    );
+    if (!mounted) return;
+    if (!ok && geminiLiveService.lastError != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            geminiLiveService.lastError!,
+            style: const TextStyle(fontSize: 11),
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  Future<void> _runResearchCommand(String rawArg, String timeStr) async {
+    final trimmed = rawArg.trim();
+    final lower = trimmed.toLowerCase();
+    if (trimmed.isEmpty) {
+      _appendFeed(_FeedEntry(
+        isUser: false,
+        senderLabel: 'Pesquisa Profunda',
+        text: 'Uso:\n'
+            '• /pesquisa <tema>: inicia pesquisa profunda local assíncrona com relatório no Obsidian\n'
+            '• /pesquisa pc <tema>: delega pesquisa pesada ao U.L.T.R.O.N. Desktop via LAN\n'
+            '• /pesquisa status: lista pesquisas ativas e concluídas\n'
+            '• /pesquisa cancelar <id|todas>: cancela pesquisa em andamento',
+        timestamp: timeStr,
+      ));
+      return;
+    }
+    if (lower == 'status' || lower == 'listar') {
+      _appendFeed(_FeedEntry(
+        isUser: false,
+        senderLabel: 'Pesquisa Profunda',
+        text: deepResearchService.formatTasksSummary(),
+        timestamp: timeStr,
+      ));
+      return;
+    }
+    if (lower.startsWith('cancelar ')) {
+      final target = trimmed.substring('cancelar '.length).trim();
+      if (target.toLowerCase() == 'todas' || target.toLowerCase() == 'all') {
+        final count = deepResearchService.cancelAll();
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Pesquisa Profunda',
+          text: count == 0
+              ? 'Nenhuma pesquisa ativa para cancelar.'
+              : '$count pesquisa(s) cancelada(s).',
+          timestamp: timeStr,
+        ));
+      } else {
+        final cancelled = deepResearchService.cancel(target);
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Pesquisa Profunda',
+          text: cancelled
+              ? 'Pesquisa $target cancelada.'
+              : 'Pesquisa "$target" não encontrada ou já finalizada.',
+          timestamp: timeStr,
+        ));
+      }
+      return;
+    }
+    if (lower.startsWith('pc ')) {
+      final pcTopic = trimmed.substring(3).trim();
+      if (pcTopic.isNotEmpty) {
+        await _runCommand(UltronCommand.pc, 'tarefa $pcTopic');
+      }
+      return;
+    }
+
+    final task = deepResearchService.startResearch(
+      trimmed,
+      onCompleted: (done) {
+        if (!mounted) return;
+        final nowStr = _formatTime(DateTime.now());
+        if (done.status == DeepResearchStatus.completed) {
+          final noteSuffix = done.savedNotePath == null
+              ? ''
+              : '\n\nRelatório salvo no Obsidian em ${done.savedNotePath}.';
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Pesquisa Profunda [${done.id}]',
+            text: '${done.reportMarkdown}$noteSuffix',
+            timestamp: nowStr,
+          ));
+          deviceService.invalidateVaultSearchCache();
+          if (_lifecycleState != AppLifecycleState.resumed) {
+            unawaited(
+              deviceService.notifyBackgroundResponseReady(
+                title: 'Pesquisa concluída: ${done.topic}',
+                body: done.savedNotePath != null
+                    ? 'Relatório salvo em ${done.savedNotePath} (${done.sources.length} fontes).'
+                    : 'Pesquisa concluída com ${done.sources.length} fontes.',
+              ),
+            );
+          } else if (isAudioOn && widget.gate.isAuthenticated) {
+            unawaited(
+              voiceService.speak(
+                'Pesquisa sobre ${done.topic} concluída com ${done.sources.length} fontes.',
+                emotionOverride: VoiceEmotion.comemorando,
+              ),
+            );
+          }
+        } else if (done.status == DeepResearchStatus.failed) {
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Pesquisa Profunda [${done.id}]',
+            text: 'Falha na pesquisa "${done.topic}": ${done.error}',
+            timestamp: nowStr,
+          ));
+        }
+      },
+    );
+
+    _appendFeed(_FeedEntry(
+      isUser: false,
+      senderLabel: 'Pesquisa Profunda [${task.id}]',
+      text:
+          'Pesquisa iniciada em segundo plano sobre "${task.topic}" (${task.subQueries.length} subconsultas).\n'
+          'Use `/pesquisa status` para acompanhar ou `/pesquisa cancelar ${task.id}` para interromper.',
+      timestamp: timeStr,
+    ));
   }
 
   Future<void> _toggleNightFocusMode() async {
@@ -1727,6 +1994,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     voicePipeline.removeListener(_onVoicePipelineChanged);
     voicePipeline.dispose();
+    geminiLiveService.removeListener(_onAuxServiceChanged);
+    geminiLiveService.dispose();
+    deepResearchService.removeListener(_onAuxServiceChanged);
+    deepResearchService.dispose();
     deviceService.setNativeEventHandlers(
       onFlip: null,
       onWakeWord: null,
@@ -2177,9 +2448,13 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     final activeConvId = activeTacticalMode.conversationId;
     final previousMessages = await ConversationHistory.instance.messages(
       conversationId: activeConvId,
-      limit: preAnalysis.recommendedMaxHistory,
+      limit: (preAnalysis.recommendedMaxHistory + 12).clamp(12, 32),
     );
-    final aiHistory = previousMessages
+    final compactedHistory = ConversationHistory.compactHistory(
+      previousMessages,
+      keepRecent: preAnalysis.recommendedMaxHistory.clamp(4, 12),
+    );
+    final aiHistory = compactedHistory.recentMessages
         .where(
           (message) =>
               message.role == ChatRole.user ||
@@ -2208,9 +2483,22 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     final totalSw = Stopwatch()..start();
     try {
       final ragSw = Stopwatch()..start();
+      var recallContext = '';
+      try {
+        recallContext = await ConversationHistory.instance.buildRecallContext(
+          text,
+          conversationId: activeConvId,
+          maxDays: 120,
+          limit: 4,
+        );
+      } catch (_) {}
       final baseSystemPrompt = await deviceService.buildContextualSystemPrompt(
         userQuery: text,
         mode: activeTacticalMode,
+        persona: activePersona,
+        speechStyle: selectedSpeechStyle,
+        lexicalRecallContext: recallContext,
+        compactedHistoryDigest: compactedHistory.summaryDigest,
       );
       final reusingSessionVision = attachedVision == null &&
           lastSessionVisionImage != null &&
@@ -2306,7 +2594,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             );
           }
           final ttsSw = Stopwatch()..start();
-          await voiceService.speak(postAudit.speakText);
+          await voiceService.speak(
+            postAudit.speakText,
+            emotionOverride: postAudit.detectedEmotion,
+          );
           ttsSw.stop();
           ttsMs = ttsSw.elapsedMilliseconds;
           if (_lifecycleState != AppLifecycleState.resumed) {
@@ -3547,6 +3838,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           await voiceService.speak(elRes.speakText!);
         }
         break;
+      case UltronCommand.research:
+        await _runResearchCommand(argument, timeStr);
+        break;
     }
   }
 
@@ -3710,8 +4004,13 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
 
   double _currentOrbEnergy() {
     if (nightFocusMode) return 0.12;
-    if (voiceService.isSpeaking) return 0.92;
-    if (listeningVoice || voicePipeline.isCapturing) {
+    if (geminiLiveService.state == GeminiLiveState.speaking ||
+        voiceService.isSpeaking) {
+      return 0.92;
+    }
+    if (geminiLiveService.isActive ||
+        listeningVoice ||
+        voicePipeline.isCapturing) {
       return (0.52 + speechRms * 0.6).clamp(0.38, 1.15);
     }
     if (sending || voicePipeline.isTranscribing) return 0.62;
@@ -3719,6 +4018,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   }
 
   String _currentAssistantStatus() {
+    if (geminiLiveService.isActive) {
+      return 'Gemini Live · ${geminiLiveService.state.label}';
+    }
     if (voicePipeline.lastError != null && voicePipeline.lastError!.isNotEmpty) {
       return 'Atenção no áudio';
     }
@@ -4135,6 +4437,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           isAudioOn: isAudioOn,
           nightFocusMode: nightFocusMode,
           selectedVoiceProfile: selectedVoiceProfile,
+          activePersona: activePersona,
+          speechStyle: selectedSpeechStyle,
           vadProfile: vadProfile,
           vadHangoverMs: vadHangoverMs,
           vadNoiseFloorDb: voicePipeline.vadSegmenter.noiseFloorDb,
@@ -4144,6 +4448,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           hasUpdate: hasUpdate,
           onToggleAudio: _toggleAudio,
           onToggleNightFocus: _toggleNightFocusMode,
+          onSelectPersona: (p) => unawaited(_selectPersonaProfile(p)),
+          onSelectSpeechStyle: (s) => unawaited(_selectSpeechStyle(s)),
           onSelectVadProfile: (p) => unawaited(_updateVadProfile(p)),
           onSelectVadHangoverMs: (ms) => unawaited(_updateVadHangoverMs(ms)),
           onOpenVoiceSelector: _openVoiceSelector,
@@ -4586,6 +4892,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     stage: stage,
                     shaderProgram: widget.shaderProgram,
                     energy: orbEnergy,
+                    accentColor: activePersona.accentColor,
                   ),
                 ),
               ),
@@ -4642,6 +4949,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                         stage: stage,
                         shaderProgram: widget.shaderProgram,
                         energy: orbEnergy,
+                        accentColor: activePersona.accentColor,
                       ),
                     ),
                   ),
@@ -4997,6 +5305,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     stage: stage,
                     shaderProgram: widget.shaderProgram,
                     energy: voiceService.isSpeaking ? 0.85 : 0.28,
+                    accentColor: activePersona.accentColor,
                   ),
                 ),
               ),
@@ -7124,6 +7433,32 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               ),
             ],
           ),
+        ),
+        const SizedBox(height: 14),
+        const UltronSectionLabel('Voz em tempo real e pesquisa'),
+        UltronActionTile(
+          icon: geminiLiveService.isActive
+              ? Icons.stop_circle_outlined
+              : Icons.spatial_audio_off_rounded,
+          title: geminiLiveService.isActive
+              ? 'Encerrar Gemini Live (${geminiLiveService.state.label})'
+              : 'Iniciar Gemini Live (Áudio bidirecional)',
+          subtitle: geminiLiveService.isActive
+              ? 'Sessão 16 kHz / 24 kHz ativa com barge-in instantâneo'
+              : 'WebSocket 16 kHz / 24 kHz via microfone nativo e ActionGate',
+          accentColor: geminiLiveService.isActive
+              ? UltronColors.positive
+              : UltronColors.crimson,
+          onTap: () => unawaited(_toggleGeminiLive()),
+        ),
+        const SizedBox(height: 8),
+        UltronActionTile(
+          icon: Icons.travel_explore_rounded,
+          title: 'Pesquisa profunda em segundo plano',
+          subtitle: deepResearchService.hasActiveTasks
+              ? 'Pesquisa ativa em andamento (/pesquisa status)'
+              : 'Decomposição paralela com [DADOS EXTERNOS] e relatório no Obsidian',
+          onTap: () => unawaited(_executeSlashFromSection('/pesquisa status')),
         ),
         const SizedBox(height: 14),
         const UltronSectionLabel('Visão computacional e OCR'),

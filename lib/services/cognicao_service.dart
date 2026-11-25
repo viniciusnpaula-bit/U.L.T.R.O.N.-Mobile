@@ -1,3 +1,5 @@
+import 'voice_emotion_parser.dart';
+
 /// Complexidade estimada do pedido antes da chamada ao LLM.
 enum PromptComplexity { low, medium, high }
 
@@ -33,6 +35,7 @@ class CognitivePostAudit {
     required this.hallucinatedExecution,
     required this.sanitizedEmptyReply,
     this.detectedClaim,
+    this.detectedEmotion = VoiceEmotion.neutro,
   });
 
   final String text;
@@ -40,6 +43,7 @@ class CognitivePostAudit {
   final bool hallucinatedExecution;
   final bool sanitizedEmptyReply;
   final String? detectedClaim;
+  final VoiceEmotion detectedEmotion;
 }
 
 /// Camada Cognitiva Determinística & Guardrails (Marco 1 — v1.6.0).
@@ -202,7 +206,9 @@ class CognicaoService {
     required List<String> executedTools,
     bool isUrgent = false,
   }) {
-    var text = cleanReplyText.trim();
+    final emotionParsed = VoiceEmotionParser.parse(cleanReplyText);
+    var text = emotionParsed.cleanText.trim();
+    final detectedEmotion = emotionParsed.emotion;
     var sanitizedEmpty = false;
     if (text.isEmpty) {
       if (executedTools.isNotEmpty) {
@@ -278,6 +284,7 @@ class CognicaoService {
       speakText: text,
       hallucinatedExecution: false,
       sanitizedEmptyReply: sanitizedEmpty,
+      detectedEmotion: detectedEmotion,
     );
   }
 }

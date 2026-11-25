@@ -388,6 +388,28 @@ class DesktopPairingService {
               if (val.isNotEmpty) 'mode': val,
             },
           ),
+        'PC_TEMP' || 'CPU_TEMP' => (
+            command: 'PC_TEMP',
+            args: const <String, dynamic>{},
+          ),
+        'PC_DELEGATE_TASK' when val.isNotEmpty => (
+            command: 'PC_DELEGATE_TASK',
+            args: <String, dynamic>{'query': val, 'objective': val},
+          ),
+        'PC_TASK_STATUS' || 'PC_TASKS' => (
+            command: 'PC_TASK_STATUS',
+            args: <String, dynamic>{
+              if (val.isNotEmpty) 'task_id': val,
+            },
+          ),
+        'PC_TASK_CANCEL' when val.isNotEmpty => (
+            command: 'PC_TASK_CANCEL',
+            args: <String, dynamic>{'task_id': val},
+          ),
+        'PC_SPOTIFY' => (
+            command: 'PC_SPOTIFY',
+            args: _parsePcSpotifyArgs(val),
+          ),
         'PC_POWER_PLAN' || 'CONTROLAR_PLANO_ENERGIA' => (
             command: 'PC_POWER_PLAN',
             args: <String, dynamic>{
@@ -447,7 +469,6 @@ class DesktopPairingService {
       case 'thermal':
       case 'termico':
       case 'térmico':
-      case 'temperatura':
       case 'telemetria':
       case 'pc_thermal':
       case 'verificar_protecao_termica':
@@ -457,6 +478,50 @@ class DesktopPairingService {
             'tool': 'verificar_protecao_termica',
             if (rest.isNotEmpty) 'mode': rest,
           },
+        );
+      case 'temp':
+      case 'temperatura':
+      case 'cpu_temp':
+      case 'pc_temp':
+        return (
+          command: 'PC_TEMP',
+          args: const <String, dynamic>{},
+        );
+      case 'tarefa':
+      case 'delegar':
+      case 'pesquisa':
+      case 'pesquisar':
+      case 'delegate':
+      case 'pc_delegate_task':
+        if (rest.isEmpty) return null;
+        return (
+          command: 'PC_DELEGATE_TASK',
+          args: <String, dynamic>{'query': rest, 'objective': rest},
+        );
+      case 'tarefas':
+      case 'tasks':
+      case 'task_status':
+      case 'pc_tasks':
+      case 'pc_task_status':
+        return (
+          command: 'PC_TASK_STATUS',
+          args: <String, dynamic>{
+            if (rest.isNotEmpty) 'task_id': rest,
+          },
+        );
+      case 'cancelar_tarefa':
+      case 'cancel_task':
+      case 'pc_task_cancel':
+        if (rest.isEmpty) return null;
+        return (
+          command: 'PC_TASK_CANCEL',
+          args: <String, dynamic>{'task_id': rest},
+        );
+      case 'spotify':
+      case 'pc_spotify':
+        return (
+          command: 'PC_SPOTIFY',
+          args: _parsePcSpotifyArgs(rest),
         );
       case 'energia':
       case 'power':
@@ -629,6 +694,31 @@ class DesktopPairingService {
       default:
         return null;
     }
+  }
+
+  static Map<String, dynamic> _parsePcSpotifyArgs(String raw) {
+    final clean = raw.trim();
+    if (clean.isEmpty) {
+      return const <String, dynamic>{'action': 'status'};
+    }
+    final parts = clean.split(RegExp(r'\s+'));
+    final first = parts.first.toLowerCase();
+    final rest = parts.length > 1 ? parts.sublist(1).join(' ').trim() : '';
+    return switch (first) {
+      'play' || 'tocar' => <String, dynamic>{
+          'action': 'play',
+          if (rest.isNotEmpty) 'query': rest,
+        },
+      'pause' || 'pausar' => const <String, dynamic>{'action': 'pause'},
+      'next' || 'proxima' || 'próxima' => const <String, dynamic>{'action': 'next'},
+      'previous' || 'anterior' => const <String, dynamic>{'action': 'previous'},
+      'playlist' || 'playlists' => <String, dynamic>{
+          'action': rest.isEmpty ? 'playlists' : 'play_playlist',
+          if (rest.isNotEmpty) 'playlist': rest,
+        },
+      'status' || 'estado' => const <String, dynamic>{'action': 'status'},
+      _ => <String, dynamic>{'action': 'play', 'query': clean},
+    };
   }
 
   static String _normalizePcMediaAction(String raw) {

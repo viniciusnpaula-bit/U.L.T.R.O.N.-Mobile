@@ -7,6 +7,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart' as sqlcipher;
 
 import '../core/security/database_key_vault.dart';
 import '../models/chat_message.dart';
+import 'text_normalization.dart';
 
 typedef EncryptedDatabaseOpener = Future<sqlcipher.Database> Function(
   String path, {
@@ -285,4 +286,179 @@ class ConversationHistory {
     final db = await database;
     return db.delete('messages');
   }
+
+  static const Set<String> _ptStopwords = <String>{
+    'a', 'o', 'e', 'de', 'da', 'do', 'das', 'dos', 'em', 'no', 'na', 'nos',
+    'nas', 'um', 'uma', 'uns', 'umas', 'para', 'pra', 'por', 'com', 'sem',
+    'que', 'como', 'qual', 'quais', 'quem', 'onde', 'quando', 'porque',
+    'por que', 'eu', 'voce', 'vc', 'ele', 'ela', 'eles', 'meu',
+    'minha', 'seu', 'sua', 'isso', 'isto', 'esse', 'essa', 'esta', 'este',
+    'ser', 'estar', 'ter', 'foi', 'era', 'sao', 'tem', 'mais', 'muito',
+    'ja', 'so', 'nao', 'sim', 'mas', 'ou', 'se', 'ao', 'aos', 'sobre',
+    'ultron', 'jarvis', 'edith', 'visao', 'ola', 'oi', 'ei',
+  };
+
+  static Set<String> _tokenize(String text) {
+    final norm = PtBrTextNormalizer.normalizePhrase(text);
+    if (norm.isEmpty) return const <String>{};
+    return norm
+        .split(RegExp(r'\s+'))
+        .where((w) => w.length >= 3 && !_ptStopwords.contains(w))
+        .toSet();
+  }
+
+  /// Compacta o histórico de mensagens mantendo os últimos [keepRecent] turnos
+  /// intactos e resumindo mensagens mais antigas em um bloco enxuto para
+  /// economizar tokens nos provedores gratuitos.
+  static CompactedHistory compactHistory(
+    List<ChatMessage> history, {
+    int keepRecent = 8,
+    int maxSummaryChars = 900,
+  }) {
+    if (history.length <= keepRecent) {
+      return CompactedHistory(recentMessages: history, summaryDigest: '');
+    }
+    final splitAt = history.length - keepRecent;
+    final older = history.sublist(0, splitAt);
+    final recent = history.sublist(splitAt);
+
+    final sb = StringBuffer();
+    for (final msg in older) {
+      if (msg.role == ChatRole.system) continue;
+      final clean = msg.content.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (clean.isEmpty) continue;
+      final who = msg.role == ChatRole.user ? 'Operador' : 'Assistente';
+      final snippet =
+          clean.length > 120 ? '${clean.substring(0, 117)}...' : clean;
+      final line = '- $who: $snippet\n';
+      if (sb.length + line.length > maxSummaryChars) break;
+      sb.write(line);
+    }
+
+    return CompactedHistory(
+      recentMessages: recent,
+      summaryDigest: sb.toString().trim(),
+    );
+  }
+
+  /// Recall lexical local (até 120 dias) por sobreposição de tokens + bônus de
+  /// recência, sem embeddings pesados nem envio da base inteira à nuvem.
+  Future<List<HistoryRecallMatch>> recallRelevant(
+    String query, {
+    String? conversationId,
+    int maxDays = 120,
+    int limit = 4,
+    int scanLimit = 600,
+    DateTime? now,
+  }) async {
+    final queryTokens = _tokenize(query);
+    if (queryTokens.isEmpty) return const <HistoryRecallMatch>[];
+
+    final refNow = (now ?? DateTime.now()).toUtc();
+    final cutoff = refNow.subtract(Duration(days: maxDays)).toIso8601String();
+    final db = await database;
+
+    final whereParts = <String>['created_at >= ?'];
+    final whereArgs = <Object?>[cutoff];
+    if (conversationId != null && conversationId.trim().isNotEmpty) {
+      whereParts.add('conversation_id = ?');
+      whereArgs.add(conversationId.trim());
+    }
+
+    final rows = await db.query(
+      'messages',
+      where: whereParts.join(' AND '),
+      whereArgs: whereArgs,
+      orderBy: 'created_at DESC, id DESC',
+      limit: scanLimit,
+    );
+    if (rows.isEmpty) return const <HistoryRecallMatch>[];
+
+    final scored = <HistoryRecallMatch>[];
+    for (final row in rows) {
+      final msg = ChatMessage.fromMap(row);
+      if (msg.role == ChatRole.system) continue;
+      final msgTokens = _tokenize(msg.content);
+      if (msgTokens.isEmpty) continue;
+
+      final overlap = queryTokens.intersection(msgTokens);
+      if (overlap.isEmpty) continue;
+
+      final coverage = overlap.length / queryTokens.length;
+      final ageDays =
+          refNow.difference(msg.createdAt.toUtc()).inHours.abs() / 24.0;
+      final recencyBonus = (1.0 - (ageDays / maxDays)).clamp(0.0, 1.0) * 0.25;
+      final score = coverage + recencyBonus;
+
+      if (score >= 0.30) {
+        scored.add(
+          HistoryRecallMatch(
+            message: msg,
+            score: score,
+            matchedTokens: overlap.toList(growable: false),
+          ),
+        );
+      }
+    }
+
+    scored.sort((a, b) => b.score.compareTo(a.score));
+    return scored.take(limit).toList(growable: false);
+  }
+
+  /// Monta bloco pronto para injeção no System Prompt com memórias recuperadas.
+  Future<String> buildRecallContext(
+    String query, {
+    String? conversationId,
+    int maxDays = 120,
+    int limit = 4,
+    int maxChars = 900,
+    DateTime? now,
+  }) async {
+    final matches = await recallRelevant(
+      query,
+      conversationId: conversationId,
+      maxDays: maxDays,
+      limit: limit,
+      now: now,
+    );
+    if (matches.isEmpty) return '';
+    final sb = StringBuffer();
+    for (final m in matches) {
+      final dt = m.message.createdAt.toLocal();
+      final dateStr =
+          '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}';
+      final who = m.message.role == ChatRole.user ? 'Operador' : 'Assistente';
+      final clean = m.message.content.replaceAll(RegExp(r'\s+'), ' ').trim();
+      final snippet =
+          clean.length > 180 ? '${clean.substring(0, 177)}...' : clean;
+      final line = '- [$dateStr] $who: $snippet\n';
+      if (sb.length + line.length > maxChars) break;
+      sb.write(line);
+    }
+    return sb.toString().trim();
+  }
+}
+
+class CompactedHistory {
+  const CompactedHistory({
+    required this.recentMessages,
+    required this.summaryDigest,
+  });
+
+  final List<ChatMessage> recentMessages;
+  final String summaryDigest;
+
+  bool get hasDigest => summaryDigest.trim().isNotEmpty;
+}
+
+class HistoryRecallMatch {
+  const HistoryRecallMatch({
+    required this.message,
+    required this.score,
+    required this.matchedTokens,
+  });
+
+  final ChatMessage message;
+  final double score;
+  final List<String> matchedTokens;
 }
