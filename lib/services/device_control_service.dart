@@ -2378,12 +2378,12 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       return const DeviceActionResult(
         handled: true,
         message:
-            'Nenhum arquivo de backup do openGym selecionado ou encontrado em Downloads.\n'
+            'Nenhum arquivo do openGym selecionado ou encontrado em Downloads.\n'
             'Como sincronizar offline:\n'
-            '1. Abra o openGym > Configurações > Exportar backup JSON (`opengym-state.json`) ou CSV.\n'
-            '2. Execute `/opengym importar` (ou `/opengym auto` após salvar em Downloads).',
+            '1. No openGym, exporte o relatório em **PDF** (ou backup **JSON/CSV**).\n'
+            '2. Execute `/opengym importar` (ou `/opengym auto` se salvou em Downloads).',
         speakText:
-            'Nenhum backup do OpenGym selecionado. Exporte o JSON ou CSV no OpenGym e tente novamente.',
+            'Nenhum arquivo do OpenGym selecionado. Exporte o relatório em PDF, JSON ou CSV no OpenGym e tente novamente.',
       );
     }
 

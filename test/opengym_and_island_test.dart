@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -175,6 +176,63 @@ void main() {
         mode: TacticalMode.musica,
       );
       expect(musicaPrompt, isNot(contains('OpenGym_Resumo.md')));
+    });
+
+    test('parses compressed FlateDecode openGym PDF report offline and writes Obsidian note',
+        () async {
+      // Monta um PDF válido com stream FlateDecode (zlib) contendo um relatório real do openGym
+      const pdfContent = 'BT\n'
+          '/F1 12 Tf\n'
+          '(2026-11-25 - Treino Peito e Pernas) Tj\n'
+          'T*\n'
+          '(Peso corporal: 79.6 kg) Tj\n'
+          'T*\n'
+          '(Supino Reto 90 kg x 6) Tj\n'
+          'T*\n'
+          '(Agachamento Livre 4 x 8 @ 110 kg) Tj\n'
+          'ET\n';
+      final compressed = zlib.encode(latin1.encode(pdfContent));
+      final pdfBuilder = BytesBuilder()
+        ..add(latin1.encode('%PDF-1.4\n1 0 obj\n<< /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n'))
+        ..add(compressed)
+        ..add(latin1.encode('\nendstream\nendobj\n%%EOF\n'));
+      final pdfBytes = pdfBuilder.toBytes();
+
+      final tempDir =
+          await Directory.systemTemp.createTemp('ultron_opengym_pdf_test_');
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final pdfFile = File(p.join(tempDir.path, 'opengym_relatorio.pdf'));
+      await pdfFile.writeAsBytes(pdfBytes);
+
+      final vaultDir = Directory(p.join(tempDir.path, 'vault'));
+      final vault = ObsidianService(vaultDir);
+      await vault.initialize();
+
+      final summary = await OpenGymService().importFile(
+        pdfFile,
+        obsidian: vault,
+      );
+
+      expect(summary.isEmpty, isFalse);
+      expect(summary.savedNotePath, OpenGymService.summaryNotePath);
+      expect(summary.workouts.length, 1);
+      expect(summary.workouts.first.name, 'Treino Peito e Pernas');
+      expect(summary.weightEntries.length, 1);
+      expect(summary.weightEntries.first.weightKg, 79.6);
+      expect(summary.personalRecords.length, 2);
+      expect(summary.personalRecords.first.exerciseName, 'Agachamento Livre');
+      expect(summary.personalRecords.first.maxWeightKg, 110);
+
+      final note = await vault.readNote(OpenGymService.summaryNotePath);
+      expect(note, contains('Agachamento Livre'));
+      expect(note, contains('Supino Reto'));
+      expect(note, contains('79.6 kg'));
+      expect(note, contains('Relatório Extraído (PDF)'));
     });
   });
 

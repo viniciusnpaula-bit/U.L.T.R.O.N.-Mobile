@@ -139,7 +139,7 @@ class _MemorySectionState extends State<MemorySection> {
         UltronActionTile(
           icon: Icons.fitness_center_rounded,
           title: 'Sincronizar openGym (Modo Treino)',
-          subtitle: 'Importar backup JSON ou CSV offline para PRs e volume no Obsidian',
+          subtitle: 'Importar relatório PDF ou backup JSON/CSV offline para o Obsidian',
           onTap: () => widget.onRunSlashCommand('/opengym importar'),
         ),
         const SizedBox(height: 8),

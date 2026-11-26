@@ -116,6 +116,7 @@ class OpenGymSummary {
     required this.personalRecords,
     required this.weightEntries,
     this.savedNotePath,
+    this.rawExtractedText = '',
   });
 
   final String sourceName;
@@ -124,6 +125,7 @@ class OpenGymSummary {
   final List<OpenGymPersonalRecord> personalRecords;
   final List<OpenGymWeightEntry> weightEntries;
   final String? savedNotePath;
+  final String rawExtractedText;
 
   OpenGymSummary withSavedNotePath(String path) => OpenGymSummary(
         sourceName: sourceName,
@@ -132,10 +134,14 @@ class OpenGymSummary {
         personalRecords: personalRecords,
         weightEntries: weightEntries,
         savedNotePath: path,
+        rawExtractedText: rawExtractedText,
       );
 
   bool get isEmpty =>
-      workouts.isEmpty && routines.isEmpty && weightEntries.isEmpty;
+      workouts.isEmpty &&
+      routines.isEmpty &&
+      weightEntries.isEmpty &&
+      rawExtractedText.trim().isEmpty;
 
   String toObsidianMarkdown({DateTime? syncedAt}) {
     final now = syncedAt ?? DateTime.now();
@@ -208,13 +214,23 @@ class OpenGymSummary {
       }
     }
 
+    if (rawExtractedText.trim().isNotEmpty) {
+      final clipped = rawExtractedText.trim().length > 6000
+          ? '${rawExtractedText.trim().substring(0, 5997)}...'
+          : rawExtractedText.trim();
+      sb
+        ..writeln()
+        ..writeln('## Relatório Extraído (PDF)')
+        ..writeln(clipped);
+    }
+
     return sb.toString().trim();
   }
 
   String formatChatSummary() {
     if (isEmpty) {
       return 'Nenhum treino, rotina ou peso encontrado em "$sourceName". '
-          'Exporte o backup JSON ou CSV no app openGym e importe novamente.';
+          'Exporte o relatório em PDF ou backup JSON/CSV no app openGym e importe novamente.';
     }
     final sb = StringBuffer()
       ..writeln('openGym sincronizado ($sourceName):')
@@ -297,13 +313,14 @@ class OpenGymService {
 
   final MethodChannel _channel;
 
-  /// Abre o seletor SAF nativo para escolher o backup `.json` ou `.csv` exportado do openGym.
+  /// Abre o seletor SAF nativo para escolher o relatório `.pdf` ou backup `.json`/`.csv` do openGym.
   Future<File?> pickBackupFileSaf() async {
     try {
       final raw = await _channel.invokeListMethod<String>(
         'pickMultipleFilesSaf',
         <String, Object?>{
           'mimeTypes': const <String>[
+            'application/pdf',
             'application/json',
             'text/csv',
             'text/comma-separated-values',
@@ -321,7 +338,7 @@ class OpenGymService {
     }
   }
 
-  /// Procura automaticamente o backup mais recente do openGym em Downloads / Documents.
+  /// Procura automaticamente o relatório PDF ou backup mais recente do openGym em Downloads / Documents.
   Future<File?> findLatestLocalBackup({List<Directory>? extraDirs}) async {
     final dirs = <Directory>[
       ...?extraDirs,
@@ -336,12 +353,15 @@ class OpenGymService {
         await for (final entity in dir.list(followLinks: false)) {
           if (entity is! File) continue;
           final name = p.basename(entity.path).toLowerCase();
-          final isJsonOrCsv = name.endsWith('.json') || name.endsWith('.csv');
-          if (isJsonOrCsv &&
+          final isSupported = name.endsWith('.pdf') ||
+              name.endsWith('.json') ||
+              name.endsWith('.csv');
+          if (isSupported &&
               (name.contains('opengym') ||
                   name.contains('open_gym') ||
                   name.contains('open-gym') ||
-                  name.contains('workout'))) {
+                  name.contains('workout') ||
+                  name.contains('treino'))) {
             candidates.add(entity);
           }
         }
@@ -354,21 +374,33 @@ class OpenGymService {
     return candidates.first;
   }
 
-  /// Importa um arquivo JSON ou CSV do openGym e grava o resumo consolidado
+  /// Importa um arquivo PDF, JSON ou CSV do openGym e grava o resumo consolidado
   /// em `Memoria/Treino/OpenGym_Resumo.md` no cofre Obsidian.
   Future<OpenGymSummary> importFile(
     File file, {
     required ObsidianService obsidian,
     DateTime? now,
   }) async {
-    final raw = await file.readAsString();
     final name = p.basename(file.path);
-    final trimmed = raw.trimLeft();
-    final summary = (name.toLowerCase().endsWith('.json') ||
-            trimmed.startsWith('{') ||
-            trimmed.startsWith('['))
-        ? parseJsonExport(raw, sourceName: name)
-        : parseCsvExport(raw, sourceName: name);
+    final bytes = await file.readAsBytes();
+    final isPdfHeader = bytes.length >= 4 &&
+        bytes[0] == 0x25 && // %
+        bytes[1] == 0x50 && // P
+        bytes[2] == 0x44 && // D
+        bytes[3] == 0x46; // F
+
+    final OpenGymSummary summary;
+    if (name.toLowerCase().endsWith('.pdf') || isPdfHeader) {
+      summary = parsePdfExport(bytes, sourceName: name);
+    } else {
+      final raw = utf8.decode(bytes, allowMalformed: true);
+      final trimmed = raw.trimLeft();
+      summary = (name.toLowerCase().endsWith('.json') ||
+              trimmed.startsWith('{') ||
+              trimmed.startsWith('['))
+          ? parseJsonExport(raw, sourceName: name)
+          : parseCsvExport(raw, sourceName: name);
+    }
 
     if (!summary.isEmpty) {
       await obsidian.initialize();
@@ -378,6 +410,395 @@ class OpenGymService {
       return summary.withSavedNotePath(summaryNotePath);
     }
     return summary;
+  }
+
+  /// Faz extração offline de texto de PDFs (streams FlateDecode/raw + ToUnicode CMap)
+  /// e interpreta exercícios, séries, cargas, datas e peso corporal de relatórios do openGym.
+  static OpenGymSummary parsePdfExport(
+    Uint8List bytes, {
+    String sourceName = 'opengym-report.pdf',
+  }) {
+    final extracted = extractTextFromPdfBytes(bytes);
+    return parsePdfReportText(extracted, sourceName: sourceName);
+  }
+
+  /// Extrai texto legível de um PDF 100% offline em Dart (suporta FlateDecode,
+  /// operadores Tj/TJ, strings literais, hex UTF-16BE e mapas ToUnicode CMap do Skia/Android).
+  static String extractTextFromPdfBytes(Uint8List bytes) {
+    final latin = latin1.decode(bytes, allowInvalid: true);
+    final decodedStreams = <String>[];
+    final cmap = <int, String>{};
+
+    final streamRegex = RegExp(r'stream\r?\n([\s\S]*?)\r?\n?endstream');
+    for (final m in streamRegex.allMatches(latin)) {
+      final rawStream = m.group(1);
+      if (rawStream == null || rawStream.isEmpty) continue;
+      final streamBytes = latin1.encode(rawStream);
+      String? text;
+      try {
+        final inflated = zlib.decode(streamBytes);
+        text = latin1.decode(inflated, allowInvalid: true);
+      } catch (_) {
+        // Alguns geradores deixam CR/LF extra antes de endstream
+        final trimmedStream = rawStream.replaceFirst(RegExp(r'\r?\n$'), '');
+        if (trimmedStream.length != rawStream.length) {
+          try {
+            final inflated = zlib.decode(latin1.encode(trimmedStream));
+            text = latin1.decode(inflated, allowInvalid: true);
+          } catch (_) {
+            text = rawStream;
+          }
+        } else {
+          text = rawStream;
+        }
+      }
+      if (text.contains('begincmap') ||
+          text.contains('beginbfchar') ||
+          text.contains('beginbfrange')) {
+        _parseToUnicodeCMap(text, cmap);
+      }
+      if (text.contains('BT') && (text.contains('Tj') || text.contains('TJ'))) {
+        decodedStreams.add(text);
+      }
+    }
+
+    // Fallback para PDFs sem stream comprimido explícito
+    if (decodedStreams.isEmpty &&
+        latin.contains('BT') &&
+        (latin.contains('Tj') || latin.contains('TJ'))) {
+      decodedStreams.add(latin);
+    }
+
+    final out = StringBuffer();
+    for (final content in decodedStreams) {
+      final btBlocks = RegExp(r'BT([\s\S]*?)ET').allMatches(content);
+      for (final block in btBlocks) {
+        final body = block.group(1) ?? '';
+        final lineBuf = StringBuffer();
+        final opRegex = RegExp(
+          r'\[([\s\S]*?)\]\s*TJ|\(([^()\\]*(?:\\.[^()\\]*)*)\)\s*Tj|<([0-9A-Fa-f\s]+)>\s*Tj|(?:T\*|\b(?:Td|TD|Tm)\b)',
+        );
+        for (final op in opRegex.allMatches(body)) {
+          final tjArray = op.group(1);
+          final litStr = op.group(2);
+          final hexStr = op.group(3);
+          if (tjArray != null) {
+            final itemRegex = RegExp(
+              r'\(([^()\\]*(?:\\.[^()\\]*)*)\)|<([0-9A-Fa-f\s]+)>|(-?\d+(?:\.\d+)?)',
+            );
+            for (final item in itemRegex.allMatches(tjArray)) {
+              final s = item.group(1);
+              final h = item.group(2);
+              final numKern = item.group(3);
+              if (s != null) {
+                lineBuf.write(_unescapePdfLiteral(s));
+              } else if (h != null) {
+                lineBuf.write(_decodePdfHex(h, cmap));
+              } else if (numKern != null) {
+                final k = double.tryParse(numKern) ?? 0;
+                if (k < -180 && !lineBuf.toString().endsWith(' ')) {
+                  lineBuf.write(' ');
+                }
+              }
+            }
+          } else if (litStr != null) {
+            lineBuf.write(_unescapePdfLiteral(litStr));
+          } else if (hexStr != null) {
+            lineBuf.write(_decodePdfHex(hexStr, cmap));
+          } else {
+            // Operador de posicionamento (Td/TD/T*/Tm): separa linhas
+            final cur = lineBuf.toString().trim();
+            if (cur.isNotEmpty) {
+              out.writeln(cur);
+              lineBuf.clear();
+            }
+          }
+        }
+        final tail = lineBuf.toString().trim();
+        if (tail.isNotEmpty) out.writeln(tail);
+      }
+    }
+
+    return out
+        .toString()
+        .replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'), '')
+        .replaceAll(RegExp(r'[ \t]{2,}'), ' ')
+        .trim();
+  }
+
+  static void _parseToUnicodeCMap(String cmapText, Map<int, String> out) {
+    final bfCharBlocks =
+        RegExp(r'beginbfchar([\s\S]*?)endbfchar').allMatches(cmapText);
+    for (final block in bfCharBlocks) {
+      final pairs = RegExp(r'<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>')
+          .allMatches(block.group(1) ?? '');
+      for (final p in pairs) {
+        final code = int.tryParse(p.group(1)!, radix: 16);
+        final mapped = _hexToUnicodeString(p.group(2)!);
+        if (code != null && mapped.isNotEmpty) {
+          out[code] = mapped;
+        }
+      }
+    }
+
+    final bfRangeBlocks =
+        RegExp(r'beginbfrange([\s\S]*?)endbfrange').allMatches(cmapText);
+    for (final block in bfRangeBlocks) {
+      final ranges =
+          RegExp(r'<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>')
+              .allMatches(block.group(1) ?? '');
+      for (final r in ranges) {
+        final start = int.tryParse(r.group(1)!, radix: 16);
+        final end = int.tryParse(r.group(2)!, radix: 16);
+        final dstStart = int.tryParse(r.group(3)!, radix: 16);
+        if (start == null || end == null || dstStart == null) continue;
+        final count = (end - start).clamp(0, 512);
+        for (var i = 0; i <= count; i++) {
+          out[start + i] = String.fromCharCode(dstStart + i);
+        }
+      }
+    }
+  }
+
+  static String _hexToUnicodeString(String hex) {
+    final clean = hex.replaceAll(RegExp(r'\s+'), '');
+    if (clean.isEmpty) return '';
+    if (clean.length <= 4) {
+      final cp = int.tryParse(clean, radix: 16);
+      return cp == null ? '' : String.fromCharCode(cp);
+    }
+    final buf = StringBuffer();
+    for (var i = 0; i + 4 <= clean.length; i += 4) {
+      final cp = int.tryParse(clean.substring(i, i + 4), radix: 16);
+      if (cp != null && cp != 0xFEFF) buf.writeCharCode(cp);
+    }
+    return buf.toString();
+  }
+
+  static String _decodePdfHex(String rawHex, Map<int, String> cmap) {
+    final hex = rawHex.replaceAll(RegExp(r'\s+'), '');
+    if (hex.isEmpty) return '';
+    if (hex.toUpperCase().startsWith('FEFF')) {
+      return _hexToUnicodeString(hex.substring(4));
+    }
+    if (cmap.isNotEmpty && hex.length % 4 == 0) {
+      final buf = StringBuffer();
+      var hits = 0;
+      for (var i = 0; i + 4 <= hex.length; i += 4) {
+        final code = int.tryParse(hex.substring(i, i + 4), radix: 16);
+        if (code != null && cmap.containsKey(code)) {
+          buf.write(cmap[code]);
+          hits++;
+        } else if (code != null && code >= 32 && code <= 126) {
+          buf.writeCharCode(code);
+        }
+      }
+      if (hits > 0) return buf.toString();
+    }
+    final buf = StringBuffer();
+    for (var i = 0; i + 2 <= hex.length; i += 2) {
+      final b = int.tryParse(hex.substring(i, i + 2), radix: 16);
+      if (b != null && (b >= 32 || b == 10 || b == 13 || b == 9)) {
+        buf.writeCharCode(b);
+      }
+    }
+    return buf.toString();
+  }
+
+  static String _unescapePdfLiteral(String s) {
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      final ch = s[i];
+      if (ch == r'\' && i + 1 < s.length) {
+        final next = s[++i];
+        switch (next) {
+          case 'n':
+            buf.write('\n');
+          case 'r':
+            buf.write('\r');
+          case 't':
+            buf.write('\t');
+          case '(':
+          case ')':
+          case r'\':
+            buf.write(next);
+          default:
+            if (next.codeUnitAt(0) >= 48 && next.codeUnitAt(0) <= 55) {
+              var oct = next;
+              for (var k = 0; k < 2 && i + 1 < s.length; k++) {
+                final c = s[i + 1].codeUnitAt(0);
+                if (c >= 48 && c <= 55) {
+                  oct += s[++i];
+                } else {
+                  break;
+                }
+              }
+              final code = int.tryParse(oct, radix: 8);
+              if (code != null) buf.writeCharCode(code);
+            } else {
+              buf.write(next);
+            }
+        }
+      } else {
+        buf.write(ch);
+      }
+    }
+    return buf.toString();
+  }
+
+  /// Interpreta o texto extraído de um relatório PDF do openGym em treinos,
+  /// séries, PRs, rotinas e registros de peso corporal.
+  static OpenGymSummary parsePdfReportText(
+    String rawText, {
+    String sourceName = 'opengym-report.pdf',
+  }) {
+    final lines = const LineSplitter()
+        .convert(rawText)
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+
+    final workouts = <OpenGymWorkout>[];
+    final weights = <OpenGymWeightEntry>[];
+
+    var currentDate = DateTime.now();
+    var currentWorkoutName = 'Relatório openGym';
+    final currentExercises = <String, List<OpenGymSet>>{};
+    String? lastExerciseName;
+
+    void flushWorkout() {
+      if (currentExercises.isEmpty) return;
+      final logs = currentExercises.entries
+          .map((e) => OpenGymExerciseLog(name: e.key, sets: e.value))
+          .toList();
+      workouts.add(
+        OpenGymWorkout(
+          name: currentWorkoutName,
+          date: currentDate,
+          exercises: logs,
+        ),
+      );
+      currentExercises.clear();
+      lastExerciseName = null;
+    }
+
+    final dateLineRegex = RegExp(
+      r'\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})\b',
+    );
+    final bodyWeightRegex = RegExp(
+      r'(?:body\s*weight|peso\s*(?:corporal)?)\s*[:\-]?\s*(\d{2,3}(?:[.,]\d{1,2})?)\s*kg',
+      caseSensitive: false,
+    );
+    // Ex: "Supino Reto 80 kg x 10" ou "80kg x 10" ou "4 x 10 @ 80 kg"
+    final weightRepsRegex = RegExp(
+      r'(\d+(?:[.,]\d+)?)\s*(?:kg|lbs?)\s*[x×]\s*(\d{1,3})\b',
+      caseSensitive: false,
+    );
+    final setsRepsAtWeightRegex = RegExp(
+      r'(\d{1,2})\s*[x×]\s*(\d{1,3})(?:\s*(?:reps?)?)?\s*(?:@|com|[-–])\s*(\d+(?:[.,]\d+)?)\s*(?:kg|lbs?)',
+      caseSensitive: false,
+    );
+    final setsRepsOnlyRegex = RegExp(
+      r'\b(\d{1,2})\s*(?:sets?|s[eé]ries?)?\s*[x×]\s*(\d{1,3})\s*(?:reps?)?\b',
+      caseSensitive: false,
+    );
+
+    for (final line in lines) {
+      final bw = bodyWeightRegex.firstMatch(line);
+      if (bw != null) {
+        final kg = _toDouble(bw.group(1));
+        if (kg > 20 && kg < 300) {
+          weights.add(OpenGymWeightEntry(date: currentDate, weightKg: kg));
+        }
+        continue;
+      }
+
+      final dateMatch = dateLineRegex.firstMatch(line);
+      if (dateMatch != null) {
+        final parsed = _parseDate(dateMatch.group(1));
+        if (parsed != null) {
+          if (currentExercises.isNotEmpty) flushWorkout();
+          currentDate = parsed;
+          final rest = line
+              .replaceFirst(dateMatch.group(0)!, '')
+              .replaceAll(RegExp(r'^[\s\-–:|·]+|[\s\-–:|·]+$'), '')
+              .trim();
+          if (rest.length >= 3 && rest.length <= 60) {
+            currentWorkoutName = rest;
+          }
+          continue;
+        }
+      }
+
+      final mSetsAt = setsRepsAtWeightRegex.firstMatch(line);
+      if (mSetsAt != null) {
+        final setCount = int.tryParse(mSetsAt.group(1)!)?.clamp(1, 20) ?? 1;
+        final reps = int.tryParse(mSetsAt.group(2)!) ?? 0;
+        final kg = _toDouble(mSetsAt.group(3));
+        final prefix = line.substring(0, mSetsAt.start).replaceAll(RegExp(r'[:\-–•]+$'), '').trim();
+        final exName = prefix.length >= 3 ? prefix : (lastExerciseName ?? 'Exercício');
+        lastExerciseName = exName;
+        final list = currentExercises.putIfAbsent(exName, () => <OpenGymSet>[]);
+        for (var i = 0; i < setCount; i++) {
+          list.add(OpenGymSet(weightKg: kg, reps: reps));
+        }
+        continue;
+      }
+
+      final mWeightReps = weightRepsRegex.allMatches(line).toList();
+      if (mWeightReps.isNotEmpty) {
+        final prefix = line
+            .substring(0, mWeightReps.first.start)
+            .replaceAll(RegExp(r'(?:set\s*\d+|s[eé]rie\s*\d+|[:\-–•])+$', caseSensitive: false), '')
+            .trim();
+        final exName = prefix.length >= 3 ? prefix : (lastExerciseName ?? 'Exercício');
+        lastExerciseName = exName;
+        final list = currentExercises.putIfAbsent(exName, () => <OpenGymSet>[]);
+        for (final m in mWeightReps) {
+          final kg = _toDouble(m.group(1));
+          final reps = int.tryParse(m.group(2)!) ?? 0;
+          if (kg > 0 || reps > 0) {
+            list.add(OpenGymSet(weightKg: kg, reps: reps));
+          }
+        }
+        continue;
+      }
+
+      final mSetsOnly = setsRepsOnlyRegex.firstMatch(line);
+      if (mSetsOnly != null) {
+        final setCount = int.tryParse(mSetsOnly.group(1)!)?.clamp(1, 20) ?? 1;
+        final reps = int.tryParse(mSetsOnly.group(2)!) ?? 0;
+        final prefix = line.substring(0, mSetsOnly.start).replaceAll(RegExp(r'[:\-–•]+$'), '').trim();
+        if (prefix.length >= 3) {
+          lastExerciseName = prefix;
+          final list = currentExercises.putIfAbsent(prefix, () => <OpenGymSet>[]);
+          for (var i = 0; i < setCount; i++) {
+            list.add(OpenGymSet(weightKg: 0, reps: reps));
+          }
+          continue;
+        }
+      }
+
+      // Possível nome de exercício em linha isolada (sem números pesados)
+      if (line.length >= 3 &&
+          line.length <= 56 &&
+          !RegExp(r'^\d+$').hasMatch(line) &&
+          !line.toLowerCase().startsWith('opengym') &&
+          !line.toLowerCase().startsWith('page ')) {
+        lastExerciseName = line;
+      }
+    }
+
+    flushWorkout();
+
+    return OpenGymSummary(
+      sourceName: sourceName,
+      workouts: workouts,
+      routines: const [],
+      personalRecords: _computePersonalRecords(workouts),
+      weightEntries: weights,
+      rawExtractedText: rawText.trim(),
+    );
   }
 
   /// Faz parse flexível de backups JSON (`opengym-state.json` / `state-*.json`).

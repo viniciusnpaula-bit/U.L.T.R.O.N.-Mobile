@@ -482,7 +482,7 @@ class SlashCommandParser {
           'command': '/opengym [importar|auto|resumo|abrir]',
           'aliases': '/open_gym, /gym, /treino_sync',
           'description':
-              'Importa backups JSON/CSV offline do app openGym para o Obsidian (Modo Treino) com PRs, volume e peso corporal.',
+              'Importa relatórios PDF ou backups JSON/CSV offline do app openGym para o Obsidian (Modo Treino) com PRs, volume e peso corporal.',
         },
         {
           'command': '/ilha [on|off|configurar|reset|status]',
