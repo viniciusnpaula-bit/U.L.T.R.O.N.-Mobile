@@ -29,6 +29,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
@@ -89,12 +90,12 @@ data class IslandPlacement(
     }
 
     fun zoneLabel(): String {
-        if (!customPosition) return "Topo (Câmera)"
+        if (!customPosition) return "Topo (Abaixo da barra)"
         val vertical = isEffectivelyVertical()
         return when {
             posX <= 0.16f && vertical -> "Esquerda (Em pé)"
             posX >= 0.84f && vertical -> "Direita (Em pé)"
-            posY <= 0.09f && abs(posX - 0.5f) <= 0.14f && !vertical -> "Topo (Câmera)"
+            posY <= 0.12f && abs(posX - 0.5f) <= 0.14f && !vertical -> "Topo (Abaixo da barra)"
             vertical -> "Livre (Em pé)"
             else -> "Livre (Horizontal)"
         }
@@ -385,7 +386,9 @@ class DynamicIslandService : Service() {
     private var currentWidthPx = 0
     private var currentHeightPx = 0
     private var currentCornerPx = 0f
-    private var cutoutTopPx = 0
+    private var statusBarBandPx = 0
+    private var safeTopPx = 0
+    private var safeBottomPx = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -455,18 +458,43 @@ class DynamicIslandService : Service() {
         return dm.widthPixels to dm.heightPixels
     }
 
-    private fun resolveCutoutTopPx(wm: WindowManager): Int {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+    /**
+     * Calcula a faixa superior protegida (barra de status + câmera frontal + hora + bateria)
+     * e a margem inferior (barra de navegação/gestos), garantindo que a Ilha Dinâmica
+     * NUNCA entre em conflito ou sobreponha elementos do sistema.
+     */
+    private fun refreshSafeVerticalBounds(wm: WindowManager? = windowManager) {
+        var topSystemPx = 0
+        var bottomSystemPx = 0
+
+        val statusResId = resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (statusResId > 0) {
+            topSystemPx = maxOf(topSystemPx, resources.getDimensionPixelSize(statusResId))
+        }
+        val navResId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        if (navResId > 0) {
+            bottomSystemPx = maxOf(bottomSystemPx, resources.getDimensionPixelSize(navResId))
+        }
+
+        if (wm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
-                val cutout = wm.currentWindowMetrics.windowInsets.displayCutout
-                val topRect: Rect? = cutout?.boundingRects?.minByOrNull { it.top }
-                if (topRect != null && topRect.height() > 0) {
-                    return (topRect.top - dpToPx(2f)).coerceAtLeast(dpToPx(4f))
-                }
+                val insets = wm.currentWindowMetrics.windowInsets
+                val statusTop = insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars()).top
+                val cutoutTop = insets.getInsetsIgnoringVisibility(WindowInsets.Type.displayCutout()).top
+                val cutoutBottom = insets.displayCutout?.boundingRects
+                    ?.filter { it.top <= statusTop + dpToPx(24f) }
+                    ?.maxOfOrNull { it.bottom }
+                    ?: 0
+                val navBottom = insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars()).bottom
+                topSystemPx = maxOf(topSystemPx, statusTop, cutoutTop, cutoutBottom)
+                bottomSystemPx = maxOf(bottomSystemPx, navBottom)
             } catch (_: Exception) {
             }
         }
-        return dpToPx(8f)
+
+        statusBarBandPx = topSystemPx.coerceAtLeast(dpToPx(34f))
+        safeTopPx = statusBarBandPx + dpToPx(8f)
+        safeBottomPx = bottomSystemPx.coerceAtLeast(dpToPx(16f)) + dpToPx(8f)
     }
 
     private fun overlayWindowType(): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -477,20 +505,21 @@ class DynamicIslandService : Service() {
     }
 
     private fun computeOriginForSize(w: Int, h: Int, targetPlacement: IslandPlacement = placement): Pair<Int, Int> {
+        refreshSafeVerticalBounds()
         val (screenW, screenH) = resolveScreenSize()
         val marginX = dpToPx(8f)
-        val marginY = dpToPx(6f)
+        val minTop = safeTopPx
+        val maxLeft = (screenW - w - marginX).coerceAtLeast(marginX)
+        val maxTop = (screenH - h - safeBottomPx).coerceAtLeast(minTop)
+
         if (!targetPlacement.customPosition) {
-            val cx = ((screenW - w) / 2f).roundToInt().coerceIn(marginX, (screenW - w - marginX).coerceAtLeast(marginX))
-            val cy = cutoutTopPx.coerceIn(marginY, (screenH - h - marginY).coerceAtLeast(marginY))
-            return cx to cy
+            val cx = ((screenW - w) / 2f).roundToInt().coerceIn(marginX, maxLeft)
+            return cx to minTop
         }
         val desiredCx = (targetPlacement.posX * screenW).roundToInt()
         val desiredCy = (targetPlacement.posY * screenH).roundToInt()
-        val maxLeft = (screenW - w - marginX).coerceAtLeast(marginX)
-        val maxTop = (screenH - h - marginY).coerceAtLeast(marginY)
         val left = (desiredCx - w / 2).coerceIn(marginX, maxLeft)
-        val top = (desiredCy - h / 2).coerceIn(marginY, maxTop)
+        val top = (desiredCy - h / 2).coerceIn(minTop, maxTop)
         return left to top
     }
 
@@ -500,7 +529,7 @@ class DynamicIslandService : Service() {
             return
         }
         windowManager = wm
-        cutoutTopPx = resolveCutoutTopPx(wm)
+        refreshSafeVerticalBounds(wm)
 
         val (targetW, targetH, targetCorner) = targetDimensions(expanded = false)
         currentWidthPx = targetW
@@ -513,8 +542,7 @@ class DynamicIslandService : Service() {
             targetH,
             overlayWindowType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -923,18 +951,20 @@ class DynamicIslandService : Service() {
         }
 
         private fun computePreviewRect(w: Float, h: Float) {
+            refreshSafeVerticalBounds()
             val (pw, ph) = previewDimensions()
             val padX = dpToPx(8f).toFloat()
-            val padY = dpToPx(6f).toFloat()
+            val minCy = safeTopPx + ph / 2f
+            val maxCy = (h - safeBottomPx - ph / 2f).coerceAtLeast(minCy)
             val cx = if (!draft.customPosition) {
                 w / 2f
             } else {
                 (draft.posX * w).coerceIn(padX + pw / 2f, (w - padX - pw / 2f).coerceAtLeast(padX + pw / 2f))
             }
             val cy = if (!draft.customPosition) {
-                (cutoutTopPx + ph / 2f).coerceIn(padY + ph / 2f, h - padY - ph / 2f)
+                minCy
             } else {
-                (draft.posY * h).coerceIn(padY + ph / 2f, (h - padY - ph / 2f).coerceAtLeast(padY + ph / 2f))
+                (draft.posY * h).coerceIn(minCy, maxCy)
             }
             islandPreviewRect.set(cx - pw / 2f, cy - ph / 2f, cx + pw / 2f, cy + ph / 2f)
         }
@@ -944,23 +974,40 @@ class DynamicIslandService : Service() {
             val w = width.toFloat()
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
+            refreshSafeVerticalBounds()
 
             // 1. Fundo escurecido
             canvas.drawRect(0f, 0f, w, h, scrimPaint)
 
-            // 2. Guias de alinhamento
-            canvas.drawLine(w / 2f, dpToPx(24f).toFloat(), w / 2f, h - dpToPx(240f).toFloat(), guidePaint)
-            canvas.drawLine(dpToPx(18f).toFloat(), h * 0.42f, w - dpToPx(18f).toFloat(), h * 0.42f, guidePaint)
+            // 1B. Faixa superior protegida (barra de status, câmera, hora, notificações e bateria)
+            val protectedRect = RectF(0f, 0f, w, statusBarBandPx.toFloat())
+            zoneFillPaint.color = Color.argb(120, 42, 16, 20)
+            canvas.drawRect(protectedRect, zoneFillPaint)
+            zoneBoxPaint.color = Color.argb(135, 241, 13, 40)
+            canvas.drawLine(0f, statusBarBandPx.toFloat(), w, statusBarBandPx.toFloat(), zoneBoxPaint)
+            zoneTextPaint.color = Color.argb(190, 245, 200, 206)
+            val protTy = (statusBarBandPx * 0.62f) - (zoneTextPaint.descent() + zoneTextPaint.ascent()) / 2f
+            canvas.drawText("ÁREA PROTEGIDA · CÂMERA · HORA · BATERIA", w / 2f, protTy, zoneTextPaint)
+
+            // 2. Guias de alinhamento (sempre abaixo da barra de status)
+            canvas.drawLine(w / 2f, safeTopPx.toFloat(), w / 2f, h - dpToPx(240f).toFloat(), guidePaint)
+            canvas.drawLine(dpToPx(18f).toFloat(), h * 0.44f, w - dpToPx(18f).toFloat(), h * 0.44f, guidePaint)
 
             val tint = accentColorArgb
             val activeZone = draft.zoneLabel()
 
-            // 3. Zonas magnéticas sugeridas (Topo, Esquerda em pé, Direita em pé)
-            val topZone = RectF(w / 2f - dpToPx(96f), dpToPx(6f).toFloat(), w / 2f + dpToPx(96f), dpToPx(56f).toFloat())
-            val leftZone = RectF(dpToPx(6f).toFloat(), h * 0.24f, dpToPx(60f).toFloat(), h * 0.56f)
-            val rightZone = RectF(w - dpToPx(60f).toFloat(), h * 0.24f, w - dpToPx(6f).toFloat(), h * 0.56f)
+            // 3. Zonas magnéticas sugeridas (sempre abaixo de safeTopPx)
+            val topZone = RectF(
+                w / 2f - dpToPx(96f),
+                safeTopPx.toFloat(),
+                w / 2f + dpToPx(96f),
+                safeTopPx + dpToPx(46f).toFloat(),
+            )
+            val sideTop = maxOf(h * 0.24f, safeTopPx + dpToPx(20f).toFloat())
+            val leftZone = RectF(dpToPx(6f).toFloat(), sideTop, dpToPx(60f).toFloat(), h * 0.58f)
+            val rightZone = RectF(w - dpToPx(60f).toFloat(), sideTop, w - dpToPx(6f).toFloat(), h * 0.58f)
 
-            drawDropZone(canvas, topZone, "TOPO", activeZone == "Topo (Câmera)", tint)
+            drawDropZone(canvas, topZone, "TOPO", activeZone == "Topo (Abaixo da barra)", tint)
             drawDropZone(canvas, leftZone, "ESQ", activeZone == "Esquerda (Em pé)", tint)
             drawDropZone(canvas, rightZone, "DIR", activeZone == "Direita (Em pé)", tint)
 
@@ -1168,14 +1215,21 @@ class DynamicIslandService : Service() {
         }
 
         private fun updateDraftPosition(px: Float, py: Float, w: Float, h: Float) {
+            refreshSafeVerticalBounds()
+            val (_, ph) = previewDimensions()
+            val minCyPx = safeTopPx + ph / 2f
+            val maxCyPx = (dockRect.top - dpToPx(16f) - ph / 2f).coerceAtLeast(minCyPx)
+            val clampedPy = py.coerceIn(minCyPx, maxCyPx)
+
             var nx = (px / w).coerceIn(0.03f, 0.97f)
-            var ny = (py / h).coerceIn(0.02f, 0.78f)
+            var ny = (clampedPy / h).coerceIn((minCyPx / h).coerceIn(0.05f, 0.25f), 0.78f)
             var custom = true
 
-            // Encaixe magnético suave nas zonas principais
-            if (ny <= 0.08f && abs(nx - 0.5f) <= 0.11f && draft.orientation != IslandOrientation.VERTICAL) {
+            // Encaixe magnético suave nas zonas principais (sempre abaixo da barra de status)
+            val nearSafeTop = clampedPy <= (minCyPx + dpToPx(24f))
+            if (nearSafeTop && abs(nx - 0.5f) <= 0.13f && draft.orientation != IslandOrientation.VERTICAL) {
                 nx = 0.5f
-                ny = 0.04f
+                ny = (minCyPx / h).coerceIn(0.05f, 0.25f)
                 custom = false
             } else if (nx <= 0.11f) {
                 nx = 0.06f
