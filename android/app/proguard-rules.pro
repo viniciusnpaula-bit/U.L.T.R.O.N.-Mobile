@@ -14,8 +14,11 @@
     native <methods>;
 }
 
-# Preserve PDFBox-Android text extraction in R8 release builds (optional BouncyCastle encryption classes).
+# Preserve PDFBox-Android text extraction in R8 release builds (optional image/encryption/desktop classes).
 -dontwarn org.bouncycastle.**
 -dontwarn org.apache.commons.logging.**
+-dontwarn com.gemalto.jp2.**
+-dontwarn java.awt.**
+-dontwarn javax.imageio.**
 -keep class com.tom_roush.pdfbox.** { *; }
 -keep class com.tom_roush.fontbox.** { *; }
