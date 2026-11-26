@@ -13,3 +13,9 @@
 -keepclasseswithmembernames,includedescriptorclasses class net.zetetic.** {
     native <methods>;
 }
+
+# Preserve PDFBox-Android text extraction in R8 release builds (optional BouncyCastle encryption classes).
+-dontwarn org.bouncycastle.**
+-dontwarn org.apache.commons.logging.**
+-keep class com.tom_roush.pdfbox.** { *; }
+-keep class com.tom_roush.fontbox.** { *; }

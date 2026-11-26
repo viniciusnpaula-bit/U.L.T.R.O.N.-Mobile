@@ -172,7 +172,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   SessionTelemetry sessionTelemetry = SessionTelemetry.initial();
   TacticalMode activeTacticalMode = TacticalMode.geral;
   bool pcLanConfigured = false;
-  String installedVersion = 'v1.6.7';
+  String installedVersion = 'v1.6.8';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;

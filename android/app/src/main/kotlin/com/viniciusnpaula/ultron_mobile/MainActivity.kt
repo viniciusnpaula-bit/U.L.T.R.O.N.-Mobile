@@ -50,6 +50,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.google.zxing.integration.android.IntentIntegrator
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
@@ -1374,6 +1377,34 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                     return
                 }
                 result.success(convertImageFileOnDisk(sourcePath, destPath, format))
+            }
+            "extractPdfTextNative" -> {
+                val path = (call.argument<String>("path") ?: "").trim()
+                if (path.isEmpty()) {
+                    result.success("")
+                    return
+                }
+                Thread {
+                    val extracted = try {
+                        PDFBoxResourceLoader.init(applicationContext)
+                        val file = File(path)
+                        if (!file.exists()) {
+                            ""
+                        } else {
+                            PDDocument.load(file).use { doc ->
+                                val stripper = PDFTextStripper().apply {
+                                    sortByPosition = true
+                                }
+                                stripper.getText(doc) ?: ""
+                            }
+                        }
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    runOnUiThread {
+                        result.success(extracted)
+                    }
+                }.start()
             }
             else -> result.notImplemented()
         }

@@ -229,17 +229,32 @@ class OpenGymSummary {
 
   String formatChatSummary() {
     if (isEmpty) {
-      return 'Nenhum treino, rotina ou peso encontrado em "$sourceName". '
-          'Exporte o relatório em PDF ou backup JSON/CSV no app openGym e importe novamente.';
+      return 'Nenhum treino, rotina ou texto legível foi encontrado em "$sourceName". '
+          'Se o PDF foi gerado como imagem (scan), exporte também o backup JSON/CSV no openGym e importe novamente.';
     }
     final sb = StringBuffer()
-      ..writeln('openGym sincronizado ($sourceName):')
-      ..writeln('• Treinos: ${workouts.length} · Rotinas: ${routines.length} · Pesagens: ${weightEntries.length}');
+      ..writeln('openGym sincronizado ($sourceName):');
+    if (workouts.isNotEmpty || routines.isNotEmpty || weightEntries.isNotEmpty) {
+      sb.writeln(
+        '• Treinos: ${workouts.length} · Rotinas: ${routines.length} · Pesagens: ${weightEntries.length}',
+      );
+    }
 
     if (weightEntries.isNotEmpty) {
       final sortedW = [...weightEntries]..sort((a, b) => a.date.compareTo(b.date));
       final latest = sortedW.last;
       sb.writeln('• Peso atual: ${latest.weightKg.toStringAsFixed(1)} kg (${_fmtDate(latest.date)})');
+    }
+
+    if (routines.isNotEmpty) {
+      sb.writeln('• Rotinas identificadas:');
+      for (final r in routines.take(6)) {
+        final preview = r.exercises.isEmpty
+            ? 'sem exercícios listados'
+            : r.exercises.take(5).join(', ') +
+                (r.exercises.length > 5 ? ' (+${r.exercises.length - 5})' : '');
+        sb.writeln('  - ${r.name}: $preview');
+      }
     }
 
     if (workouts.isNotEmpty) {
@@ -260,6 +275,22 @@ class OpenGymSummary {
       }
     }
 
+    if (workouts.isEmpty &&
+        routines.isEmpty &&
+        weightEntries.isEmpty &&
+        rawExtractedText.trim().isNotEmpty) {
+      final lines = const LineSplitter()
+          .convert(rawExtractedText)
+          .map((l) => l.trim())
+          .where((l) => l.isNotEmpty)
+          .take(8)
+          .toList();
+      sb.writeln('• Texto extraído do PDF:');
+      for (final l in lines) {
+        sb.writeln('  $l');
+      }
+    }
+
     if (savedNotePath != null) {
       sb.writeln('• Memória do Modo Treino atualizada em `$savedNotePath`.');
     }
@@ -268,24 +299,37 @@ class OpenGymSummary {
 
   String get speakText {
     if (isEmpty) {
-      return 'Não encontrei registros de treino nesse arquivo do OpenGym.';
+      return 'Não encontrei registros de treino legíveis nesse arquivo do OpenGym.';
     }
-    final parts = <String>[
-      'OpenGym sincronizado com ${workouts.length} treinos',
-    ];
-    if (personalRecords.isNotEmpty) {
-      final top = personalRecords.first;
-      parts.add(
-        'maior carga registrada em ${top.exerciseName} com ${_fmtKg(top.maxWeightKg)} quilos',
-      );
+    if (workouts.isNotEmpty) {
+      final parts = <String>[
+        'OpenGym sincronizado com ${workouts.length} treinos',
+      ];
+      if (personalRecords.isNotEmpty) {
+        final top = personalRecords.first;
+        parts.add(
+          'maior carga registrada em ${top.exerciseName} com ${_fmtKg(top.maxWeightKg)} quilos',
+        );
+      }
+      if (weightEntries.isNotEmpty) {
+        final sortedW = [...weightEntries]
+          ..sort((a, b) => a.date.compareTo(b.date));
+        parts.add(
+          'peso corporal atual em ${sortedW.last.weightKg.toStringAsFixed(1)} quilos',
+        );
+      }
+      return '${parts.join(', ')}.';
+    }
+    if (routines.isNotEmpty) {
+      final exTotal =
+          routines.fold<int>(0, (acc, r) => acc + r.exercises.length);
+      return 'OpenGym sincronizado com ${routines.length} rotinas e $exTotal exercícios salvos no Modo Treino.';
     }
     if (weightEntries.isNotEmpty) {
       final sortedW = [...weightEntries]..sort((a, b) => a.date.compareTo(b.date));
-      parts.add(
-        'peso corporal atual em ${sortedW.last.weightKg.toStringAsFixed(1)} quilos',
-      );
+      return 'OpenGym sincronizado com peso corporal atual em ${sortedW.last.weightKg.toStringAsFixed(1)} quilos.';
     }
-    return '${parts.join(', ')}.';
+    return 'Relatório do OpenGym lido e salvo na memória do Modo Treino.';
   }
 
   static String _fmtDate(DateTime dt) {
@@ -391,7 +435,19 @@ class OpenGymService {
 
     final OpenGymSummary summary;
     if (name.toLowerCase().endsWith('.pdf') || isPdfHeader) {
-      summary = parsePdfExport(bytes, sourceName: name);
+      String nativeText = '';
+      try {
+        final rawNative = await _channel.invokeMethod<String>(
+          'extractPdfTextNative',
+          <String, Object?>{'path': file.path},
+        );
+        if (rawNative != null && rawNative.trim().isNotEmpty) {
+          nativeText = rawNative.trim();
+        }
+      } catch (_) {}
+      summary = nativeText.isNotEmpty
+          ? parsePdfReportText(nativeText, sourceName: name)
+          : parsePdfExport(bytes, sourceName: name);
     } else {
       final raw = utf8.decode(bytes, allowMalformed: true);
       final trimmed = raw.trimLeft();
@@ -457,7 +513,11 @@ class OpenGymService {
           text.contains('beginbfrange')) {
         _parseToUnicodeCMap(text, cmap);
       }
-      if (text.contains('BT') && (text.contains('Tj') || text.contains('TJ'))) {
+      if (text.contains('BT') &&
+          (text.contains('Tj') ||
+              text.contains('TJ') ||
+              text.contains("'") ||
+              text.contains('"'))) {
         decodedStreams.add(text);
       }
     }
@@ -465,7 +525,10 @@ class OpenGymService {
     // Fallback para PDFs sem stream comprimido explícito
     if (decodedStreams.isEmpty &&
         latin.contains('BT') &&
-        (latin.contains('Tj') || latin.contains('TJ'))) {
+        (latin.contains('Tj') ||
+            latin.contains('TJ') ||
+            latin.contains("'") ||
+            latin.contains('"'))) {
       decodedStreams.add(latin);
     }
 
@@ -476,7 +539,7 @@ class OpenGymService {
         final body = block.group(1) ?? '';
         final lineBuf = StringBuffer();
         final opRegex = RegExp(
-          r'\[([\s\S]*?)\]\s*TJ|\(([^()\\]*(?:\\.[^()\\]*)*)\)\s*Tj|<([0-9A-Fa-f\s]+)>\s*Tj|(?:T\*|\b(?:Td|TD|Tm)\b)',
+          r'\[([\s\S]*?)\]\s*TJ|\(([^()\\]*(?:\\.[^()\\]*)*)\)\s*(?:Tj|[\x27\x22])|<([0-9A-Fa-f\s]+)>\s*Tj|(?:T\*|\b(?:Td|TD|Tm)\b)',
         );
         for (final op in opRegex.allMatches(body)) {
           final tjArray = op.group(1);
@@ -491,7 +554,7 @@ class OpenGymService {
               final h = item.group(2);
               final numKern = item.group(3);
               if (s != null) {
-                lineBuf.write(_unescapePdfLiteral(s));
+                lineBuf.write(_decodePdfLiteral(s, cmap));
               } else if (h != null) {
                 lineBuf.write(_decodePdfHex(h, cmap));
               } else if (numKern != null) {
@@ -502,7 +565,7 @@ class OpenGymService {
               }
             }
           } else if (litStr != null) {
-            lineBuf.write(_unescapePdfLiteral(litStr));
+            lineBuf.write(_decodePdfLiteral(litStr, cmap));
           } else if (hexStr != null) {
             lineBuf.write(_decodePdfHex(hexStr, cmap));
           } else {
@@ -544,9 +607,31 @@ class OpenGymService {
     final bfRangeBlocks =
         RegExp(r'beginbfrange([\s\S]*?)endbfrange').allMatches(cmapText);
     for (final block in bfRangeBlocks) {
+      final body = block.group(1) ?? '';
+      // Formato array: <start> <end> [<u1> <u2> ...]
+      final arrayRanges =
+          RegExp(r'<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*\[([\s\S]*?)\]')
+              .allMatches(body);
+      for (final r in arrayRanges) {
+        final start = int.tryParse(r.group(1)!, radix: 16);
+        final end = int.tryParse(r.group(2)!, radix: 16);
+        if (start == null || end == null) continue;
+        final targets = RegExp(r'<([0-9A-Fa-f]+)>')
+            .allMatches(r.group(3) ?? '')
+            .map((m) => _hexToUnicodeString(m.group(1)!))
+            .toList();
+        final limit = (end - start + 1).clamp(0, targets.length);
+        for (var i = 0; i < limit; i++) {
+          if (targets[i].isNotEmpty) {
+            out[start + i] = targets[i];
+          }
+        }
+      }
+
+      // Formato sequencial: <start> <end> <dstStart>
       final ranges =
           RegExp(r'<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>')
-              .allMatches(block.group(1) ?? '');
+              .allMatches(body);
       for (final r in ranges) {
         final start = int.tryParse(r.group(1)!, radix: 16);
         final end = int.tryParse(r.group(2)!, radix: 16);
@@ -558,6 +643,40 @@ class OpenGymService {
         }
       }
     }
+  }
+
+  static String _decodePdfLiteral(String rawLit, Map<int, String> cmap) {
+    final decoded = _unescapePdfLiteral(rawLit);
+    if (decoded.length >= 2 && decoded.codeUnits.every((c) => c <= 0xFF)) {
+      if (decoded.codeUnitAt(0) == 0xFE && decoded.codeUnitAt(1) == 0xFF) {
+        final buf = StringBuffer();
+        for (var i = 2; i + 1 < decoded.length; i += 2) {
+          buf.writeCharCode(
+            (decoded.codeUnitAt(i) << 8) | decoded.codeUnitAt(i + 1),
+          );
+        }
+        return buf.toString();
+      }
+      if (cmap.isNotEmpty && decoded.length.isEven) {
+        final buf = StringBuffer();
+        var hits = 0;
+        for (var i = 0; i + 1 < decoded.length; i += 2) {
+          final code =
+              (decoded.codeUnitAt(i) << 8) | decoded.codeUnitAt(i + 1);
+          final mapped = cmap[code];
+          if (mapped != null) {
+            buf.write(mapped);
+            hits++;
+          } else if (code >= 32 && code <= 126) {
+            buf.writeCharCode(code);
+          }
+        }
+        if (hits > 0 && hits * 2 >= decoded.length ~/ 2) {
+          return buf.toString();
+        }
+      }
+    }
+    return decoded;
   }
 
   static String _hexToUnicodeString(String hex) {
@@ -646,8 +765,8 @@ class OpenGymService {
     return buf.toString();
   }
 
-  /// Interpreta o texto extraído de um relatório PDF do openGym em treinos,
-  /// séries, PRs, rotinas e registros de peso corporal.
+  /// Interpreta o texto extraído de um relatório ou plano semanal PDF do openGym
+  /// em treinos, séries, PRs, rotinas semanais e registros de peso corporal.
   static OpenGymSummary parsePdfReportText(
     String rawText, {
     String sourceName = 'opengym-report.pdf',
@@ -659,11 +778,14 @@ class OpenGymService {
         .toList();
 
     final workouts = <OpenGymWorkout>[];
+    final routines = <OpenGymRoutine>[];
     final weights = <OpenGymWeightEntry>[];
 
     var currentDate = DateTime.now();
     var currentWorkoutName = 'Relatório openGym';
     final currentExercises = <String, List<OpenGymSet>>{};
+    String? activeRoutineName;
+    final activeRoutineExercises = <String>[];
     String? lastExerciseName;
 
     void flushWorkout() {
@@ -682,24 +804,57 @@ class OpenGymService {
       lastExerciseName = null;
     }
 
+    void flushRoutine() {
+      if (activeRoutineName != null && activeRoutineExercises.isNotEmpty) {
+        routines.add(
+          OpenGymRoutine(
+            name: activeRoutineName!,
+            exercises: List<String>.from(activeRoutineExercises),
+          ),
+        );
+      }
+      activeRoutineName = null;
+      activeRoutineExercises.clear();
+    }
+
+    void recordRoutineExercise(String name) {
+      if (activeRoutineName == null) return;
+      final clean = name.trim();
+      if (clean.length < 3) return;
+      if (!activeRoutineExercises.contains(clean)) {
+        activeRoutineExercises.add(clean);
+      }
+    }
+
     final dateLineRegex = RegExp(
       r'\b(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})\b',
     );
-    final bodyWeightRegex = RegExp(
-      r'(?:body\s*weight|peso\s*(?:corporal)?)\s*[:\-]?\s*(\d{2,3}(?:[.,]\d{1,2})?)\s*kg',
+    final routineHeaderRegex = RegExp(
+      r'^(?:treino\s+[a-z0-9]+(?:\s*[-–:|·].*)?|treino\s+de\s+.+|rotina\s*[:\-–]?\s*.+|workout\s+[a-z0-9]+(?:\s*[-–:|·].*)?|dia\s+\d+(?:\s*[-–:|·].*)?|day\s+\d+(?:\s*[-–:|·].*)?|(?:segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo)(?:-feira)?(?:\s*[-–:|·].*)?|(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s*[-–:|·].*)?|(?:push|pull|legs|upper|lower|full\s*body)(?:\s+[a-z0-9]|\s*[-–:|·].*)?)$',
       caseSensitive: false,
     );
-    // Ex: "Supino Reto 80 kg x 10" ou "80kg x 10" ou "4 x 10 @ 80 kg"
+    final bodyWeightRegex = RegExp(
+      r'(?:body\s*weight|peso\s*(?:corporal)?)\s*[:\-]?\s*(\d{2,3}(?:[.,]\d{1,2})?)\s*(?:kg|lbs?)',
+      caseSensitive: false,
+    );
+    // Ex: "Supino Reto 80 kg x 10" ou "80kg x 10"
     final weightRepsRegex = RegExp(
       r'(\d+(?:[.,]\d+)?)\s*(?:kg|lbs?)\s*[x×]\s*(\d{1,3})\b',
       caseSensitive: false,
     );
-    final setsRepsAtWeightRegex = RegExp(
-      r'(\d{1,2})\s*[x×]\s*(\d{1,3})(?:\s*(?:reps?)?)?\s*(?:@|com|[-–])\s*(\d+(?:[.,]\d+)?)\s*(?:kg|lbs?)',
+    // Ex: "10 reps @ 80 kg" / "80 kg · 10 reps" / "80 kg (10)"
+    final altWeightRepsRegex = RegExp(
+      r'(?:(\d{1,3})\s*(?:reps?|repeti[çc][õo]es)\s*(?:@|a|com)\s*(\d+(?:[.,]\d+)?)\s*(?:kg|lbs?)|(\d+(?:[.,]\d+)?)\s*(?:kg|lbs?)\s*(?:[·•|/\-]|\()\s*(\d{1,3})\s*(?:reps?)?\)?)',
       caseSensitive: false,
     );
+    // Ex: "4 x 10 @ 80 kg" ou "4 x 8-12 - 80 kg"
+    final setsRepsAtWeightRegex = RegExp(
+      r'(\d{1,2})\s*[x×]\s*(\d{1,3})(?:\s*[-–]\s*\d{1,3})?(?:\s*(?:reps?)?)?\s*(?:@|com|[-–·|])\s*(\d+(?:[.,]\d+)?)\s*(?:kg|lbs?)',
+      caseSensitive: false,
+    );
+    // Ex: "3 x 8-12", "4x10", "3 séries de 10", "3 sets x 10-12 reps"
     final setsRepsOnlyRegex = RegExp(
-      r'\b(\d{1,2})\s*(?:sets?|s[eé]ries?)?\s*[x×]\s*(\d{1,3})\s*(?:reps?)?\b',
+      r'\b(\d{1,2})\s*(?:sets?|s[eé]ries?)?\s*(?:[x×]|de)\s*(\d{1,3})(?:\s*[-–]\s*\d{1,3})?\s*(?:reps?|repeti[çc][õo]es)?\b',
       caseSensitive: false,
     );
 
@@ -730,14 +885,31 @@ class OpenGymService {
         }
       }
 
+      // Cabeçalho de rotina/split semanal (sem séries/cargas na própria linha)
+      if (!weightRepsRegex.hasMatch(line) &&
+          !setsRepsOnlyRegex.hasMatch(line) &&
+          !altWeightRepsRegex.hasMatch(line) &&
+          line.length <= 70 &&
+          routineHeaderRegex.hasMatch(line)) {
+        flushRoutine();
+        activeRoutineName = line;
+        currentWorkoutName = line;
+        lastExerciseName = null;
+        continue;
+      }
+
       final mSetsAt = setsRepsAtWeightRegex.firstMatch(line);
       if (mSetsAt != null) {
         final setCount = int.tryParse(mSetsAt.group(1)!)?.clamp(1, 20) ?? 1;
         final reps = int.tryParse(mSetsAt.group(2)!) ?? 0;
         final kg = _toDouble(mSetsAt.group(3));
-        final prefix = line.substring(0, mSetsAt.start).replaceAll(RegExp(r'[:\-–•]+$'), '').trim();
+        final prefix = line
+            .substring(0, mSetsAt.start)
+            .replaceAll(RegExp(r'[\s:\-–•|·]+$'), '')
+            .trim();
         final exName = prefix.length >= 3 ? prefix : (lastExerciseName ?? 'Exercício');
         lastExerciseName = exName;
+        recordRoutineExercise(exName);
         final list = currentExercises.putIfAbsent(exName, () => <OpenGymSet>[]);
         for (var i = 0; i < setCount; i++) {
           list.add(OpenGymSet(weightKg: kg, reps: reps));
@@ -749,10 +921,14 @@ class OpenGymService {
       if (mWeightReps.isNotEmpty) {
         final prefix = line
             .substring(0, mWeightReps.first.start)
-            .replaceAll(RegExp(r'(?:set\s*\d+|s[eé]rie\s*\d+|[:\-–•])+$', caseSensitive: false), '')
+            .replaceAll(
+              RegExp(r'(?:set\s*\d+|s[eé]rie\s*\d+|[\s:\-–•|·])+$', caseSensitive: false),
+              '',
+            )
             .trim();
         final exName = prefix.length >= 3 ? prefix : (lastExerciseName ?? 'Exercício');
         lastExerciseName = exName;
+        recordRoutineExercise(exName);
         final list = currentExercises.putIfAbsent(exName, () => <OpenGymSet>[]);
         for (final m in mWeightReps) {
           final kg = _toDouble(m.group(1));
@@ -764,14 +940,41 @@ class OpenGymService {
         continue;
       }
 
+      final mAlt = altWeightRepsRegex.allMatches(line).toList();
+      if (mAlt.isNotEmpty) {
+        final prefix = line
+            .substring(0, mAlt.first.start)
+            .replaceAll(RegExp(r'[\s:\-–•|·]+$'), '')
+            .trim();
+        final exName = prefix.length >= 3 ? prefix : (lastExerciseName ?? 'Exercício');
+        lastExerciseName = exName;
+        recordRoutineExercise(exName);
+        final list = currentExercises.putIfAbsent(exName, () => <OpenGymSet>[]);
+        for (final m in mAlt) {
+          final kg = m.group(2) != null ? _toDouble(m.group(2)) : _toDouble(m.group(3));
+          final reps = m.group(1) != null
+              ? (int.tryParse(m.group(1)!) ?? 0)
+              : (int.tryParse(m.group(4)!) ?? 0);
+          if (kg > 0 || reps > 0) {
+            list.add(OpenGymSet(weightKg: kg, reps: reps));
+          }
+        }
+        continue;
+      }
+
       final mSetsOnly = setsRepsOnlyRegex.firstMatch(line);
       if (mSetsOnly != null) {
         final setCount = int.tryParse(mSetsOnly.group(1)!)?.clamp(1, 20) ?? 1;
         final reps = int.tryParse(mSetsOnly.group(2)!) ?? 0;
-        final prefix = line.substring(0, mSetsOnly.start).replaceAll(RegExp(r'[:\-–•]+$'), '').trim();
-        if (prefix.length >= 3) {
-          lastExerciseName = prefix;
-          final list = currentExercises.putIfAbsent(prefix, () => <OpenGymSet>[]);
+        final prefix = line
+            .substring(0, mSetsOnly.start)
+            .replaceAll(RegExp(r'[\s:\-–•|·]+$'), '')
+            .trim();
+        final exName = prefix.length >= 3 ? prefix : (lastExerciseName ?? '');
+        if (exName.length >= 3) {
+          lastExerciseName = exName;
+          recordRoutineExercise(exName);
+          final list = currentExercises.putIfAbsent(exName, () => <OpenGymSet>[]);
           for (var i = 0; i < setCount; i++) {
             list.add(OpenGymSet(weightKg: 0, reps: reps));
           }
@@ -779,22 +982,32 @@ class OpenGymService {
         }
       }
 
-      // Possível nome de exercício em linha isolada (sem números pesados)
+      // Possível nome de exercício em linha isolada (sem números puros ou rodapé)
       if (line.length >= 3 &&
           line.length <= 56 &&
           !RegExp(r'^\d+$').hasMatch(line) &&
           !line.toLowerCase().startsWith('opengym') &&
-          !line.toLowerCase().startsWith('page ')) {
+          !line.toLowerCase().startsWith('page ') &&
+          !line.toLowerCase().startsWith('página ')) {
         lastExerciseName = line;
+        recordRoutineExercise(line);
       }
     }
 
-    flushWorkout();
+    flushRoutine();
+    // Se só temos um plano/rotina semanal (sem datas nem cargas registradas em kg),
+    // priorizamos `routines` sem inflar `workouts` com cargas 0kg.
+    final hasAnyWeight = currentExercises.values.any(
+      (sets) => sets.any((s) => s.weightKg > 0),
+    );
+    if (routines.isEmpty || workouts.isNotEmpty || hasAnyWeight) {
+      flushWorkout();
+    }
 
     return OpenGymSummary(
       sourceName: sourceName,
       workouts: workouts,
-      routines: const [],
+      routines: routines,
       personalRecords: _computePersonalRecords(workouts),
       weightEntries: weights,
       rawExtractedText: rawText.trim(),

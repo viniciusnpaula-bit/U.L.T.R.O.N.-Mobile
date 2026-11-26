@@ -234,6 +234,105 @@ void main() {
       expect(note, contains('79.6 kg'));
       expect(note, contains('Relatório Extraído (PDF)'));
     });
+
+    test('parses weekly routine PDF with multiline exercises and rep ranges', () {
+      const planText = '''
+Treino A - Peito e Tríceps
+Supino Inclinado com Halteres
+3 x 8-12
+Crucifixo Máquina
+4 x 10-12
+Tríceps Pulley Corda - 3x12-15
+
+Treino B - Costas e Bíceps
+Puxada Frente Aberta 4 x 8-10
+Remada Baixa 3 séries de 12 reps
+''';
+      final summary = OpenGymService.parsePdfReportText(
+        planText,
+        sourceName: 'plano_opengym.pdf',
+      );
+      expect(summary.isEmpty, isFalse);
+      expect(summary.routines.length, 2);
+      expect(summary.routines[0].name, 'Treino A - Peito e Tríceps');
+      expect(
+        summary.routines[0].exercises,
+        containsAll([
+          'Supino Inclinado com Halteres',
+          'Crucifixo Máquina',
+          'Tríceps Pulley Corda',
+        ]),
+      );
+      expect(summary.routines[1].name, 'Treino B - Costas e Bíceps');
+      expect(summary.speakText, isNot(contains('0 treinos')));
+      expect(summary.speakText, contains('2 rotinas'));
+      expect(summary.formatChatSummary(), contains('Rotinas identificadas'));
+    });
+
+    test('extractTextFromPdfBytes decodes beginbfrange array CMaps and importFile uses native extractor',
+        () async {
+      const cmapAndContent = '''
+/CIDInit /ProcSet findresource begin
+begincmap
+1 beginbfrange
+<0001> <0006> [<0053> <0075> <0070> <0069> <006E> <006F>]
+endbfrange
+endcmap
+BT
+/F1 12 Tf
+<000100020003000400050006> Tj
+T*
+(80 kg x 10) Tj
+ET
+''';
+      final compressed = zlib.encode(latin1.encode(cmapAndContent));
+      final pdfBuilder = BytesBuilder()
+        ..add(latin1.encode(
+            '%PDF-1.4\n1 0 obj\n<< /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n'))
+        ..add(compressed)
+        ..add(latin1.encode('\nendstream\nendobj\n%%EOF\n'));
+      final extracted =
+          OpenGymService.extractTextFromPdfBytes(pdfBuilder.toBytes());
+      expect(extracted, contains('Supino'));
+      expect(extracted, contains('80 kg x 10'));
+
+      // Testa fluxo com extrator nativo Android PDFBox via MethodChannel
+      const channel = MethodChannel('com.viniciusnpaula.ultron_mobile/device');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'extractPdfTextNative') {
+          return '2026-11-26 - Pernas Foco Quadríceps\nAgachamento Búlgaro 24 kg x 12\n';
+        }
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null);
+      });
+
+      final tempDir =
+          await Directory.systemTemp.createTemp('ultron_opengym_native_pdf_');
+      addTearDown(() async {
+        if (await tempDir.exists()) await tempDir.delete(recursive: true);
+      });
+      final dummyPdf = File(p.join(tempDir.path, 'relatorio_android.pdf'));
+      await dummyPdf.writeAsBytes(latin1.encode('%PDF-1.5\n%%EOF'));
+      final vault = ObsidianService(Directory(p.join(tempDir.path, 'vault')));
+      await vault.initialize();
+
+      final nativeSummary = await OpenGymService().importFile(
+        dummyPdf,
+        obsidian: vault,
+      );
+      expect(nativeSummary.isEmpty, isFalse);
+      expect(nativeSummary.workouts.length, 1);
+      expect(nativeSummary.workouts.first.name, 'Pernas Foco Quadríceps');
+      expect(
+        nativeSummary.personalRecords.first.exerciseName,
+        'Agachamento Búlgaro',
+      );
+      expect(nativeSummary.personalRecords.first.maxWeightKg, 24);
+    });
   });
 
   group('Slash commands & Dynamic Island MethodChannel', () {
