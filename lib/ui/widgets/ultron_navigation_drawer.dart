@@ -94,7 +94,7 @@ class UltronNavigationContent extends StatelessWidget {
                                 shape: BoxShape.circle,
                                 color: hasBiometricAccess
                                     ? UltronColors.positive
-                                    : UltronColors.crimson,
+                                    : UltronColors.warning,
                               ),
                             ),
                             const SizedBox(width: 6),
@@ -257,8 +257,8 @@ class _NavItem extends StatelessWidget {
                 Container(
                   width: 7,
                   height: 7,
-                  decoration: const BoxDecoration(
-                    color: UltronColors.crimson,
+                  decoration: BoxDecoration(
+                    color: UltronTheme.accentOf(context),
                     shape: BoxShape.circle,
                   ),
                 ),

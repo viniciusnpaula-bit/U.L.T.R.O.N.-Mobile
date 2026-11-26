@@ -13,6 +13,7 @@ class _FakeFishService extends FishAudioTtsService {
   Future<Uint8List> synthesize(
     String text, {
     FishAudioConfig? overrideConfig,
+    String? profileId,
   }) async {
     synthesizedTexts.add(text);
     return Uint8List.fromList([1, 2, 3]);

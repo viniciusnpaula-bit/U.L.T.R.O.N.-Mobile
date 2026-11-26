@@ -15,8 +15,6 @@ class BootLoadingScreen extends StatefulWidget {
 }
 
 class _BootLoadingScreenState extends State<BootLoadingScreen> {
-  static const _crimson = UltronColors.crimson;
-
   @override
   void initState() {
     super.initState();
@@ -60,7 +58,7 @@ class _BootLoadingScreenState extends State<BootLoadingScreen> {
                     LinearProgressIndicator(
                       value: coordinator.progress,
                       backgroundColor: UltronColors.surfaceElevated,
-                      color: _crimson,
+                      color: UltronTheme.accentOf(context),
                     ),
                     const SizedBox(height: 14),
                     Text(
@@ -148,7 +146,7 @@ class _StageRow extends StatelessWidget {
                 ? Icons.radio_button_checked
                 : Icons.radio_button_unchecked;
     final color = completed
-        ? const Color(0xFFF10D28)
+        ? UltronTheme.accentOf(context)
         : active
             ? const Color(0xFF9A9AA3)
             : const Color(0xFF222228);

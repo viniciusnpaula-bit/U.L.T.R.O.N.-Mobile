@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../models/assistant_persona.dart';
 import '../../services/ai_provider_service.dart';
 import '../../services/audio_vad_buffer.dart';
 import '../../services/device_control_service.dart';
 import '../../services/speech_text.dart';
 import '../../services/spotify_service.dart';
+import '../theme/ultron_theme.dart';
 
 class AiSettingsScreen extends StatefulWidget {
   const AiSettingsScreen({super.key, AiProviderStore? store}) : _store = store;
@@ -17,10 +21,12 @@ class AiSettingsScreen extends StatefulWidget {
 }
 
 class _AiSettingsScreenState extends State<AiSettingsScreen> {
-  static const _crimson = Color(0xFFF10D28);
   static const _rose = Color(0xFF9A9AA3);
   static const _emerald = Color(0xFF9A9AA3);
   static const _border = Color(0xFF222228);
+
+  Color get _accent => UltronTheme.accentOf(context);
+  Color get _onAccent => UltronTheme.onAccentFor(_accent);
 
   late final AiProviderStore _store = widget._store ?? AiProviderStore();
   final _deviceService = DeviceControlService();
@@ -89,6 +95,10 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
   Future<void> _selectWakeWordProfile(WakeWordProfile profile) async {
     HapticFeedback.selectionClick();
     await _deviceService.setWakeWordProfile(profile);
+    final persona = AssistantPersona.forWakeProfile(profile);
+    UltronTheme.setPersona(persona);
+    unawaited(_deviceService
+        .setDynamicIslandAccent(persona.accentColor.toARGB32()));
     if (!mounted) return;
     setState(() => _wakeWordProfile = profile);
     ScaffoldMessenger.of(context).showSnackBar(
@@ -430,7 +440,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: _crimson),
+          borderSide: BorderSide(color: _accent),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
@@ -476,7 +486,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         ),
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: _crimson))
+          ? Center(child: CircularProgressIndicator(color: _accent))
           : ListView(
               padding: const EdgeInsets.all(14),
               children: [
@@ -551,7 +561,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                             ),
                           ),
                           onPressed: _activateZeroKeyFreeNow,
-                          icon: const Icon(Icons.bolt, size: 16, color: _crimson),
+                          icon: Icon(Icons.bolt, size: 16, color: _accent),
                           label: const Text(
                             'ATIVAR IA GRÁTIS SEM CHAVE AGORA (POLLINATIONS)',
                             style: TextStyle(
@@ -568,19 +578,19 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                 const SizedBox(height: 14),
 
                 // 2. Interactive Catalog of 9 Free Providers
-                const Row(
+                Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
                       'CATÁLOGO DE PROVEDORES 100% GRATUITOS (9 OPÇÕES)',
                       style: TextStyle(
-                        color: _crimson,
+                        color: _accent,
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 1.0,
                       ),
                     ),
-                    Text(
+                    const Text(
                       'Deslize ↔',
                       style: TextStyle(color: Color(0xFF686872), fontSize: 9),
                     ),
@@ -607,7 +617,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                 : const Color(0xFF080808),
                             borderRadius: BorderRadius.circular(13),
                             border: Border.all(
-                              color: isSelected ? _crimson : _border,
+                              color: isSelected ? _accent : _border,
                               width: isSelected ? 1.4 : 1.0,
                             ),
                           ),
@@ -630,7 +640,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                       borderRadius: BorderRadius.circular(5),
                                       border: Border.all(
                                         color: preset.requiresKey
-                                            ? _crimson.withValues(alpha: 0.45)
+                                            ? _accent.withValues(alpha: 0.45)
                                             : _emerald,
                                       ),
                                     ),
@@ -646,10 +656,10 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                     ),
                                   ),
                                   if (isSelected)
-                                    const Icon(
+                                    Icon(
                                       Icons.check_circle,
                                       size: 14,
-                                      color: _crimson,
+                                      color: _accent,
                                     ),
                                 ],
                               ),
@@ -689,16 +699,16 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                           vertical: 5,
                                         ),
                                         alignment: Alignment.center,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF18181D),
-                                          borderRadius:
-                                              BorderRadius.circular(6),
-                                          border: Border.all(
-                                            color: _crimson.withValues(
-                                              alpha: 0.5,
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFF18181D),
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                            border: Border.all(
+                                              color: _accent.withValues(
+                                                alpha: 0.5,
+                                              ),
                                             ),
                                           ),
-                                        ),
                                         child: const Text(
                                           'USAR PRESET',
                                           style: TextStyle(
@@ -764,8 +774,8 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                   children: [
                     Text(
                       'FILA DE FAILOVER ATIVA (${_providers.length})',
-                      style: const TextStyle(
-                        color: _crimson,
+                      style: TextStyle(
+                        color: _accent,
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 1.0,
@@ -788,7 +798,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: _providers[i].enabled
-                            ? _crimson.withValues(alpha: 0.45)
+                            ? _accent.withValues(alpha: 0.45)
                             : _border,
                       ),
                     ),
@@ -808,8 +818,8 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               ),
                               child: Text(
                                 i == 0 ? '#1 PRIMÁRIO' : '#${i + 1} BACKUP',
-                                style: const TextStyle(
-                                  color: _crimson,
+                                style: TextStyle(
+                                  color: _accent,
                                   fontSize: 8.5,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -854,7 +864,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                             ),
                             Switch(
                               value: _providers[i].enabled,
-                              activeThumbColor: _crimson,
+                              activeThumbColor: _accent,
                               onChanged: (v) {
                                 final copy = [..._providers];
                                 copy[i] = copy[i].copyWith(enabled: v);
@@ -907,19 +917,19 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     if (_testingProviderId == _providers[i].id)
-                                      const SizedBox(
+                                      SizedBox(
                                         width: 10,
                                         height: 10,
                                         child: CircularProgressIndicator(
                                           strokeWidth: 2,
-                                          color: _crimson,
+                                          color: _accent,
                                         ),
                                       )
                                     else
-                                      const Icon(
+                                      Icon(
                                         Icons.bolt,
                                         size: 12,
-                                        color: _crimson,
+                                        color: _accent,
                                       ),
                                     const SizedBox(width: 4),
                                     const Text(
@@ -1002,10 +1012,10 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text(
+                            Text(
                               'CONFIGURAR / ADICIONAR PROVEDOR',
                               style: TextStyle(
-                                color: _crimson,
+                                color: _accent,
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 1.1,
@@ -1099,18 +1109,18 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                               onPressed:
                                   _fetchingModels ? null : _fetchModelsFromApi,
                               icon: _fetchingModels
-                                  ? const SizedBox(
+                                  ? SizedBox(
                                       width: 14,
                                       height: 14,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        color: _crimson,
+                                        color: _accent,
                                       ),
                                     )
-                                  : const Icon(
+                                  : Icon(
                                       Icons.sync,
                                       size: 16,
-                                      color: _crimson,
+                                      color: _accent,
                                     ),
                             ),
                           ),
@@ -1147,12 +1157,12 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                       ),
                                       decoration: BoxDecoration(
                                         color: _model.text.trim() == m
-                                            ? _crimson
+                                            ? _accent
                                             : const Color(0xFF18181D),
                                         borderRadius: BorderRadius.circular(6),
                                         border: Border.all(
                                           color: _model.text.trim() == m
-                                              ? _crimson
+                                              ? _accent
                                               : _border,
                                         ),
                                       ),
@@ -1160,7 +1170,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                         m,
                                         style: TextStyle(
                                           color: _model.text.trim() == m
-                                              ? Colors.white
+                                              ? _onAccent
                                               : _rose,
                                           fontSize: 9.5,
                                           fontWeight: FontWeight.bold,
@@ -1175,8 +1185,8 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         const SizedBox(height: 14),
                         FilledButton.icon(
                           style: FilledButton.styleFrom(
-                            backgroundColor: _crimson,
-                            foregroundColor: Colors.white,
+                            backgroundColor: _accent,
+                            foregroundColor: _onAccent,
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10),
@@ -1205,10 +1215,10 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Text(
+                        Text(
                           'WAKE-WORD MULTI-PERFIL & ORBE FLUTUANTE',
                           style: TextStyle(
-                            color: _crimson,
+                            color: _accent,
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
                             letterSpacing: 1.0,
@@ -1235,14 +1245,14 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                                         _selectWakeWordProfile(wp),
                                     style: OutlinedButton.styleFrom(
                                       backgroundColor: _wakeWordProfile == wp
-                                          ? _crimson
+                                          ? _accent
                                           : const Color(0xFF18181D),
                                       foregroundColor: _wakeWordProfile == wp
-                                          ? Colors.black
+                                          ? _onAccent
                                           : _rose,
                                       side: BorderSide(
                                         color: _wakeWordProfile == wp
-                                            ? _crimson
+                                            ? _accent
                                             : _border,
                                       ),
                                       visualDensity: VisualDensity.compact,
@@ -1267,7 +1277,7 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                           key: const ValueKey('floating_orb_switch'),
                           dense: true,
                           contentPadding: EdgeInsets.zero,
-                          activeColor: _crimson,
+                          activeThumbColor: _accent,
                           title: const Text(
                             'Orbe Flutuante Android (SYSTEM_ALERT_WINDOW)',
                             style: TextStyle(
@@ -1298,10 +1308,10 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Text(
+                        Text(
                           'TRANSCRIÇÃO DE VOZ (STT WHISPER)',
                           style: TextStyle(
-                            color: _crimson,
+                            color: _accent,
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
                             letterSpacing: 1.0,
@@ -1353,10 +1363,10 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            const Text(
+                            Text(
                               'SPOTIFY WEB API (OAUTH 2.0 PKCE)',
                               style: TextStyle(
-                                color: _crimson,
+                                color: _accent,
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 1.0,
@@ -1459,8 +1469,8 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                             Expanded(
                               child: FilledButton.icon(
                                 style: FilledButton.styleFrom(
-                                  backgroundColor: _crimson,
-                                  foregroundColor: Colors.white,
+                                  backgroundColor: _accent,
+                                  foregroundColor: _onAccent,
                                 ),
                                 onPressed: _connectSpotifyOAuth,
                                 icon: const Icon(Icons.music_note, size: 16),
@@ -1504,10 +1514,10 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
+            Text(
               'DIAGNÓSTICO ACÚSTICO EM CAMPO (AUDIORECORD / SHERPA-ONNX)',
               style: TextStyle(
-                color: _crimson,
+                color: _accent,
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
                 letterSpacing: 0.9,
@@ -1545,7 +1555,9 @@ class _AiSettingsScreenState extends State<AiSettingsScreen> {
                 minHeight: 6,
                 backgroundColor: const Color(0xFF18181D),
                 valueColor: AlwaysStoppedAnimation<Color>(
-                  dbNorm > 0.75 ? _crimson : const Color(0xFF22C55E),
+                  dbNorm > 0.75
+                      ? UltronColors.crimson
+                      : const Color(0xFF22C55E),
                 ),
               ),
             ),

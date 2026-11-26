@@ -220,7 +220,7 @@ class _EngineeringSectionState extends State<EngineeringSection> {
               _MetricRow(
                 label: 'Corrente nominal (In)',
                 value: '${s.nominalCurrentA.toStringAsFixed(2)} A',
-                accent: UltronColors.crimson,
+                accent: UltronTheme.accentOf(context),
               ),
               _MetricRow(
                 label: 'Potência',

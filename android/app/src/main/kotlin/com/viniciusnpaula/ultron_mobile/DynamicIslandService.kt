@@ -10,10 +10,14 @@ import android.content.IntentFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
+import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.media.AudioManager
 import android.os.BatteryManager
@@ -176,6 +180,10 @@ class DynamicIslandService : Service() {
             private set
 
         @Volatile
+        var isAppInForeground: Boolean = false
+            private set
+
+        @Volatile
         private var instance: DynamicIslandService? = null
 
         private val autoResetRunnable = Runnable {
@@ -283,6 +291,32 @@ class DynamicIslandService : Service() {
             mainHandler.post {
                 instance?.islandView?.invalidate()
                 instance?.configOverlayView?.invalidate()
+            }
+        }
+
+        fun setAppInForeground(inForeground: Boolean) {
+            isAppInForeground = inForeground
+            mainHandler.post {
+                val svc = instance ?: return@post
+                val view = svc.islandView ?: return@post
+                if (isConfiguring) return@post
+                view.animate().cancel()
+                if (inForeground) {
+                    svc.morphToTarget(expanded = false)
+                    view.visibility = View.GONE
+                } else {
+                    view.alpha = 0f
+                    view.scaleX = 0.88f
+                    view.scaleY = 0.88f
+                    view.visibility = View.VISIBLE
+                    view.animate()
+                        .alpha(1f)
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setDuration(220L)
+                        .setInterpolator(OvershootInterpolator(1.12f))
+                        .start()
+                }
             }
         }
 
@@ -559,6 +593,9 @@ class DynamicIslandService : Service() {
         layoutParams = params
 
         val view = ExpressiveCutoutView(this)
+        if (isAppInForeground && !isConfiguring) {
+            view.visibility = View.GONE
+        }
         islandView = view
 
         try {
@@ -752,7 +789,7 @@ class DynamicIslandService : Service() {
             } catch (_: Exception) {
             }
         }
-        islandView?.visibility = View.VISIBLE
+        islandView?.visibility = if (isAppInForeground) View.GONE else View.VISIBLE
     }
 
     private fun startWaveLoop() {
@@ -1303,23 +1340,59 @@ class DynamicIslandService : Service() {
         private val actionHits = mutableListOf<ActionButtonHit>()
 
         private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(246, 10, 10, 13)
             style = Paint.Style.FILL
+        }
+        private val innerGlassPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dpToPx(0.9f).toFloat()
         }
         private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = dpToPx(1.1f).toFloat()
+            strokeWidth = dpToPx(1.25f).toFloat()
+        }
+        private val auraBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dpToPx(2.8f).toFloat()
         }
         private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
         }
-        private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(26, 26, 32)
+        private val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
+        }
+        private val eqPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(24, 25, 33)
+            style = Paint.Style.FILL
+        }
+        private val pillStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(65, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = dpToPx(0.8f).toFloat()
         }
         private val primaryPillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
         }
+        private val tagBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        private val tagTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = spToPx(8.5f)
+            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            letterSpacing = 0.08f
+        }
+        private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        private val iconStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            strokeWidth = dpToPx(1.4f).toFloat()
+        }
+        private val iconPath = Path()
         private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.rgb(245, 245, 247)
             textSize = spToPx(12.5f)
@@ -1332,24 +1405,81 @@ class DynamicIslandService : Service() {
         }
         private val buttonTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.rgb(245, 245, 247)
-            textSize = spToPx(11.5f)
+            textSize = spToPx(10.8f)
             textAlign = Paint.Align.CENTER
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         }
         private val bgRect = RectF()
+        private val innerRect = RectF()
+        private val tagRect = RectF()
+        private var cachedBgH = -1f
+        private var cachedTint = 0
 
         fun tick(t: Float) {
             animTime = t
-            if (currentMode != IslandMode.IDLE || isExpanded) {
+            if (visibility == View.VISIBLE &&
+                (currentMode != IslandMode.IDLE || isExpanded || UltronAudioService.isListeningForReal())
+            ) {
                 invalidate()
             }
         }
 
         private fun activeTint(): Int = when (currentMode) {
             IslandMode.CHARGING -> Color.rgb(34, 197, 94)
-            IslandMode.PROCESSING -> Color.rgb(245, 158, 11)
             IslandMode.MEDIA -> Color.rgb(56, 189, 248)
             else -> accentColorArgb
+        }
+
+        private fun blendWithWhite(argb: Int, ratio: Float): Int {
+            val t = ratio.coerceIn(0f, 1f)
+            val r = (Color.red(argb) + (255 - Color.red(argb)) * t).roundToInt()
+            val g = (Color.green(argb) + (255 - Color.green(argb)) * t).roundToInt()
+            val b = (Color.blue(argb) + (255 - Color.blue(argb)) * t).roundToInt()
+            return Color.rgb(r, g, b)
+        }
+
+        private fun modeBadgeLabel(): String = when (currentMode) {
+            IslandMode.LISTENING -> "VOZ"
+            IslandMode.PROCESSING -> "IA"
+            IslandMode.SPEAKING -> "FALA"
+            IslandMode.MEDIA -> "SOM"
+            IslandMode.NOTIFICATION -> "MSG"
+            IslandMode.CHARGING -> "CARGA"
+            IslandMode.IDLE -> "ATIVO"
+        }
+
+        private fun ensureShaders(h: Float, tint: Int) {
+            if (cachedBgH != h || cachedTint != tint) {
+                cachedBgH = h
+                cachedTint = tint
+                val r = Color.red(tint)
+                val g = Color.green(tint)
+                val b = Color.blue(tint)
+                bgPaint.shader = LinearGradient(
+                    0f,
+                    0f,
+                    0f,
+                    h,
+                    intArrayOf(
+                        Color.argb(250, 18 + (r / 28), 18 + (g / 28), 24 + (b / 28)),
+                        Color.argb(248, 8, 8, 11),
+                    ),
+                    floatArrayOf(0f, 1f),
+                    Shader.TileMode.CLAMP,
+                )
+                innerGlassPaint.shader = LinearGradient(
+                    0f,
+                    0f,
+                    0f,
+                    h,
+                    intArrayOf(
+                        Color.argb(68, 255, 255, 255),
+                        Color.argb(10, r, g, b),
+                    ),
+                    null,
+                    Shader.TileMode.CLAMP,
+                )
+            }
         }
 
         override fun onDraw(canvas: Canvas) {
@@ -1358,16 +1488,39 @@ class DynamicIslandService : Service() {
             val h = height.toFloat()
             if (w <= 0f || h <= 0f) return
 
-            val pad = dpToPx(1.5f).toFloat()
+            val pad = dpToPx(2f).toFloat()
             bgRect.set(pad, pad, w - pad, h - pad)
             val radius = currentCornerPx.coerceAtMost(minOf(w, h) / 2f)
 
             val tint = activeTint()
+            ensureShaders(h, tint)
+
+            val isIdleCollapsed = currentMode == IslandMode.IDLE && !isExpanded
+            if (!isIdleCollapsed) {
+                auraBorderPaint.color = Color.argb(
+                    46,
+                    Color.red(tint),
+                    Color.green(tint),
+                    Color.blue(tint),
+                )
+                canvas.drawRoundRect(bgRect, radius, radius, auraBorderPaint)
+            }
+
             canvas.drawRoundRect(bgRect, radius, radius, bgPaint)
-            borderPaint.color = if (currentMode == IslandMode.IDLE && !isExpanded) {
-                Color.argb(90, 255, 255, 255)
+
+            innerRect.set(
+                bgRect.left + dpToPx(1.1f),
+                bgRect.top + dpToPx(1.1f),
+                bgRect.right - dpToPx(1.1f),
+                bgRect.bottom - dpToPx(1.1f),
+            )
+            val innerR = (radius - dpToPx(1f)).coerceAtLeast(4f)
+            canvas.drawRoundRect(innerRect, innerR, innerR, innerGlassPaint)
+
+            borderPaint.color = if (isIdleCollapsed) {
+                Color.argb(115, Color.red(tint), Color.green(tint), Color.blue(tint))
             } else {
-                Color.argb(155, Color.red(tint), Color.green(tint), Color.blue(tint))
+                Color.argb(185, Color.red(tint), Color.green(tint), Color.blue(tint))
             }
             canvas.drawRoundRect(bgRect, radius, radius, borderPaint)
 
@@ -1389,25 +1542,61 @@ class DynamicIslandService : Service() {
 
         private fun drawCompactIdle(canvas: Canvas, w: Float, h: Float, tint: Int) {
             val cy = h / 2f
-            val dotR = dpToPx(3.6f).toFloat()
+            val dotX = dpToPx(14f).toFloat()
+            val glowR = dpToPx(7.5f).toFloat()
+            haloPaint.shader = RadialGradient(
+                dotX,
+                cy,
+                glowR,
+                Color.argb(90, Color.red(tint), Color.green(tint), Color.blue(tint)),
+                Color.TRANSPARENT,
+                Shader.TileMode.CLAMP,
+            )
+            canvas.drawCircle(dotX, cy, glowR, haloPaint)
+
             accentPaint.color = tint
-            canvas.drawCircle(dpToPx(14f).toFloat(), cy, dotR, accentPaint)
+            canvas.drawCircle(dotX, cy, dpToPx(3.6f).toFloat(), accentPaint)
+
+            // Brilho sutil central estilo cristal
+            accentPaint.color = Color.argb(42, 255, 255, 255)
+            val barW = dpToPx(16f).toFloat().coerceAtMost(w * 0.25f)
+            val barH = dpToPx(2.2f).toFloat()
+            canvas.drawRoundRect(
+                w / 2f - barW / 2f,
+                cy - barH / 2f,
+                w / 2f + barW / 2f,
+                cy + barH / 2f,
+                barH / 2f,
+                barH / 2f,
+                accentPaint,
+            )
 
             accentPaint.color = if (UltronAudioService.isListeningForReal()) {
                 Color.rgb(34, 197, 94)
             } else {
-                Color.rgb(115, 115, 128)
+                Color.rgb(120, 122, 136)
             }
             canvas.drawCircle(w - dpToPx(14f).toFloat(), cy, dpToPx(3f).toFloat(), accentPaint)
         }
 
         private fun drawCompactIdleVertical(canvas: Canvas, w: Float, h: Float, tint: Int) {
             val cx = w / 2f
-            accentPaint.color = tint
-            canvas.drawCircle(cx, dpToPx(16f).toFloat(), dpToPx(4f).toFloat(), accentPaint)
+            val topDotY = dpToPx(16f).toFloat()
+            val glowR = dpToPx(8f).toFloat()
+            haloPaint.shader = RadialGradient(
+                cx,
+                topDotY,
+                glowR,
+                Color.argb(95, Color.red(tint), Color.green(tint), Color.blue(tint)),
+                Color.TRANSPARENT,
+                Shader.TileMode.CLAMP,
+            )
+            canvas.drawCircle(cx, topDotY, glowR, haloPaint)
 
-            // Barra central sutil da pílula em pé
-            accentPaint.color = Color.argb(65, 255, 255, 255)
+            accentPaint.color = tint
+            canvas.drawCircle(cx, topDotY, dpToPx(4f).toFloat(), accentPaint)
+
+            accentPaint.color = Color.argb(72, Color.red(tint), Color.green(tint), Color.blue(tint))
             val spineW = dpToPx(2.4f).toFloat()
             canvas.drawRoundRect(
                 cx - spineW / 2f,
@@ -1422,7 +1611,7 @@ class DynamicIslandService : Service() {
             accentPaint.color = if (UltronAudioService.isListeningForReal()) {
                 Color.rgb(34, 197, 94)
             } else {
-                Color.rgb(115, 115, 128)
+                Color.rgb(120, 122, 136)
             }
             canvas.drawCircle(cx, h - dpToPx(16f).toFloat(), dpToPx(3.2f).toFloat(), accentPaint)
         }
@@ -1431,14 +1620,21 @@ class DynamicIslandService : Service() {
             val cx = w / 2f
             drawExpressiveGlyph(canvas, cx, dpToPx(22f).toFloat(), tint)
 
-            // Equalizador horizontal empilhado verticalmente no meio da pílula em pé
-            accentPaint.color = tint
-            val barH = dpToPx(2.6f).toFloat()
+            eqPaint.shader = LinearGradient(
+                0f,
+                h * 0.35f,
+                w,
+                h * 0.65f,
+                tint,
+                blendWithWhite(tint, 0.48f),
+                Shader.TileMode.CLAMP,
+            )
+            val barH = dpToPx(2.8f).toFloat()
             val gap = dpToPx(6.5f).toFloat()
             val startY = h * 0.5f - gap * 1.5f
             for (i in 0 until 4) {
                 val wave = abs(sin(animTime * 5.2f + i * 0.9f))
-                val barW = dpToPx(8f + 14f * wave).toFloat().coerceAtMost(w - dpToPx(12f))
+                val barW = dpToPx(8f + 15f * wave).toFloat().coerceAtMost(w - dpToPx(12f))
                 val y = startY + i * gap
                 canvas.drawRoundRect(
                     cx - barW / 2f,
@@ -1447,12 +1643,11 @@ class DynamicIslandService : Service() {
                     y + barH / 2f,
                     barH / 2f,
                     barH / 2f,
-                    accentPaint,
+                    eqPaint,
                 )
             }
 
-            // Indicador de toque na base
-            accentPaint.color = Color.argb(120, 235, 235, 245)
+            accentPaint.color = Color.argb(140, 235, 235, 245)
             canvas.drawCircle(cx, h - dpToPx(16f).toFloat(), dpToPx(3f).toFloat(), accentPaint)
         }
 
@@ -1462,39 +1657,68 @@ class DynamicIslandService : Service() {
             drawExpressiveGlyph(canvas, leftX, cy, tint)
 
             val textStart = dpToPx(32f).toFloat()
-            val maxTextW = (w - textStart - dpToPx(38f)).coerceAtLeast(40f)
+            val badgeText = modeBadgeLabel()
+            val badgeW = tagTextPaint.measureText(badgeText) + dpToPx(10f)
+            val badgeRight = w - dpToPx(34f)
+            val maxTextW = (badgeRight - textStart - dpToPx(6f)).coerceAtLeast(36f)
             titlePaint.textSize = spToPx(11.5f)
             val truncated = truncateText(headline, titlePaint, maxTextW)
             val textY = cy - (titlePaint.descent() + titlePaint.ascent()) / 2f
             canvas.drawText(truncated, textStart, textY, titlePaint)
 
-            drawMiniEqualizer(canvas, w - dpToPx(24f).toFloat(), cy, tint)
+            if (maxTextW >= dpToPx(48f)) {
+                val tagLeft = badgeRight - badgeW - dpToPx(2f)
+                val tagH = dpToPx(15f).toFloat()
+                tagRect.set(tagLeft, cy - tagH / 2f, tagLeft + badgeW, cy + tagH / 2f)
+                tagBgPaint.color = Color.argb(36, Color.red(tint), Color.green(tint), Color.blue(tint))
+                canvas.drawRoundRect(tagRect, tagH / 2f, tagH / 2f, tagBgPaint)
+                tagTextPaint.color = blendWithWhite(tint, 0.35f)
+                val ty = tagRect.centerY() - (tagTextPaint.descent() + tagTextPaint.ascent()) / 2f
+                canvas.drawText(badgeText, tagLeft + dpToPx(5f), ty, tagTextPaint)
+            }
+
+            drawMiniEqualizer(canvas, w - dpToPx(26f).toFloat(), cy, tint)
         }
 
         private fun drawExpandedCard(canvas: Canvas, w: Float, h: Float, tint: Int) {
             val headerY = dpToPx(26f).toFloat()
             drawExpressiveGlyph(canvas, dpToPx(24f).toFloat(), headerY, tint)
 
+            val badgeText = modeBadgeLabel()
+            val badgePadX = dpToPx(8f).toFloat()
+            val badgeW = tagTextPaint.measureText(badgeText) + badgePadX * 2f
+            val badgeH = dpToPx(17f).toFloat()
+            val badgeRight = w - dpToPx(14f).toFloat()
+            tagRect.set(badgeRight - badgeW, headerY - dpToPx(11f), badgeRight, headerY - dpToPx(11f) + badgeH)
+            tagBgPaint.color = Color.argb(42, Color.red(tint), Color.green(tint), Color.blue(tint))
+            canvas.drawRoundRect(tagRect, badgeH / 2f, badgeH / 2f, tagBgPaint)
+            pillStrokePaint.color = Color.argb(120, Color.red(tint), Color.green(tint), Color.blue(tint))
+            canvas.drawRoundRect(tagRect, badgeH / 2f, badgeH / 2f, pillStrokePaint)
+            tagTextPaint.color = blendWithWhite(tint, 0.45f)
+            val badgeTy = tagRect.centerY() - (tagTextPaint.descent() + tagTextPaint.ascent()) / 2f
+            canvas.drawText(badgeText, tagRect.left + badgePadX, badgeTy, tagTextPaint)
+
             val textX = dpToPx(44f).toFloat()
-            val maxTextW = (w - textX - dpToPx(18f)).coerceAtLeast(80f)
+            val maxTitleW = (tagRect.left - textX - dpToPx(8f)).coerceAtLeast(70f)
+            val maxSubW = (w - textX - dpToPx(16f)).coerceAtLeast(90f)
             titlePaint.textSize = spToPx(13.5f)
-            canvas.drawText(truncateText(headline, titlePaint, maxTextW), textX, headerY - dpToPx(1f), titlePaint)
-            canvas.drawText(truncateText(subtitle, subPaint, maxTextW), textX, headerY + dpToPx(15f), subPaint)
+            canvas.drawText(truncateText(headline, titlePaint, maxTitleW), textX, headerY - dpToPx(1f), titlePaint)
+            canvas.drawText(truncateText(subtitle, subPaint, maxSubW), textX, headerY + dpToPx(15f), subPaint)
 
             val btnTop = h - dpToPx(50f).toFloat()
             val btnBottom = h - dpToPx(14f).toFloat()
-            val btnGap = dpToPx(8f).toFloat()
+            val btnGap = dpToPx(7f).toFloat()
             val sidePad = dpToPx(14f).toFloat()
 
             val buttons: List<Pair<String, String>> = when (currentMode) {
                 IslandMode.MEDIA -> listOf(
-                    "prev" to "Anterior",
-                    "play_pause" to "Play/Pause",
-                    "next" to "Próxima",
+                    "prev" to "Ant",
+                    "play_pause" to "Play",
+                    "next" to "Prox",
                     "voice" to "Falar",
                 )
                 IslandMode.SPEAKING -> listOf(
-                    "stop_speak" to "Silenciar",
+                    "stop_speak" to "Calar",
                     "voice" to "Falar",
                     "open" to "Abrir",
                 )
@@ -1515,44 +1739,122 @@ class DynamicIslandService : Service() {
                 actionHits.add(ActionButtonHit(id, label, rect))
 
                 val isPrimary = id == "voice" || id == "stop_speak"
+                val fgColor: Int
                 if (isPrimary) {
                     primaryPillPaint.color = Color.argb(
-                        225,
+                        236,
                         Color.red(tint),
                         Color.green(tint),
                         Color.blue(tint),
                     )
                     canvas.drawRoundRect(rect, btnCorner, btnCorner, primaryPillPaint)
-                    buttonTextPaint.color = if (isLightColor(tint)) {
+                    fgColor = if (isLightColor(tint)) {
                         Color.rgb(12, 12, 16)
                     } else {
                         Color.rgb(245, 245, 247)
                     }
                 } else {
                     canvas.drawRoundRect(rect, btnCorner, btnCorner, pillPaint)
-                    buttonTextPaint.color = Color.rgb(245, 245, 247)
+                    pillStrokePaint.color = Color.argb(58, 255, 255, 255)
+                    canvas.drawRoundRect(rect, btnCorner, btnCorner, pillStrokePaint)
+                    fgColor = Color.rgb(240, 240, 246)
                 }
 
+                buttonTextPaint.color = fgColor
+                val iconGap = dpToPx(14f).toFloat()
+                val textWidth = buttonTextPaint.measureText(label)
+                val totalContentW = iconGap + textWidth
+                val iconCx = rect.centerX() - totalContentW / 2f + dpToPx(5f)
+                drawActionButtonIcon(canvas, id, iconCx, rect.centerY(), fgColor)
                 val ty = rect.centerY() - (buttonTextPaint.descent() + buttonTextPaint.ascent()) / 2f
-                canvas.drawText(label, rect.centerX(), ty, buttonTextPaint)
+                canvas.drawText(label, iconCx + dpToPx(9f) + textWidth / 2f, ty, buttonTextPaint)
+            }
+        }
+
+        private fun drawActionButtonIcon(canvas: Canvas, id: String, cx: Float, cy: Float, color: Int) {
+            iconPaint.color = color
+            iconStrokePaint.color = color
+            val s = dpToPx(4.2f).toFloat()
+            when (id) {
+                "voice" -> {
+                    canvas.drawRoundRect(cx - s * 0.42f, cy - s * 0.85f, cx + s * 0.42f, cy + s * 0.25f, s * 0.42f, s * 0.42f, iconPaint)
+                    canvas.drawArc(cx - s * 0.72f, cy - s * 0.35f, cx + s * 0.72f, cy + s * 0.6f, 0f, 180f, false, iconStrokePaint)
+                    canvas.drawLine(cx, cy + s * 0.6f, cx, cy + s * 0.95f, iconStrokePaint)
+                }
+                "stop_speak" -> {
+                    canvas.drawRoundRect(cx - s * 0.7f, cy - s * 0.7f, cx + s * 0.7f, cy + s * 0.7f, dpToPx(1.2f).toFloat(), dpToPx(1.2f).toFloat(), iconPaint)
+                }
+                "play_pause" -> {
+                    iconPath.reset()
+                    iconPath.moveTo(cx - s * 0.55f, cy - s * 0.75f)
+                    iconPath.lineTo(cx + s * 0.75f, cy)
+                    iconPath.lineTo(cx - s * 0.55f, cy + s * 0.75f)
+                    iconPath.close()
+                    canvas.drawPath(iconPath, iconPaint)
+                }
+                "prev" -> {
+                    canvas.drawRect(cx - s * 0.75f, cy - s * 0.65f, cx - s * 0.4f, cy + s * 0.65f, iconPaint)
+                    iconPath.reset()
+                    iconPath.moveTo(cx + s * 0.7f, cy - s * 0.7f)
+                    iconPath.lineTo(cx - s * 0.25f, cy)
+                    iconPath.lineTo(cx + s * 0.7f, cy + s * 0.7f)
+                    iconPath.close()
+                    canvas.drawPath(iconPath, iconPaint)
+                }
+                "next" -> {
+                    iconPath.reset()
+                    iconPath.moveTo(cx - s * 0.7f, cy - s * 0.7f)
+                    iconPath.lineTo(cx + s * 0.25f, cy)
+                    iconPath.lineTo(cx - s * 0.7f, cy + s * 0.7f)
+                    iconPath.close()
+                    canvas.drawPath(iconPath, iconPaint)
+                    canvas.drawRect(cx + s * 0.4f, cy - s * 0.65f, cx + s * 0.75f, cy + s * 0.65f, iconPaint)
+                }
+                else -> {
+                    canvas.drawLine(cx - s * 0.55f, cy + s * 0.55f, cx + s * 0.55f, cy - s * 0.55f, iconStrokePaint)
+                    canvas.drawLine(cx - s * 0.1f, cy - s * 0.55f, cx + s * 0.55f, cy - s * 0.55f, iconStrokePaint)
+                    canvas.drawLine(cx + s * 0.55f, cy - s * 0.55f, cx + s * 0.55f, cy + s * 0.1f, iconStrokePaint)
+                }
             }
         }
 
         private fun drawExpressiveGlyph(canvas: Canvas, cx: Float, cy: Float, tint: Int) {
-            val pulse = 1f + 0.14f * sin(animTime * 4.2f)
-            accentPaint.color = Color.argb(65, Color.red(tint), Color.green(tint), Color.blue(tint))
-            canvas.drawCircle(cx, cy, dpToPx(10f) * pulse, accentPaint)
+            val pulse = 1f + 0.16f * sin(animTime * 4.2f)
+            val haloR = dpToPx(13f).toFloat() * pulse
+            haloPaint.shader = RadialGradient(
+                cx,
+                cy,
+                haloR,
+                Color.argb(115, Color.red(tint), Color.green(tint), Color.blue(tint)),
+                Color.TRANSPARENT,
+                Shader.TileMode.CLAMP,
+            )
+            canvas.drawCircle(cx, cy, haloR, haloPaint)
+
+            accentPaint.color = Color.argb(85, Color.red(tint), Color.green(tint), Color.blue(tint))
+            canvas.drawCircle(cx, cy, dpToPx(8.5f) * pulse, accentPaint)
             accentPaint.color = tint
             canvas.drawCircle(cx, cy, dpToPx(5.2f).toFloat(), accentPaint)
+            accentPaint.color = Color.argb(210, 255, 255, 255)
+            canvas.drawCircle(cx - dpToPx(1.2f), cy - dpToPx(1.2f), dpToPx(1.6f).toFloat(), accentPaint)
         }
 
         private fun drawMiniEqualizer(canvas: Canvas, startX: Float, cy: Float, tint: Int) {
-            accentPaint.color = tint
+            val barHMax = dpToPx(15f).toFloat()
+            eqPaint.shader = LinearGradient(
+                startX,
+                cy - barHMax / 2f,
+                startX,
+                cy + barHMax / 2f,
+                blendWithWhite(tint, 0.5f),
+                tint,
+                Shader.TileMode.CLAMP,
+            )
             val barW = dpToPx(2.4f).toFloat()
             val gap = dpToPx(4.2f).toFloat()
             for (i in 0 until 4) {
                 val wave = abs(sin(animTime * 5.2f + i * 0.9f))
-                val barH = dpToPx(4f + 10f * wave).toFloat()
+                val barH = dpToPx(4f + 10.5f * wave).toFloat()
                 val x = startX + i * gap
                 canvas.drawRoundRect(
                     x,
@@ -1561,7 +1863,7 @@ class DynamicIslandService : Service() {
                     cy + barH / 2f,
                     barW / 2f,
                     barW / 2f,
-                    accentPaint,
+                    eqPaint,
                 )
             }
         }

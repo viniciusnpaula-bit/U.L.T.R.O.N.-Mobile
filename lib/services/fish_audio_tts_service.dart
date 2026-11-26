@@ -17,6 +17,7 @@ class FishAudioConfig {
     this.enabled = false,
     this.apiKey = '',
     this.referenceId = '',
+    this.personaReferenceIds = const <String, String>{},
     this.language = defaultLanguage,
     this.model = defaultModel,
   });
@@ -42,11 +43,33 @@ class FishAudioConfig {
   final bool enabled;
   final String apiKey;
   final String referenceId;
+  final Map<String, String> personaReferenceIds;
   final String language;
   final String model;
 
-  bool get isConfigured =>
-      apiKey.trim().isNotEmpty && referenceId.trim().isNotEmpty;
+  String referenceIdFor(String profileId) {
+    final key = profileId.trim().toLowerCase();
+    final specific = (personaReferenceIds[key] ?? '').trim();
+    if (specific.isNotEmpty) return specific;
+    return referenceId.trim();
+  }
+
+  bool isConfiguredFor(String profileId) =>
+      apiKey.trim().isNotEmpty && referenceIdFor(profileId).isNotEmpty;
+
+  bool isActiveFor(String profileId) => enabled && isConfiguredFor(profileId);
+
+  String shortReferenceIdFor(String profileId) {
+    final trimmed = referenceIdFor(profileId);
+    if (trimmed.length <= 10) return trimmed;
+    return '${trimmed.substring(0, 8)}...';
+  }
+
+  bool get isConfigured {
+    if (apiKey.trim().isEmpty) return false;
+    if (referenceId.trim().isNotEmpty) return true;
+    return personaReferenceIds.values.any((v) => v.trim().isNotEmpty);
+  }
 
   bool get isActive => enabled && isConfigured;
 
@@ -60,6 +83,7 @@ class FishAudioConfig {
     bool? enabled,
     String? apiKey,
     String? referenceId,
+    Map<String, String>? personaReferenceIds,
     String? language,
     String? model,
   }) {
@@ -67,6 +91,7 @@ class FishAudioConfig {
       enabled: enabled ?? this.enabled,
       apiKey: apiKey ?? this.apiKey,
       referenceId: referenceId ?? this.referenceId,
+      personaReferenceIds: personaReferenceIds ?? this.personaReferenceIds,
       language: language ?? this.language,
       model: model ?? this.model,
     );
@@ -102,6 +127,10 @@ class FishAudioTtsService {
   static const _enabledKey = 'ultron.tts.fish.enabled.v1';
   static const _apiKeyStorageKey = 'ultron.tts.fish.api_key.v1';
   static const _referenceIdKey = 'ultron.tts.fish.reference_id.v1';
+  static const _refUltronKey = 'ultron.tts.fish.ref_id.ultron.v1';
+  static const _refJarvisKey = 'ultron.tts.fish.ref_id.jarvis.v1';
+  static const _refVisaoKey = 'ultron.tts.fish.ref_id.visao.v1';
+  static const _refEdithKey = 'ultron.tts.fish.ref_id.edith.v1';
   static const _languageKey = 'ultron.tts.fish.language.v1';
   static const _modelKey = 'ultron.tts.fish.model.v1';
 
@@ -118,13 +147,26 @@ class FishAudioTtsService {
     final enabledRaw = await _storage.read(key: _enabledKey);
     final apiKey = await _storage.read(key: _apiKeyStorageKey) ?? '';
     final referenceId = await _storage.read(key: _referenceIdKey) ?? '';
+    final refUltron = (await _storage.read(key: _refUltronKey) ?? '').trim();
+    final refJarvis = (await _storage.read(key: _refJarvisKey) ?? '').trim();
+    final refVisao = (await _storage.read(key: _refVisaoKey) ?? '').trim();
+    final refEdith = (await _storage.read(key: _refEdithKey) ?? '').trim();
     final languageRaw = await _storage.read(key: _languageKey);
     final modelRaw = await _storage.read(key: _modelKey);
+
+    final fallbackRef = referenceId.trim();
+    final personaRefs = <String, String>{
+      'ultron': refUltron.isNotEmpty ? refUltron : fallbackRef,
+      'jarvis': refJarvis,
+      'visao': refVisao,
+      'edith': refEdith,
+    };
 
     _config = FishAudioConfig(
       enabled: enabledRaw == 'true',
       apiKey: apiKey.trim(),
-      referenceId: referenceId.trim(),
+      referenceId: fallbackRef.isNotEmpty ? fallbackRef : refUltron,
+      personaReferenceIds: personaRefs,
       language: (languageRaw ?? '').trim().isEmpty
           ? FishAudioConfig.defaultLanguage
           : languageRaw!.trim(),
@@ -136,10 +178,24 @@ class FishAudioTtsService {
   }
 
   Future<void> saveConfig(FishAudioConfig next) async {
+    final cleanPersonaRefs = <String, String>{
+      'ultron': (next.personaReferenceIds['ultron'] ?? '').trim(),
+      'jarvis': (next.personaReferenceIds['jarvis'] ?? '').trim(),
+      'visao': (next.personaReferenceIds['visao'] ?? '').trim(),
+      'edith': (next.personaReferenceIds['edith'] ?? '').trim(),
+    };
+    final legacyRef = next.referenceId.trim().isNotEmpty
+        ? next.referenceId.trim()
+        : cleanPersonaRefs['ultron']!;
+    if (cleanPersonaRefs['ultron']!.isEmpty && legacyRef.isNotEmpty) {
+      cleanPersonaRefs['ultron'] = legacyRef;
+    }
+
     final normalized = FishAudioConfig(
       enabled: next.enabled,
       apiKey: next.apiKey.trim(),
-      referenceId: next.referenceId.trim(),
+      referenceId: legacyRef,
+      personaReferenceIds: cleanPersonaRefs,
       language: next.language.trim().isEmpty
           ? FishAudioConfig.defaultLanguage
           : next.language.trim(),
@@ -154,17 +210,29 @@ class FishAudioTtsService {
     );
     await _storage.write(key: _apiKeyStorageKey, value: normalized.apiKey);
     await _storage.write(key: _referenceIdKey, value: normalized.referenceId);
+    await _storage.write(
+        key: _refUltronKey, value: normalized.personaReferenceIds['ultron'] ?? '');
+    await _storage.write(
+        key: _refJarvisKey, value: normalized.personaReferenceIds['jarvis'] ?? '');
+    await _storage.write(
+        key: _refVisaoKey, value: normalized.personaReferenceIds['visao'] ?? '');
+    await _storage.write(
+        key: _refEdithKey, value: normalized.personaReferenceIds['edith'] ?? '');
     await _storage.write(key: _languageKey, value: normalized.language);
     await _storage.write(key: _modelKey, value: normalized.model);
   }
 
   static Map<String, Object?> buildPayload(
     String text,
-    FishAudioConfig cfg,
-  ) {
+    FishAudioConfig cfg, {
+    String? profileId,
+  }) {
+    final resolvedRef = profileId != null
+        ? cfg.referenceIdFor(profileId)
+        : cfg.referenceId.trim();
     final payload = <String, Object?>{
       'text': text,
-      'reference_id': cfg.referenceId.trim(),
+      'reference_id': resolvedRef,
       'format': 'mp3',
     };
     final lang = cfg.language.trim();
@@ -177,6 +245,7 @@ class FishAudioTtsService {
   Future<Uint8List> synthesize(
     String text, {
     FishAudioConfig? overrideConfig,
+    String? profileId,
   }) async {
     final cfg = overrideConfig ?? _config;
     final cleanText = text.trim();
@@ -188,7 +257,8 @@ class FishAudioTtsService {
       throw const FishAudioException(
           400, 'API Key do Fish Audio não definida.');
     }
-    final referenceId = cfg.referenceId.trim();
+    final referenceId =
+        profileId != null ? cfg.referenceIdFor(profileId) : cfg.referenceId.trim();
     if (referenceId.isEmpty) {
       throw const FishAudioException(
         400,
@@ -206,7 +276,8 @@ class FishAudioTtsService {
           cfg.model.trim().isEmpty
               ? FishAudioConfig.defaultModel
               : cfg.model.trim());
-      req.add(utf8.encode(jsonEncode(buildPayload(cleanText, cfg))));
+      req.add(utf8.encode(
+          jsonEncode(buildPayload(cleanText, cfg, profileId: profileId))));
 
       final res = await req.close().timeout(requestTimeout);
       final chunks = <int>[];

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:ultron_mobile/services/speech_text.dart';
 import 'package:ultron_mobile/services/voice_service.dart';
 
 class _SilentTts extends FlutterTts {
@@ -209,5 +210,72 @@ void main() {
     await voice.speak('Modo offline.');
     expect(fakeTts.spoken, ['Modo offline.']);
     expect(voice.lastFishError, contains('quota exceeded'));
+  });
+
+  test(
+      'FishAudioTtsService persists 4 per-persona Reference IDs and VoiceService switches voice on profile change',
+      () async {
+    FlutterSecureStorage.setMockInitialValues(<String, String>{});
+    final receivedRefIds = <String>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((req) async {
+      final rawBody = await utf8.decoder.bind(req).join();
+      final decoded = jsonDecode(rawBody) as Map<String, dynamic>;
+      receivedRefIds.add((decoded['reference_id'] ?? '').toString());
+      req.response.statusCode = HttpStatus.ok;
+      req.response.add([1, 2, 3, 4]);
+      await req.response.close();
+    });
+
+    const channel = MethodChannel('com.viniciusnpaula.ultron_mobile/device');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async => true);
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    final service = FishAudioTtsService(
+      endpoint:
+          Uri.parse('http://${server.address.address}:${server.port}/tts'),
+      httpClientFactory: _realHttpClient,
+    );
+    await service.saveConfig(const FishAudioConfig(
+      enabled: true,
+      apiKey: 'fish-key-4',
+      referenceId: 'id-ultron',
+      personaReferenceIds: <String, String>{
+        'ultron': 'id-ultron',
+        'jarvis': 'id-jarvis',
+        'visao': 'id-visao',
+        'edith': 'id-edith',
+      },
+      language: 'pt',
+      model: 's2.1-pro',
+    ));
+
+    final reloaded = FishAudioTtsService(
+      endpoint:
+          Uri.parse('http://${server.address.address}:${server.port}/tts'),
+      httpClientFactory: _realHttpClient,
+    );
+    final cfg = await reloaded.loadConfig();
+    expect(cfg.referenceIdFor('ultron'), 'id-ultron');
+    expect(cfg.referenceIdFor('jarvis'), 'id-jarvis');
+    expect(cfg.referenceIdFor('visao'), 'id-visao');
+    expect(cfg.referenceIdFor('edith'), 'id-edith');
+
+    final voice = VoiceService(tts: _SilentTts(), fishService: reloaded);
+    await voice.setWakeWordProfile(WakeWordProfile.ultron);
+    await voice.speak('Protocolo Ultron.');
+    await voice.setWakeWordProfile(WakeWordProfile.jarvis);
+    await voice.speak('Protocolo Jarvis.');
+    await voice.setWakeWordProfile(WakeWordProfile.visao);
+    await voice.speak('Protocolo Visão.');
+    await voice.setWakeWordProfile(WakeWordProfile.edith);
+    await voice.speak('Protocolo Edith.');
+
+    expect(receivedRefIds, ['id-ultron', 'id-jarvis', 'id-visao', 'id-edith']);
   });
 }

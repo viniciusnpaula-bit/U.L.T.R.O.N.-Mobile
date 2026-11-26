@@ -4,6 +4,7 @@ import '../../services/user_preferences_service.dart';
 import '../../services/voice_corrections_service.dart';
 import '../../services/voice_service.dart';
 import '../../services/voice_shortcuts_service.dart';
+import '../theme/ultron_theme.dart';
 import '../widgets/voice_selector_sheet.dart';
 
 class MemorySettingsScreen extends StatefulWidget {
@@ -147,9 +148,9 @@ class _MemorySettingsScreenState extends State<MemorySettingsScreen> {
                     const _SectionHeader(title: 'Voz do U.L.T.R.O.N. (TTS)'),
                     Card(
                       child: ListTile(
-                        leading: const Icon(
+                        leading: Icon(
                           Icons.record_voice_over,
-                          color: Color(0xFFF10D28),
+                          color: UltronTheme.accentOf(context),
                         ),
                         title: Text(
                           'Voz: ${_voiceService.activeVoiceLabel}',

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../models/chat_message.dart';
 import '../../services/conversation_history.dart';
+import '../theme/ultron_theme.dart';
 
 class ConversationHistoryScreen extends StatefulWidget {
   const ConversationHistoryScreen({super.key});
@@ -73,7 +74,9 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    final accent = UltronTheme.accentOf(context);
+    return Scaffold(
         backgroundColor: const Color(0xFF080808),
         body: SafeArea(
           child: Padding(
@@ -91,14 +94,14 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                     children: [
                       InkWell(
                         onTap: () => Navigator.of(context).pop(),
-                        child: const Row(
+                        child: Row(
                           children: [
-                            Icon(Icons.arrow_back, size: 15, color: _crimson),
-                            SizedBox(width: 4),
+                            Icon(Icons.arrow_back, size: 15, color: accent),
+                            const SizedBox(width: 4),
                             Text(
                               'VOLTAR',
                               style: TextStyle(
-                                color: _crimson,
+                                color: accent,
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -143,8 +146,8 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                     future: _messages,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(
-                          child: CircularProgressIndicator(color: _crimson),
+                        return Center(
+                          child: CircularProgressIndicator(color: accent),
                         );
                       }
                       if (snapshot.hasError) {
@@ -207,32 +210,35 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
                             child: Container(
                               margin: const EdgeInsets.only(bottom: 8),
                               padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: isUser
-                                    ? const Color(0xFF18181D)
-                                    : const Color(0xFF080808),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
+                                decoration: BoxDecoration(
                                   color: isUser
-                                      ? _crimson.withValues(alpha: 0.4)
-                                      : _border,
+                                      ? const Color(0xFF18181D)
+                                      : const Color(0xFF080808),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: isUser
+                                        ? accent.withValues(alpha: 0.4)
+                                        : _border,
+                                  ),
                                 ),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(
-                                        isUser ? 'OPERADOR' : 'U.L.T.R.O.N.',
-                                        style: TextStyle(
-                                          color: isUser ? _rose : _crimson,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          isUser
+                                              ? 'OPERADOR'
+                                              : UltronTheme.personaNotifier
+                                                  .value.displayName,
+                                          style: TextStyle(
+                                            color: isUser ? _rose : accent,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                          ),
                                         ),
-                                      ),
                                       Text(
                                         timestamp,
                                         style: const TextStyle(
@@ -326,4 +332,5 @@ class _ConversationHistoryScreenState extends State<ConversationHistoryScreen> {
           ),
         ),
       );
+  }
 }

@@ -722,6 +722,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         ) {
             FloatingOrbService.start(this)
         }
+        DynamicIslandService.setAppInForeground(true)
         if (DynamicIslandService.isEnabledPref(this) &&
             !DynamicIslandService.isRunning &&
             DynamicIslandService.canDraw(this)
@@ -744,6 +745,7 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
 
     override fun onPause() {
         isActivityResumed = false
+        DynamicIslandService.setAppInForeground(false)
         detachNfcReaderMode()
         try {
             sensorManager?.unregisterListener(this)

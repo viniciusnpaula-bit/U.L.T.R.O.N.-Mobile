@@ -124,7 +124,7 @@ class _AutomationSectionState extends State<AutomationSection> {
                   ),
                   Switch(
                     value: cfg.enabled,
-                    activeThumbColor: UltronColors.crimson,
+                    activeThumbColor: UltronTheme.accentOf(context),
                     onChanged: (v) {
                       if (v && !widget.notificationPermissionGranted) {
                         widget.onOpenNotificationAccessSettings();
@@ -154,7 +154,7 @@ class _AutomationSectionState extends State<AutomationSection> {
                 contentPadding: EdgeInsets.zero,
                 dense: true,
                 value: cfg.saveToObsidian,
-                activeThumbColor: UltronColors.crimson,
+                activeThumbColor: UltronTheme.accentOf(context),
                 onChanged: (v) => widget
                     .onUpdateTriageConfig(cfg.copyWith(saveToObsidian: v)),
                 title: const Text(
@@ -176,7 +176,7 @@ class _AutomationSectionState extends State<AutomationSection> {
                 contentPadding: EdgeInsets.zero,
                 dense: true,
                 value: cfg.speakUrgentAlerts,
-                activeThumbColor: UltronColors.crimson,
+                activeThumbColor: UltronTheme.accentOf(context),
                 onChanged: (v) => widget
                     .onUpdateTriageConfig(cfg.copyWith(speakUrgentAlerts: v)),
                 title: const Text(
@@ -198,7 +198,7 @@ class _AutomationSectionState extends State<AutomationSection> {
                 contentPadding: EdgeInsets.zero,
                 dense: true,
                 value: cfg.respectNightFocus,
-                activeThumbColor: UltronColors.crimson,
+                activeThumbColor: UltronTheme.accentOf(context),
                 onChanged: (v) => widget
                     .onUpdateTriageConfig(cfg.copyWith(respectNightFocus: v)),
                 title: const Text(

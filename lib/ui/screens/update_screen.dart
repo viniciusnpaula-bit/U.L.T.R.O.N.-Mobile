@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../services/app_update_service.dart';
+import '../theme/ultron_theme.dart';
 
 class UpdateScreen extends StatefulWidget {
   const UpdateScreen({super.key});
@@ -11,7 +12,6 @@ class UpdateScreen extends StatefulWidget {
 }
 
 class _UpdateScreenState extends State<UpdateScreen> {
-  static const _crimson = Color(0xFFF10D28);
   static const _rose = Color(0xFF9A9AA3);
   static const _border = Color(0xFF222228);
 
@@ -92,6 +92,8 @@ class _UpdateScreenState extends State<UpdateScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final accent = UltronTheme.accentOf(context);
+    final onAccent = UltronTheme.onAccentFor(accent);
     final icon = checking
         ? Icons.cloud_download_outlined
         : update != null
@@ -115,14 +117,14 @@ class _UpdateScreenState extends State<UpdateScreen> {
                   children: [
                     InkWell(
                       onTap: () => Navigator.of(context).pop(),
-                      child: const Row(
+                      child: Row(
                         children: [
-                          Icon(Icons.arrow_back, size: 15, color: _crimson),
-                          SizedBox(width: 4),
+                          Icon(Icons.arrow_back, size: 15, color: accent),
+                          const SizedBox(width: 4),
                           Text(
                             'VOLTAR',
                             style: TextStyle(
-                              color: _crimson,
+                              color: accent,
                               fontSize: 12,
                               fontWeight: FontWeight.bold,
                             ),
@@ -156,7 +158,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                 child: ListView(
                   padding: const EdgeInsets.symmetric(vertical: 20),
                   children: [
-                    Icon(icon, size: 64, color: _crimson),
+                    Icon(icon, size: 64, color: accent),
                     const SizedBox(height: 14),
                     Text(
                       'VERSÃO INSTALADA: ${installed.isEmpty ? '…' : 'v$installed'}',
@@ -178,8 +180,7 @@ class _UpdateScreenState extends State<UpdateScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    if (checking)
-                      const LinearProgressIndicator(color: _crimson),
+                    if (checking) LinearProgressIndicator(color: accent),
                     if (update != null) ...[
                       const SizedBox(height: 12),
                       Container(
@@ -214,8 +215,8 @@ class _UpdateScreenState extends State<UpdateScreen> {
                               child: FilledButton.icon(
                                 onPressed: downloading ? null : _download,
                                 style: FilledButton.styleFrom(
-                                  backgroundColor: _crimson,
-                                  foregroundColor: Colors.black,
+                                  backgroundColor: accent,
+                                  foregroundColor: onAccent,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(10),
                                   ),
@@ -238,15 +239,15 @@ class _UpdateScreenState extends State<UpdateScreen> {
                     if (downloading) ...[
                       const SizedBox(height: 16),
                       LinearProgressIndicator(
-                        color: _crimson,
+                        color: accent,
                         value: progress > 0 ? progress : null,
                       ),
                       const SizedBox(height: 6),
                       Text(
                         '${(progress * 100).toStringAsFixed(0)}%',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: _crimson,
+                        style: TextStyle(
+                          color: accent,
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
                         ),

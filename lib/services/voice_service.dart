@@ -95,7 +95,10 @@ class VoiceService {
   String? lastFishError;
 
   FishAudioConfig get fishConfig => _fishService.config;
-  bool get isFishAudioActive => _fishService.config.isActive;
+  String get activeFishReferenceId =>
+      _fishService.config.referenceIdFor(wakeWordProfile.id);
+  bool get isFishAudioActive =>
+      _fishService.config.isActiveFor(wakeWordProfile.id);
 
   String get activeVoiceLabel => isFishAudioActive
       ? 'Fish Audio (${fishConfig.language} • ${fishConfig.model})'
@@ -356,7 +359,7 @@ class VoiceService {
     try {
       for (final chunk in chunks) {
         if (generation != _generation) break;
-        if (_fishService.config.isActive) {
+        if (_fishService.config.isActiveFor(wakeWordProfile.id)) {
           final outcome = await _speakChunkWithFishAudio(chunk, generation);
           if (generation != _generation ||
               outcome == _FishPlayOutcome.interrupted) {
@@ -390,7 +393,10 @@ class VoiceService {
     int generation,
   ) async {
     try {
-      final bytes = await _fishService.synthesize(chunk);
+      final bytes = await _fishService.synthesize(
+        chunk,
+        profileId: wakeWordProfile.id,
+      );
       if (generation != _generation) {
         return _FishPlayOutcome.interrupted;
       }

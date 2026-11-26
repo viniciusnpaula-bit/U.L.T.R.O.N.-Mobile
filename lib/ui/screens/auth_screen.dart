@@ -9,6 +9,7 @@ import '../../core/security/auth_gate.dart';
 import '../../core/security/pin_vault.dart';
 import '../../services/conversation_history.dart';
 import '../../services/nfc_auth_service.dart';
+import '../theme/ultron_theme.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({
@@ -27,7 +28,6 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
-  static const _crimson = Color(0xFFF10D28);
   static const _rose = Color(0xFF9A9AA3);
   static const _border = Color(0xFF222228);
   static const _surface = Color(0xFF18181D);
@@ -404,11 +404,12 @@ class _AuthScreenState extends State<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final accent = UltronTheme.accentOf(context);
     if (hasPin == null) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF080808),
+      return Scaffold(
+        backgroundColor: const Color(0xFF080808),
         body: Center(
-          child: CircularProgressIndicator(color: _crimson),
+          child: CircularProgressIndicator(color: accent),
         ),
       );
     }
@@ -426,8 +427,8 @@ class _AuthScreenState extends State<AuthScreen> {
               // Top Telemetry & AuthGate Header
               Column(
                 children: [
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 6),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -436,13 +437,13 @@ class _AuthScreenState extends State<AuthScreen> {
                             Text(
                               'GALAXY A34 5G',
                               style: TextStyle(
-                                color: _crimson,
+                                color: accent,
                                 fontSize: 10,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
-                            SizedBox(width: 6),
-                            Text(
+                            const SizedBox(width: 6),
+                            const Text(
                               '• BLOQUEADO',
                               style: TextStyle(
                                 color: _rose,
@@ -453,23 +454,23 @@ class _AuthScreenState extends State<AuthScreen> {
                         ),
                         Row(
                           children: [
-                            Icon(Icons.wifi, size: 11, color: _crimson),
-                            SizedBox(width: 3),
-                            Text(
+                            Icon(Icons.wifi, size: 11, color: accent),
+                            const SizedBox(width: 3),
+                            const Text(
                               '5G',
                               style: TextStyle(
                                 color: Color(0xFF9A9AA3),
                                 fontSize: 10,
                               ),
                             ),
-                            SizedBox(width: 8),
-                            Icon(
+                            const SizedBox(width: 8),
+                            const Icon(
                               Icons.battery_full,
                               size: 11,
                               color: Color(0xFF9A9AA3),
                             ),
-                            SizedBox(width: 2),
-                            Text(
+                            const SizedBox(width: 2),
+                            const Text(
                               'SECURE',
                               style: TextStyle(
                                 color: Color(0xFF9A9AA3),
@@ -489,14 +490,14 @@ class _AuthScreenState extends State<AuthScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Row(
+                        Row(
                           children: [
-                            Icon(Icons.lock_outline, size: 13, color: _crimson),
-                            SizedBox(width: 6),
+                            Icon(Icons.lock_outline, size: 13, color: accent),
+                            const SizedBox(width: 6),
                             Text(
                               'AUTHGATE v1.19',
                               style: TextStyle(
-                                color: _crimson,
+                                color: accent,
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 1.8,
@@ -532,7 +533,7 @@ class _AuthScreenState extends State<AuthScreen> {
                           color: const Color(0xFF111114),
                           border: Border.all(
                             color: busy
-                                ? _crimson
+                                ? accent
                                 : const Color(0xFF222228),
                             width: 1.5,
                           ),
@@ -557,13 +558,13 @@ class _AuthScreenState extends State<AuthScreen> {
                                       ? Icons.face_retouching_natural
                                       : _biometricIcon),
                               size: 36,
-                              color: busy ? _crimson : const Color(0xFFEEEEEE),
+                              color: busy ? accent : const Color(0xFFEEEEEE),
                             ),
                             if (busy)
                               Container(
                                 width: 72,
                                 height: 2,
-                                color: _crimson,
+                                color: accent,
                               ),
                           ],
                         ),
@@ -667,8 +668,10 @@ class _AuthScreenState extends State<AuthScreen> {
                                 lockLeft > Duration.zero
                                     ? 'AGUARDE ${_formatWait(lockLeft)}'
                                     : pinStatus,
-                                style: const TextStyle(
-                                  color: _crimson,
+                                style: TextStyle(
+                                  color: lockLeft > Duration.zero
+                                      ? UltronColors.crimson
+                                      : accent,
                                   fontSize: 10,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -725,7 +728,7 @@ class _AuthScreenState extends State<AuthScreen> {
                                   : const Color(0xFF111114),
                               borderRadius: BorderRadius.circular(10),
                               border: Border.all(
-                                color: filled ? _crimson : _border,
+                                color: filled ? accent : _border,
                               ),
                             ),
                             child: Text(
@@ -791,7 +794,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         label: 'ENTRAR ✓',
                         backgroundColor: const Color(0xFF18181D),
                         borderColor: const Color(0xFF18181D),
-                        textColor: _crimson,
+                        textColor: accent,
                         fontSize: 11,
                         onTap: blocked ? null : _submit,
                       ),

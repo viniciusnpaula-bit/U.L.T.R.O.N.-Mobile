@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../models/assistant_persona.dart';
 import '../../services/speech_text.dart';
 import '../../services/voice_service.dart';
+import '../theme/ultron_theme.dart';
 
 Future<void> showVoiceSelectorSheet(
   BuildContext context, {
@@ -52,12 +54,14 @@ class VoiceSelectorSheet extends StatefulWidget {
 }
 
 class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
-  static const _crimson = Color(0xFFF10D28);
   static const _rose = Color(0xFF9A9AA3);
   static const _border = Color(0xFF222228);
 
   final _fishKeyCtrl = TextEditingController();
-  final _fishRefCtrl = TextEditingController();
+  final _fishRefUltronCtrl = TextEditingController();
+  final _fishRefJarvisCtrl = TextEditingController();
+  final _fishRefVisaoCtrl = TextEditingController();
+  final _fishRefEdithCtrl = TextEditingController();
 
   List<TtsVoiceOption> _voices = const [];
   bool _loading = true;
@@ -82,7 +86,10 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
   @override
   void dispose() {
     _fishKeyCtrl.dispose();
-    _fishRefCtrl.dispose();
+    _fishRefUltronCtrl.dispose();
+    _fishRefJarvisCtrl.dispose();
+    _fishRefVisaoCtrl.dispose();
+    _fishRefEdithCtrl.dispose();
     super.dispose();
   }
 
@@ -90,10 +97,16 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
     final cfg = widget.voiceService.fishConfig;
     _fishEnabled = cfg.enabled;
     _fishKeyCtrl.text = cfg.apiKey;
-    _fishRefCtrl.text = cfg.referenceId;
+    _fishRefUltronCtrl.text = cfg.referenceIdFor(WakeWordProfile.ultron.id);
+    _fishRefJarvisCtrl.text =
+        (cfg.personaReferenceIds[WakeWordProfile.jarvis.id] ?? '').trim();
+    _fishRefVisaoCtrl.text =
+        (cfg.personaReferenceIds[WakeWordProfile.visao.id] ?? '').trim();
+    _fishRefEdithCtrl.text =
+        (cfg.personaReferenceIds[WakeWordProfile.edith.id] ?? '').trim();
     _fishLanguage = cfg.language;
     _fishModel = cfg.model;
-    if (cfg.isActive) {
+    if (widget.voiceService.isFishAudioActive || cfg.isConfigured) {
       _fishExpanded = true;
     }
   }
@@ -131,13 +144,14 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
   Future<void> _selectWakeWord(WakeWordProfile wakeProfile) async {
     HapticFeedback.selectionClick();
     await widget.voiceService.setWakeWordProfile(wakeProfile);
+    UltronTheme.setPersona(AssistantPersona.forWakeProfile(wakeProfile));
     widget.onChanged?.call();
     if (!mounted) return;
     setState(() {});
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          'Wake-word alterada para "${wakeProfile.label}" (sherpa-onnx KWS atualizado sem reiniciar).',
+          'Personalidade alterada para "${wakeProfile.label}" (tema, núcleo e voz atualizados).',
           style: const TextStyle(fontSize: 11),
         ),
         duration: const Duration(seconds: 2),
@@ -160,15 +174,27 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
     unawaited(widget.voiceService.preview().catchError((_) {}));
   }
 
+  Map<String, String> _collectPersonaRefIds() => <String, String>{
+        WakeWordProfile.ultron.id: _fishRefUltronCtrl.text.trim(),
+        WakeWordProfile.jarvis.id: _fishRefJarvisCtrl.text.trim(),
+        WakeWordProfile.visao.id: _fishRefVisaoCtrl.text.trim(),
+        WakeWordProfile.edith.id: _fishRefEdithCtrl.text.trim(),
+      };
+
   Future<void> _saveAndTestFish({bool? forceEnabled}) async {
     final apiKey = _fishKeyCtrl.text.trim();
-    final refId = _fishRefCtrl.text.trim();
+    final personaRefs = _collectPersonaRefIds();
+    final activeProfileId = widget.voiceService.wakeWordProfile.id;
+    final ultronId = personaRefs[WakeWordProfile.ultron.id] ?? '';
+    final activeRefId = (personaRefs[activeProfileId] ?? '').isNotEmpty
+        ? personaRefs[activeProfileId]!
+        : ultronId;
     final nextEnabled = forceEnabled ?? true;
 
-    if (nextEnabled && (apiKey.isEmpty || refId.isEmpty)) {
+    if (nextEnabled && (apiKey.isEmpty || activeRefId.isEmpty)) {
       setState(() {
         _fishFeedback =
-            'Informe a API Key e o Reference ID da voz no Fish Studio.';
+            'Informe a API Key e o Reference ID da voz de ${widget.voiceService.wakeWordProfile.label} (ou o padrão U.L.T.R.O.N.) no Fish Studio.';
         _fishFeedbackIsError = true;
       });
       return;
@@ -184,7 +210,8 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
       final next = FishAudioConfig(
         enabled: nextEnabled,
         apiKey: apiKey,
-        referenceId: refId,
+        referenceId: ultronId.isNotEmpty ? ultronId : activeRefId,
+        personaReferenceIds: personaRefs,
         language: _fishLanguage,
         model: _fishModel,
       );
@@ -202,7 +229,8 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
             _fishFeedback = 'Salvo, mas a API falhou e usou voz offline: $err';
             _fishFeedbackIsError = true;
           } else {
-            _fishFeedback = 'Fish Audio ativo ($_fishLanguage • $_fishModel).';
+            _fishFeedback =
+                'Fish Audio ativo para ${widget.voiceService.wakeWordProfile.label} ($_fishLanguage • $_fishModel).';
             _fishFeedbackIsError = false;
           }
         });
@@ -224,8 +252,59 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
     }
   }
 
+  Widget _fishPersonaRefField({
+    required Key? fieldKey,
+    required TextEditingController controller,
+    required WakeWordProfile profile,
+    required Color accent,
+    required bool isCurrentPersona,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: TextField(
+        key: fieldKey,
+        controller: controller,
+        style: const TextStyle(color: Color(0xFFEEEEEE), fontSize: 11.5),
+        decoration: InputDecoration(
+          labelText: isCurrentPersona
+              ? 'ID Fish Studio — ${profile.label} (ATIVO)'
+              : 'ID Fish Studio — ${profile.label}',
+          hintText: 'Ex.: 933563129e564b19a115bedd57b7406a',
+          labelStyle: TextStyle(
+            color: isCurrentPersona ? accent : _rose,
+            fontSize: 10.5,
+            fontWeight: isCurrentPersona ? FontWeight.bold : FontWeight.normal,
+          ),
+          hintStyle: const TextStyle(
+            color: Color(0xFF686872),
+            fontSize: 10.5,
+          ),
+          isDense: true,
+          filled: true,
+          fillColor: const Color(0xFF111114),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(
+              color: isCurrentPersona ? accent.withValues(alpha: 0.6) : _border,
+            ),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: accent, width: 1.4),
+          ),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: _border),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final accent = UltronTheme.accentOf(context);
+    final onAccent = UltronTheme.onAccentFor(accent);
     final activeVoice = widget.voiceService.activeVoiceLabel;
     final currentProfile = widget.voiceService.profile;
     final currentWakeWord = widget.voiceService.wakeWordProfile;
@@ -282,7 +361,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                 const SizedBox(height: 2),
                 Text(
                   fishActive
-                      ? 'Reference ID: ${widget.voiceService.fishConfig.shortReferenceId} (fallback: ${widget.voiceService.activeVoiceName ?? "Android"})'
+                      ? 'Reference ID (${currentWakeWord.label}): ${widget.voiceService.fishConfig.shortReferenceIdFor(currentWakeWord.id)} (fallback: ${widget.voiceService.activeVoiceName ?? "Android"})'
                       : 'Timbre: ${currentProfile.label} (Tom ${currentProfile.pitch} • Velocidade ${currentProfile.rate})',
                   style: const TextStyle(color: _rose, fontSize: 10),
                 ),
@@ -316,12 +395,12 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                       onPressed: () => _selectWakeWord(wp),
                       style: OutlinedButton.styleFrom(
                         backgroundColor: currentWakeWord == wp
-                            ? _crimson
+                            ? accent
                             : const Color(0xFF18181D),
                         foregroundColor:
-                            currentWakeWord == wp ? Colors.black : _rose,
+                            currentWakeWord == wp ? onAccent : _rose,
                         side: BorderSide(
-                          color: currentWakeWord == wp ? _crimson : _border,
+                          color: currentWakeWord == wp ? accent : _border,
                         ),
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -359,12 +438,12 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                       onPressed: () => _selectProfile(prof),
                       style: OutlinedButton.styleFrom(
                         backgroundColor: currentProfile == prof
-                            ? _crimson
+                            ? accent
                             : const Color(0xFF18181D),
                         foregroundColor:
-                            currentProfile == prof ? Colors.black : _rose,
+                            currentProfile == prof ? onAccent : _rose,
                         side: BorderSide(
-                          color: currentProfile == prof ? _crimson : _border,
+                          color: currentProfile == prof ? accent : _border,
                         ),
                         visualDensity: VisualDensity.compact,
                       ),
@@ -387,7 +466,10 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                 child: FilledButton.icon(
                   onPressed: () => unawaited(
                       widget.voiceService.preview().catchError((_) {})),
-                  style: FilledButton.styleFrom(backgroundColor: _crimson),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: accent,
+                    foregroundColor: onAccent,
+                  ),
                   icon: const Icon(Icons.play_arrow, size: 16),
                   label: const Text(
                     'TESTAR VOZ',
@@ -456,6 +538,9 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
   }
 
   Widget _buildFishAudioCard(bool fishActive) {
+    final accent = UltronTheme.accentOf(context);
+    final onAccent = UltronTheme.onAccentFor(accent);
+    final activeWake = widget.voiceService.wakeWordProfile;
     final langCodes =
         FishAudioConfig.supportedLanguages.map((e) => e.code).toList();
     final safeLang = langCodes.contains(_fishLanguage) ? _fishLanguage : 'pt';
@@ -468,7 +553,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
       color: const Color(0xFF111114),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: fishActive ? _crimson : _border),
+        side: BorderSide(color: fishActive ? accent : _border),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -484,7 +569,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                   Icon(
                     Icons.graphic_eq,
                     size: 16,
-                    color: fishActive ? _crimson : _rose,
+                    color: fishActive ? accent : _rose,
                   ),
                   const SizedBox(width: 8),
                   const Expanded(
@@ -504,13 +589,13 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                       vertical: 2,
                     ),
                     decoration: BoxDecoration(
-                      color: fishActive ? _crimson : const Color(0xFF18181D),
+                      color: fishActive ? accent : const Color(0xFF18181D),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
                       fishActive ? 'ATIVO' : 'API',
                       style: TextStyle(
-                        color: fishActive ? Colors.black : _rose,
+                        color: fishActive ? onAccent : _rose,
                         fontSize: 9,
                         fontWeight: FontWeight.bold,
                       ),
@@ -537,7 +622,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                     key: const ValueKey('fish_enabled_switch'),
                     dense: true,
                     contentPadding: EdgeInsets.zero,
-                    activeColor: _crimson,
+                    activeThumbColor: accent,
                     title: const Text(
                       'Usar voz do Fish Studio (API)',
                       style: TextStyle(
@@ -547,7 +632,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                       ),
                     ),
                     subtitle: const Text(
-                      'Com fallback automático para a voz offline se falhar',
+                      'Cada personalidade guarda seu próprio Reference ID',
                       style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 10),
                     ),
                     value: _fishEnabled,
@@ -596,27 +681,33 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  TextField(
-                    key: const ValueKey('fish_reference_id_field'),
-                    controller: _fishRefCtrl,
-                    style:
-                        const TextStyle(color: Color(0xFFEEEEEE), fontSize: 12),
-                    decoration: InputDecoration(
-                      labelText: 'Reference ID (ID da voz no Fish Studio)',
-                      hintText: 'Ex.: 933563129e564b19a115bedd57b7406a',
-                      labelStyle: const TextStyle(color: _rose, fontSize: 11),
-                      hintStyle: const TextStyle(
-                        color: Color(0xFF686872),
-                        fontSize: 11,
-                      ),
-                      isDense: true,
-                      filled: true,
-                      fillColor: const Color(0xFF111114),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(color: _border),
-                      ),
-                    ),
+                  _fishPersonaRefField(
+                    fieldKey: const ValueKey('fish_reference_id_field'),
+                    controller: _fishRefUltronCtrl,
+                    profile: WakeWordProfile.ultron,
+                    accent: accent,
+                    isCurrentPersona: activeWake == WakeWordProfile.ultron,
+                  ),
+                  _fishPersonaRefField(
+                    fieldKey: const ValueKey('fish_reference_id_jarvis'),
+                    controller: _fishRefJarvisCtrl,
+                    profile: WakeWordProfile.jarvis,
+                    accent: accent,
+                    isCurrentPersona: activeWake == WakeWordProfile.jarvis,
+                  ),
+                  _fishPersonaRefField(
+                    fieldKey: const ValueKey('fish_reference_id_visao'),
+                    controller: _fishRefVisaoCtrl,
+                    profile: WakeWordProfile.visao,
+                    accent: accent,
+                    isCurrentPersona: activeWake == WakeWordProfile.visao,
+                  ),
+                  _fishPersonaRefField(
+                    fieldKey: const ValueKey('fish_reference_id_edith'),
+                    controller: _fishRefEdithCtrl,
+                    profile: WakeWordProfile.edith,
+                    accent: accent,
+                    isCurrentPersona: activeWake == WakeWordProfile.edith,
                   ),
                   const SizedBox(height: 8),
                   Row(
@@ -713,7 +804,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
                           color: _fishFeedbackIsError
-                              ? _crimson
+                              ? const Color(0xFFF10D28)
                               : const Color(0xFF22C55E),
                         ),
                       ),
@@ -738,7 +829,8 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                               ? null
                               : () => _saveAndTestFish(forceEnabled: true),
                           style: FilledButton.styleFrom(
-                            backgroundColor: _crimson,
+                            backgroundColor: accent,
+                            foregroundColor: onAccent,
                           ),
                           icon: _fishSaving
                               ? const SizedBox(
@@ -784,6 +876,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
   }
 
   Widget _buildLocalVoiceTile(TtsVoiceOption voice, bool fishActive) {
+    final accent = UltronTheme.accentOf(context);
     final isSelected =
         !fishActive && voice.name == widget.voiceService.activeVoiceName;
     final isFallback =
@@ -793,7 +886,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
       color: isSelected ? const Color(0xFF18181D) : const Color(0xFF111114),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(10),
-        side: BorderSide(color: isSelected ? _crimson : _border),
+        side: BorderSide(color: isSelected ? accent : _border),
       ),
       child: ListTile(
         dense: true,
@@ -816,7 +909,7 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
         ),
         trailing: Icon(
           isSelected ? Icons.check_circle : Icons.play_circle_outline,
-          color: isSelected ? _crimson : _rose,
+          color: isSelected ? accent : _rose,
           size: 20,
         ),
         onTap: () => _selectVoice(voice),

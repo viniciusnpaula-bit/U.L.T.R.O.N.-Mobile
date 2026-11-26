@@ -2,6 +2,8 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ultron_mobile/models/assistant_persona.dart';
+import 'package:ultron_mobile/services/speech_text.dart';
 import 'package:ultron_mobile/ui/widgets/core_orb.dart';
 
 void main() {
@@ -177,5 +179,35 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
     await tester.pump();
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'CoreOrb renders distinct 3D cores for Ultron, Jarvis, Visão and Edith without throwing',
+      (tester) async {
+    for (final profile in WakeWordProfile.values) {
+      final persona = AssistantPersona.forWakeProfile(profile);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            backgroundColor: const Color(0xFF080808),
+            body: Center(
+              child: SizedBox(
+                width: 220,
+                height: 220,
+                child: CoreOrb(
+                  stage: CoreStage.center,
+                  energy: 0.65,
+                  accentColor: persona.accentColor,
+                  coreProfile: profile,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 32));
+      expect(find.byType(CoreOrb), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }
   });
 }

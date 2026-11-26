@@ -102,6 +102,11 @@ class CoreScreen extends StatefulWidget {
 class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   static const _crimson = UltronColors.crimson;
   static const _rose = UltronColors.textSecondary;
+
+  Color get _accent => activePersona.accentColor;
+  Color get _accentDark => activePersona.accentDark;
+  Color get _accentBorder => activePersona.accentBorder;
+  Color get _onAccent => UltronTheme.onAccentFor(_accent);
   static const _border = UltronColors.border;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -167,7 +172,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   SessionTelemetry sessionTelemetry = SessionTelemetry.initial();
   TacticalMode activeTacticalMode = TacticalMode.geral;
   bool pcLanConfigured = false;
-  String installedVersion = 'v1.6.6';
+  String installedVersion = 'v1.6.7';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -1007,9 +1012,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         aiBaseUrl: primaryAi.baseUrl,
         aiKey: primaryAi.apiKey,
         aiModel: primaryAi.model,
-        fishEnabled: fish.enabled,
+        fishEnabled: voiceService.isFishAudioActive,
         fishKey: fish.apiKey,
-        fishRefId: fish.referenceId,
+        fishRefId: voiceService.activeFishReferenceId,
         fishLanguage: fish.language,
         fishModel: fish.model,
         whisperMode: nightFocusMode,
@@ -1462,8 +1467,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         backgroundColor: const Color(0xFF18181D),
         title: Text(
           'Responder ${msg.sender} (${msg.appLabel})',
-          style: const TextStyle(
-            color: _crimson,
+          style: TextStyle(
+            color: _accent,
             fontSize: 13,
             fontWeight: FontWeight.bold,
           ),
@@ -1496,7 +1501,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             child: const Text('CANCELAR', style: TextStyle(color: _rose)),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _crimson),
+            style: FilledButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: _onAccent,
+            ),
             onPressed: () => Navigator.of(ctx).pop(replyCtrl.text.trim()),
             child: const Text('ENVIAR AGORA'),
           ),
@@ -1816,7 +1824,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             });
                           }
                         },
-                  style: FilledButton.styleFrom(backgroundColor: _crimson),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _accent,
+                    foregroundColor: _onAccent,
+                  ),
                   icon: const Icon(Icons.fingerprint, size: 16),
                   label: const Text('Liberar c/ Biometria'),
                 ),
@@ -2015,7 +2026,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           );
                           if (ctx.mounted) Navigator.of(ctx).pop(true);
                         },
-                  style: FilledButton.styleFrom(backgroundColor: _crimson),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _accent,
+                    foregroundColor: _onAccent,
+                  ),
                   child: const Text('Salvar Chave NFC'),
                 ),
               ],
@@ -2832,10 +2846,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 'VISÃO MULTIMODAL (CÂMERA / GALERIA)',
                 style: TextStyle(
-                  color: _crimson,
+                  color: _accent,
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.0,
@@ -2890,8 +2904,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         backgroundColor: const Color(0xFF18181D),
         title: Text(
           title,
-          style: const TextStyle(
-            color: _crimson,
+          style: TextStyle(
+            color: _accent,
             fontSize: 13,
             fontWeight: FontWeight.bold,
           ),
@@ -2906,7 +2920,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             child: const Text('CANCELAR', style: TextStyle(color: _rose)),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: _crimson),
+            style: FilledButton.styleFrom(
+              backgroundColor: _accent,
+              foregroundColor: _onAccent,
+            ),
             onPressed: () => Navigator.of(ctx).pop(true),
             child: Text(confirmText),
           ),
@@ -2921,9 +2938,12 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       context,
       voiceService: voiceService,
       onChanged: () {
+        UltronTheme.setPersona(activePersona);
         if (mounted) {
           setState(() => selectedVoiceProfile = voiceService.profile);
         }
+        unawaited(deviceService
+            .setDynamicIslandAccent(activePersona.accentColor.toARGB32()));
         unawaited(_syncBackgroundVoiceConfig());
       },
     );
@@ -4065,10 +4085,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'SELECIONAR MODO TÁTICO (HELPER ISOLADO)',
                 style: TextStyle(
-                  color: _crimson,
+                  color: _accent,
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.0,
@@ -4082,7 +4102,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   contentPadding: const EdgeInsets.symmetric(horizontal: 6),
                   leading: Icon(
                     selected ? Icons.radio_button_checked : Icons.radio_button_off,
-                    color: selected ? _crimson : const Color(0xFF9A9AA3),
+                    color: selected ? _accent : const Color(0xFF9A9AA3),
                     size: 18,
                   ),
                   title: Text(
@@ -4257,7 +4277,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   icon: Icons.system_update_outlined,
                   title: 'Atualização disponível',
                   subtitle: 'Versão instalada: $installedVersion',
-                  accentColor: UltronColors.crimson,
+                  accentColor: _accent,
                   onTap: () {
                     Navigator.of(ctx).pop();
                     Navigator.of(context).push(
@@ -4408,10 +4428,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
-                                color: UltronColors.crimsonDark,
+                                color: _accentDark,
                                 borderRadius: BorderRadius.circular(6),
                                 border: Border.all(
-                                  color: UltronColors.crimsonBorder,
+                                  color: _accentBorder,
                                 ),
                               ),
                               child: Text(
@@ -4442,7 +4462,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 onPressed: _showNotificationsSheet,
                 icon: Badge(
                   isLabelVisible: hasNotifBadge,
-                  backgroundColor: UltronColors.crimson,
+                  backgroundColor: _accent,
                   smallSize: 7,
                   child: const Icon(
                     Icons.notifications_none_rounded,
@@ -4458,13 +4478,13 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     : 'Ativar escuta contínua ("Ultron")',
                 child: Material(
                   color: continuousActive
-                      ? UltronColors.crimsonDark
+                      ? _accentDark
                       : UltronColors.surface,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(18),
                     side: BorderSide(
                       color: continuousActive
-                          ? UltronColors.crimsonBorder
+                          ? _accentBorder
                           : UltronColors.border,
                     ),
                   ),
@@ -4708,7 +4728,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   value: activeTacticalMode.shortLabel,
                   valueColor: activeTacticalMode.isGeneral
                       ? UltronColors.textSecondary
-                      : UltronColors.crimson,
+                      : _accent,
                 ),
               ),
               _telemetryDot(),
@@ -4802,7 +4822,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 borderRadius: BorderRadius.circular(24),
                 border: Border.all(
                   color: (listeningVoice || voicePipeline.isPushToTalkActive)
-                      ? UltronColors.crimson
+                      ? _accent
                       : UltronColors.border,
                 ),
               ),
@@ -4819,7 +4839,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                       decoration: BoxDecoration(
                         color: UltronColors.surfaceElevated,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: UltronColors.crimsonBorder),
+                        border: Border.all(color: _accentBorder),
                       ),
                       child: Row(
                         children: [
@@ -4905,7 +4925,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             hintStyle: TextStyle(
                               color: (listeningVoice ||
                                       voicePipeline.isPushToTalkActive)
-                                  ? UltronColors.crimson
+                                  ? _accent
                                   : UltronColors.textMuted,
                               fontSize: 13.5,
                             ),
@@ -5082,6 +5102,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                         shaderProgram: widget.shaderProgram,
                         energy: orbEnergy,
                         accentColor: activePersona.accentColor,
+                        coreProfile: activePersona.wakeProfile,
                       ),
                     ),
                   ),
@@ -5152,6 +5173,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                         shaderProgram: widget.shaderProgram,
                         energy: orbEnergy,
                         accentColor: activePersona.accentColor,
+                        coreProfile: activePersona.wakeProfile,
                       ),
                     ),
                   ),
@@ -5184,10 +5206,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           HapticFeedback.selectionClick();
                           voiceService.stop();
                         },
-                        icon: const Icon(
+                        icon: Icon(
                           Icons.stop_circle_outlined,
                           size: 19,
-                          color: UltronColors.crimson,
+                          color: _accent,
                         ),
                       ),
                     IconButton(
@@ -5218,8 +5240,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             itemCount: feed.length + (sending ? 1 : 0),
             itemBuilder: (context, index) {
               if (index == feed.length) {
-                return const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+                return Padding(
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
                   child: Row(
                     children: [
                       SizedBox(
@@ -5227,11 +5250,11 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                         height: 14,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: UltronColors.crimson,
+                          color: _accent,
                         ),
                       ),
-                      SizedBox(width: 10),
-                      Text(
+                      const SizedBox(width: 10),
+                      const Text(
                         'Processando resposta...',
                         style: TextStyle(
                           color: UltronColors.textSecondary,
@@ -5353,18 +5376,18 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Row(
+                        Row(
                           children: [
                             Icon(
                               Icons.description_outlined,
                               size: 13,
-                              color: _crimson,
+                              color: _accent,
                             ),
-                            SizedBox(width: 6),
+                            const SizedBox(width: 6),
                             Text(
                               'PALCO ATIVO',
                               style: TextStyle(
-                                color: _crimson,
+                                color: _accent,
                                 fontSize: 10,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -5508,6 +5531,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     shaderProgram: widget.shaderProgram,
                     energy: voiceService.isSpeaking ? 0.85 : 0.28,
                     accentColor: activePersona.accentColor,
+                    coreProfile: activePersona.wakeProfile,
                   ),
                 ),
               ),
@@ -5534,10 +5558,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
+                  Text(
                     'MODO TELA CHEIA [FULLSCREEN]',
                     style: TextStyle(
-                      color: _crimson,
+                      color: _accent,
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
                     ),
@@ -5594,8 +5618,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               child: FilledButton(
                 onPressed: () => _setStage(CoreStage.center),
                 style: FilledButton.styleFrom(
-                  backgroundColor: _crimson,
-                  foregroundColor: const Color(0xFFEEEEEE),
+                  backgroundColor: _accent,
+                  foregroundColor: _onAccent,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -5839,8 +5863,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                       child: FilledButton.icon(
                         onPressed: _openNfcEnrollmentWizard,
                         style: FilledButton.styleFrom(
-                          backgroundColor: _crimson,
-                          foregroundColor: Colors.white,
+                          backgroundColor: _accent,
+                          foregroundColor: _onAccent,
                           visualDensity: VisualDensity.compact,
                         ),
                         icon: const Icon(Icons.nfc, size: 15),
@@ -5999,10 +6023,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'LOG IMUTÁVEL DE AUDITORIA (SHA-256 • P5)',
                       style: TextStyle(
-                        color: _crimson,
+                        color: _accent,
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
                       ),
@@ -6129,7 +6153,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             }
                           },
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: _crimson,
+                            foregroundColor: _accent,
                             side: const BorderSide(color: _border),
                             visualDensity: VisualDensity.compact,
                           ),
@@ -6186,7 +6210,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             );
                           },
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: _crimson,
+                            foregroundColor: _accent,
                             side: const BorderSide(color: _border),
                             visualDensity: VisualDensity.compact,
                           ),
@@ -6372,8 +6396,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           child: FilledButton(
             onPressed: _lockSession,
             style: FilledButton.styleFrom(
-              backgroundColor: _crimson,
-              foregroundColor: const Color(0xFFEEEEEE),
+              backgroundColor: _accent,
+              foregroundColor: _onAccent,
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -6459,7 +6483,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             percentage: batPct,
                             color: hasBat && batLevel < 20
                                 ? UltronColors.warning
-                                : UltronColors.crimson,
+                                : _accent,
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -6469,7 +6493,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             label: 'RAM',
                             subLabel: ramSub,
                             percentage: ramPct,
-                            color: UltronColors.crimson,
+                            color: _accent,
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -6585,10 +6609,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             ),
                             style: FilledButton.styleFrom(
                               backgroundColor: ecoVadSentinelRunning
-                                  ? const Color(0xFFF10D28)
+                                  ? _accent
                                   : const Color(0xFF18181D),
                               foregroundColor: ecoVadSentinelRunning
-                                  ? const Color(0xFF9A9AA3)
+                                  ? _onAccent
                                   : _rose,
                               visualDensity: VisualDensity.compact,
                             ),
@@ -6626,8 +6650,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               );
                             },
                             style: FilledButton.styleFrom(
-                              backgroundColor: _crimson,
-                              foregroundColor: const Color(0xFFEEEEEE),
+                              backgroundColor: _accent,
+                              foregroundColor: _onAccent,
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.graphic_eq, size: 13),
@@ -6688,14 +6712,14 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                 },
                                 style: OutlinedButton.styleFrom(
                                   backgroundColor: selectedVoiceProfile == prof
-                                      ? _crimson
+                                      ? _accent
                                       : const Color(0xFF18181D),
                                   foregroundColor: selectedVoiceProfile == prof
-                                      ? Colors.black
+                                      ? _onAccent
                                       : _rose,
                                   side: BorderSide(
                                     color: selectedVoiceProfile == prof
-                                        ? _crimson
+                                        ? _accent
                                         : _border,
                                   ),
                                   visualDensity: VisualDensity.compact,
@@ -6777,10 +6801,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       '📅 AGENDA ANDROID & BRIEFING MATINAL (P4)',
                       style: TextStyle(
-                        color: _crimson,
+                        color: _accent,
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                       ),
@@ -6815,8 +6839,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                               unawaited(_runMorningBriefing());
                             },
                             style: FilledButton.styleFrom(
-                              backgroundColor: _crimson,
-                              foregroundColor: const Color(0xFFEEEEEE),
+                              backgroundColor: _accent,
+                              foregroundColor: _onAccent,
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.wb_sunny_outlined, size: 14),
@@ -6850,10 +6874,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
+                        Text(
                           '📨 SENTINELA DE MENSAGENS & WHATSAPP',
                           style: TextStyle(
-                            color: _crimson,
+                            color: _accent,
                             fontSize: 10,
                             fontWeight: FontWeight.bold,
                           ),
@@ -6865,7 +6889,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           ),
                           decoration: BoxDecoration(
                             color: notificationSentinelEnabled
-                                ? const Color(0xFFF10D28)
+                                ? _accent
                                 : const Color(0xFF18181D),
                             borderRadius: BorderRadius.circular(4),
                           ),
@@ -6875,7 +6899,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                 : 'PERMISSÃO PENDENTE',
                             style: TextStyle(
                               color: notificationSentinelEnabled
-                                  ? const Color(0xFF9A9AA3)
+                                  ? _onAccent
                                   : _rose,
                               fontSize: 8,
                               fontWeight: FontWeight.bold,
@@ -6892,8 +6916,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           onPressed: () =>
                               deviceService.openNotificationListenerSettings(),
                           style: FilledButton.styleFrom(
-                            backgroundColor: _crimson,
-                            foregroundColor: const Color(0xFFEEEEEE),
+                            backgroundColor: _accent,
+                            foregroundColor: _onAccent,
                             visualDensity: VisualDensity.compact,
                           ),
                           icon: const Icon(
@@ -7012,10 +7036,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                                         borderRadius: BorderRadius.circular(6),
                                         border: Border.all(color: _border),
                                       ),
-                                      child: const Text(
+                                      child: Text(
                                         'RESPONDER',
                                         style: TextStyle(
-                                          color: _crimson,
+                                          color: _accent,
                                           fontSize: 8.5,
                                           fontWeight: FontWeight.bold,
                                         ),
@@ -7084,8 +7108,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           child: FilledButton.icon(
                             onPressed: () => _sendQuickMessage(viaSms: false),
                             style: FilledButton.styleFrom(
-                              backgroundColor: _crimson,
-                              foregroundColor: const Color(0xFFEEEEEE),
+                              backgroundColor: _accent,
+                              foregroundColor: _onAccent,
                               visualDensity: VisualDensity.compact,
                             ),
                             icon: const Icon(Icons.chat_bubble, size: 13),
@@ -7138,10 +7162,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
+                        Text(
                           'OBSIDIAN SEGUNDO CÉREBRO & SKILLS (.MD)',
                           style: TextStyle(
-                            color: _crimson,
+                            color: _accent,
                             fontSize: 10,
                             fontWeight: FontWeight.bold,
                           ),
@@ -7212,8 +7236,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           onPressed: () =>
                               _saveQuickObsidianNote(quickNoteController.text),
                           style: FilledButton.styleFrom(
-                            backgroundColor: _crimson,
-                            foregroundColor: const Color(0xFFEEEEEE),
+                            backgroundColor: _accent,
+                            foregroundColor: _onAccent,
                             visualDensity: VisualDensity.compact,
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                           ),
@@ -7281,8 +7305,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                   onPressed: _toggleTorchQuick,
                   style: FilledButton.styleFrom(
                     backgroundColor:
-                        torchOn ? const Color(0xFF9A9AA3) : _crimson,
-                    foregroundColor: const Color(0xFFEEEEEE),
+                        torchOn ? const Color(0xFF9A9AA3) : _accent,
+                    foregroundColor: torchOn ? const Color(0xFF0B0B0D) : _onAccent,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -7507,7 +7531,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             onPressed: () => _setPanel(_ActivePanel.main),
             style: OutlinedButton.styleFrom(
               backgroundColor: const Color(0xFF18181D),
-              foregroundColor: _crimson,
+              foregroundColor: _accent,
               side: const BorderSide(color: _border),
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
@@ -7650,7 +7674,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               : 'WebSocket 16 kHz / 24 kHz via microfone nativo e ActionGate',
           accentColor: geminiLiveService.isActive
               ? UltronColors.positive
-              : UltronColors.crimson,
+              : _accent,
           onTap: () => unawaited(_toggleGeminiLive()),
         ),
         const SizedBox(height: 8),
@@ -7684,7 +7708,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: activeProviderUsed.contains(preset.name.split(' ').first)
-                    ? UltronColors.crimsonBorder
+                    ? _accentBorder
                     : UltronColors.borderSubtle,
               ),
             ),
@@ -7864,7 +7888,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               onPressed: () => _setPanel(_ActivePanel.main),
               style: OutlinedButton.styleFrom(
                 backgroundColor: const Color(0xFF18181D),
-                foregroundColor: _crimson,
+                foregroundColor: _accent,
                 side: const BorderSide(color: _border),
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../services/android_actions_service.dart';
 import '../../services/desktop_pairing_service.dart';
 import '../../services/device_control_service.dart';
+import '../theme/ultron_theme.dart';
 import '../widgets/action_confirmation_dialog.dart';
 
 class DesktopPairingScreen extends StatefulWidget {
@@ -251,6 +252,8 @@ class _DesktopPairingScreenState extends State<DesktopPairingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final accent = UltronTheme.accentOf(context);
+    final onAccent = UltronTheme.onAccentFor(accent);
     return Scaffold(
       backgroundColor: const Color(0xFF080808),
       appBar: AppBar(title: const Text('Parear com U.L.T.R.O.N. Desktop')),
@@ -264,7 +267,7 @@ class _DesktopPairingScreenState extends State<DesktopPairingScreen> {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: _isPaired
-                    ? const Color(0xFFF10D28).withValues(alpha: 0.7)
+                    ? accent.withValues(alpha: 0.7)
                     : Colors.white24,
               ),
             ),
@@ -362,7 +365,8 @@ class _DesktopPairingScreenState extends State<DesktopPairingScreen> {
           FilledButton.icon(
             onPressed: _busy ? null : _scanQrCode,
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFF10D28),
+              backgroundColor: accent,
+              foregroundColor: onAccent,
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
             icon: const Icon(Icons.qr_code_scanner),
