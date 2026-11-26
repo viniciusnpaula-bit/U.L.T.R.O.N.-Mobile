@@ -58,7 +58,7 @@ model_files=(
 # mantendo 0 falsos positivos em corpus negativo pt-BR/EN ("outro", "neutro", "ultra", etc.).
 # shortcut: tokens fixos para o modelo Gigaspeech fixado; ao trocar MODEL_NAME, regenere
 # com sentencepiece a partir de bpe.model e confirme que nenhum token vira <unk>.
-keywords=(
+keywords_ultron=(
   "▁ UL T RO N :2.1 #0.07"
   "▁ U T RO N :2.0 #0.07"
   "▁OUT RO N :2.0 #0.07"
@@ -68,9 +68,30 @@ keywords=(
   "▁ UL T RO M :1.9 #0.08"
 )
 
+keywords_jarvis=(
+  "▁JA R VI S :1.5 #0.25"
+  "▁ J AR VI S :1.2 #0.25"
+)
+
+keywords_edith=(
+  "▁E DI TH :1.5 #0.25"
+  "▁E DI T :1.1 #0.25"
+  "▁ ED IT :1.1 #0.25"
+)
+
+keywords_visao=(
+  "▁VI S A O :1.5 #0.25"
+  "▁VI Z A O :1.3 #0.25"
+  "▁VI S ION :1.3 #0.25"
+)
+
 write_keywords() {
-  printf '%s\n' "${keywords[@]}" > "$MODEL_DIR/keywords.txt"
-  python3 - "$MODEL_DIR" "${keywords[@]}" <<'PY'
+  printf '%s\n' "${keywords_ultron[@]}" > "$MODEL_DIR/keywords.txt"
+  printf '%s\n' "${keywords_ultron[@]}" > "$MODEL_DIR/keywords_ultron.txt"
+  printf '%s\n' "${keywords_jarvis[@]}" > "$MODEL_DIR/keywords_jarvis.txt"
+  printf '%s\n' "${keywords_edith[@]}" > "$MODEL_DIR/keywords_edith.txt"
+  printf '%s\n' "${keywords_visao[@]}" > "$MODEL_DIR/keywords_visao.txt"
+  python3 - "$MODEL_DIR" <<'PY'
 from pathlib import Path
 import sys
 
@@ -80,14 +101,24 @@ vocab = {
     for line in (model_dir / "tokens.txt").read_text(encoding="utf-8").splitlines()
     if line
 }
-for line in sys.argv[2:]:
-    tokens = [item for item in line.split() if not item.startswith((":", "#"))]
-    invalid = [token for token in tokens if token not in vocab or token == "<unk>"]
-    if not tokens or invalid:
-        raise SystemExit(f"keywords.txt inválido ({line!r}): {invalid or 'vazio'}")
-print("Palavras de ativação:", " | ".join(" ".join(
-    item for item in line.split() if not item.startswith((":", "#")))
-    for line in sys.argv[2:]))
+files = [
+    "keywords.txt",
+    "keywords_ultron.txt",
+    "keywords_jarvis.txt",
+    "keywords_edith.txt",
+    "keywords_visao.txt",
+]
+for fname in files:
+    fpath = model_dir / fname
+    lines = [l.strip() for l in fpath.read_text(encoding="utf-8").splitlines() if l.strip()]
+    if not lines:
+        raise SystemExit(f"{fname} vazio!")
+    for line in lines:
+        tokens = [item for item in line.split() if not item.startswith((":", "#", "@"))]
+        invalid = [token for token in tokens if token not in vocab or token == "<unk>"]
+        if not tokens or invalid:
+            raise SystemExit(f"{fname} inválido ({line!r}): {invalid or 'vazio'}")
+    print(f"Validado {fname}: {len(lines)} variantes")
 PY
 }
 

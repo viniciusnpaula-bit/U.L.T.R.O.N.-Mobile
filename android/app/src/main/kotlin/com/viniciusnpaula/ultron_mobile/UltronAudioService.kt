@@ -336,8 +336,6 @@ class UltronAudioService : Service() {
             return START_NOT_STICKY
         }
 
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putBoolean(PREF_ENABLED, true).apply()
         userPaused = false
         isRunning = true
         startEcoVadLoop()
@@ -366,6 +364,8 @@ class UltronAudioService : Service() {
                     if (keywordSpotter == null) keywordSpotter = createKeywordSpotter(currentWakeProfile)
                     modelLoaded = keywordSpotter != null
                     if (!modelLoaded) throw IllegalStateException("KeywordSpotter nulo")
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().putBoolean(PREF_ENABLED, true).apply()
                     Stats.lastError = "nenhum"
                     acquireWakeLockSafely()
                     updateNotification("sherpa-onnx KWS carregado — diga \"${currentWakeProfile.displayName}\"")
@@ -488,46 +488,108 @@ class UltronAudioService : Service() {
         }
     }
 
+    private fun assetExists(assetPath: String): Boolean {
+        return try {
+            assets.open(assetPath).use { stream ->
+                stream.read() != -1
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Valida em Kotlin se o arquivo de keywords existe nos assets e se todos os tokens
+     * estão presentes em tokens.txt ANTES de chamar o JNI do sherpa-onnx (que encerra
+     * o processo nativo com exit(-1) caso algum arquivo/token falte).
+     */
+    private fun validateKeywordsAsset(keywordsAssetPath: String, tokensAssetPath: String): Boolean {
+        if (!assetExists(keywordsAssetPath) || !assetExists(tokensAssetPath)) {
+            return false
+        }
+        return try {
+            val vocab = assets.open(tokensAssetPath).bufferedReader(Charsets.UTF_8).useLines { lines ->
+                lines.mapNotNull { line ->
+                    val token = line.trim().split(Regex("\\s+"), limit = 2).firstOrNull()
+                    if (token.isNullOrEmpty()) null else token
+                }.toHashSet()
+            }
+            if (vocab.isEmpty()) return false
+            var validLines = 0
+            assets.open(keywordsAssetPath).bufferedReader(Charsets.UTF_8).useLines { lines ->
+                for (raw in lines) {
+                    val trimmed = raw.trim()
+                    if (trimmed.isEmpty()) continue
+                    val tokens = trimmed.split(Regex("\\s+")).filter { part ->
+                        part.isNotEmpty() &&
+                            !part.startsWith(":") &&
+                            !part.startsWith("#") &&
+                            !part.startsWith("@")
+                    }
+                    if (tokens.isEmpty() || tokens.any { it !in vocab || it == "<unk>" }) {
+                        return false
+                    }
+                    validLines++
+                }
+            }
+            validLines > 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun createKeywordSpotter(profile: WakeWordProfile = currentWakeProfile): KeywordSpotter {
         validateSherpaJniConfigFields()
+        val encoderAsset = "$MODEL_DIR/encoder-epoch-12-avg-2-chunk-16-left-64.onnx"
+        val decoderAsset = "$MODEL_DIR/decoder-epoch-12-avg-2-chunk-16-left-64.onnx"
+        val joinerAsset = "$MODEL_DIR/joiner-epoch-12-avg-2-chunk-16-left-64.onnx"
+        val tokensAsset = "$MODEL_DIR/tokens.txt"
+        val missingModelFiles = listOf(encoderAsset, decoderAsset, joinerAsset, tokensAsset)
+            .filterNot { assetExists(it) }
+        if (missingModelFiles.isNotEmpty()) {
+            throw IllegalStateException(
+                "Arquivos do modelo sherpa-onnx ausentes nos assets: ${missingModelFiles.joinToString(", ")}"
+            )
+        }
+
+        val preferredKeywords = "$MODEL_DIR/${profile.keywordsAssetFile}"
+        val fallbackKeywords = "$MODEL_DIR/keywords.txt"
+        val resolvedKeywordsFile = when {
+            validateKeywordsAsset(preferredKeywords, tokensAsset) -> preferredKeywords
+            validateKeywordsAsset(fallbackKeywords, tokensAsset) -> fallbackKeywords
+            else -> throw IllegalStateException(
+                "Nenhum arquivo de keywords válido encontrado em $MODEL_DIR (${profile.keywordsAssetFile} / keywords.txt)"
+            )
+        }
+
         val modelConfig = OnlineModelConfig(
             transducer = OnlineTransducerModelConfig(
-                encoder = "$MODEL_DIR/encoder-epoch-12-avg-2-chunk-16-left-64.onnx",
-                decoder = "$MODEL_DIR/decoder-epoch-12-avg-2-chunk-16-left-64.onnx",
-                joiner = "$MODEL_DIR/joiner-epoch-12-avg-2-chunk-16-left-64.onnx",
+                encoder = encoderAsset,
+                decoder = decoderAsset,
+                joiner = joinerAsset,
             ),
-            tokens = "$MODEL_DIR/tokens.txt",
+            tokens = tokensAsset,
             numThreads = 2,
             provider = "cpu",
             modelType = "zipformer2",
         )
-        val primaryConfig = KeywordSpotterConfig(
+        val config = KeywordSpotterConfig(
             featConfig = FeatureConfig(sampleRate = SAMPLE_RATE_HZ, featureDim = 80),
             modelConfig = modelConfig,
-            keywordsFile = "$MODEL_DIR/${profile.keywordsAssetFile}",
+            keywordsFile = resolvedKeywordsFile,
             maxActivePaths = 8,
             keywordsScore = 2.0f,
             keywordsThreshold = 0.08f,
             numTrailingBlanks = 1,
         )
-        return try {
-            KeywordSpotter(assetManager = assets, config = primaryConfig)
-        } catch (_: Exception) {
-            val fallbackConfig = primaryConfig.copy(keywordsFile = "$MODEL_DIR/keywords.txt")
-            KeywordSpotter(assetManager = assets, config = fallbackConfig)
-        }
+        return KeywordSpotter(assetManager = assets, config = config)
     }
 
-    private fun createProfileStream(spotter: KeywordSpotter, profile: WakeWordProfile): OnlineStream {
-        val inlineStream = try {
-            spotter.createStream(profile.sherpaInlineKeywords)
-        } catch (_: Exception) {
-            null
-        }
-        if (inlineStream != null && inlineStream.ptr != 0L) {
-            return inlineStream
-        }
-        inlineStream?.release()
+    /**
+     * Cria o stream KWS usando o keywordsFile já validado e carregado no KeywordSpotter.
+     * Evita passar strings inline ao JNI (cujo parser C++ pode encerrar o processo em caso de erro).
+     */
+    private fun createProfileStream(spotter: KeywordSpotter, @Suppress("UNUSED_PARAMETER") profile: WakeWordProfile): OnlineStream {
         return spotter.createStream()
     }
 
@@ -627,23 +689,26 @@ class UltronAudioService : Service() {
             while (workerActive.get()) {
                 if (pendingKeywordHotSwap.compareAndSet(true, false)) {
                     val targetProfile = currentWakeProfile
-                    var nextStream = createProfileStream(spotter, targetProfile)
-                    if (nextStream.ptr == 0L) {
-                        safely("nextStream.release") { nextStream.release() }
+                    try {
                         val rebuilt = createKeywordSpotter(targetProfile)
-                        val oldSpotter = spotter
-                        keywordSpotter = rebuilt
-                        spotter = rebuilt
-                        nextStream = createProfileStream(spotter, targetProfile)
-                        safely("oldSpotter.release") { oldSpotter.release() }
-                    }
-                    if (nextStream.ptr != 0L) {
-                        val oldStream = stream
-                        stream = nextStream
-                        safely("oldStream.release") { oldStream.release() }
-                        if (!userPaused) {
-                            updateNotification("sherpa-onnx KWS carregado — diga \"${targetProfile.displayName}\"")
+                        val nextStream = createProfileStream(rebuilt, targetProfile)
+                        if (nextStream.ptr != 0L) {
+                            val oldStream = stream
+                            val oldSpotter = spotter
+                            stream = nextStream
+                            keywordSpotter = rebuilt
+                            spotter = rebuilt
+                            safely("oldStream.release") { oldStream.release() }
+                            safely("oldSpotter.release") { oldSpotter.release() }
+                            if (!userPaused) {
+                                updateNotification("sherpa-onnx KWS carregado — diga \"${targetProfile.displayName}\"")
+                            }
+                        } else {
+                            safely("nextStream.release") { nextStream.release() }
+                            safely("rebuilt.release") { rebuilt.release() }
                         }
+                    } catch (e: Exception) {
+                        Stats.lastError = "hot-swap KWS falhou: ${e.message}"
                     }
                 }
 
