@@ -1172,6 +1172,18 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 }
                 result.success(true)
             }
+            "openDynamicIslandConfigurator" -> {
+                val opened = DynamicIslandService.openConfigurator(this)
+                result.success(opened)
+            }
+            "getDynamicIslandConfig" -> {
+                val cfg = DynamicIslandService.loadPlacement(this)
+                result.success(cfg.toMap(DynamicIslandService.isRunning))
+            }
+            "resetDynamicIslandConfig" -> {
+                val reset = DynamicIslandService.resetPlacement(this)
+                result.success(reset.toMap(DynamicIslandService.isRunning))
+            }
             "consumePendingFloatingOrbTap" -> {
                 result.success(consumePendingOrbTap())
             }

@@ -167,7 +167,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   SessionTelemetry sessionTelemetry = SessionTelemetry.initial();
   TacticalMode activeTacticalMode = TacticalMode.geral;
   bool pcLanConfigured = false;
-  String installedVersion = 'v1.6.3';
+  String installedVersion = 'v1.6.4';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -1136,6 +1136,34 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       }
       return false;
     }
+  }
+
+  Future<bool> _configureDynamicIsland() async {
+    HapticFeedback.selectionClick();
+    final canOverlay = await deviceService.canDrawOverlays();
+    if (!canOverlay) {
+      await deviceService.requestOverlayPermission();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Conceda "Aparecer sobre outros apps" para configurar a posição da Ilha Dinâmica.',
+              style: TextStyle(fontSize: 12),
+            ),
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+      return false;
+    }
+    await deviceService.setDynamicIslandAccent(
+      activePersona.accentColor.toARGB32(),
+    );
+    final opened = await deviceService.openDynamicIslandConfigurator();
+    if (opened && mounted) {
+      setState(() => dynamicIslandEnabled = true);
+    }
+    return opened;
   }
 
   Future<void> _selectSpeechStyle(SpeechStyle style) async {
@@ -3919,12 +3947,27 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       case UltronCommand.island:
         final argLower = argument.trim().toLowerCase();
         String msg;
-        if (argLower == 'status') {
-          final running = await deviceService.isDynamicIslandRunning();
+        if (argLower == 'configurar' ||
+            argLower == 'config' ||
+            argLower == 'mover' ||
+            argLower == 'posicao' ||
+            argLower == 'posição') {
+          final opened = await _configureDynamicIsland();
+          msg = opened
+              ? 'Modo de configuração da Ilha Dinâmica aberto. Arraste para o topo, laterais (em pé) ou qualquer ponto da tela e toque em Salvar posição.'
+              : 'Permissão "Aparecer sobre outros apps" necessária para abrir o configurador da Ilha Dinâmica.';
+        } else if (argLower == 'reset' || argLower == 'centralizar') {
+          await deviceService.resetDynamicIslandConfig();
+          msg = 'Posição da Ilha Dinâmica restaurada para o topo (câmera frontal).';
+        } else if (argLower == 'status') {
+          final cfg = await deviceService.getDynamicIslandConfig();
+          final running = (cfg['enabled'] as bool?) ??
+              await deviceService.isDynamicIslandRunning();
+          final zone = (cfg['zoneLabel'] as String?) ?? 'Topo (Câmera)';
           if (mounted) setState(() => dynamicIslandEnabled = running);
           msg = running
-              ? 'Ilha Dinâmica (Expressive Cutout) está ativa sobre a câmera frontal.'
-              : 'Ilha Dinâmica está desativada. Use `/ilha on` ou ative em Configurações.';
+              ? 'Ilha Dinâmica ativa em: $zone. Use `/ilha configurar` para reposicionar.'
+              : 'Ilha Dinâmica está desativada. Use `/ilha on` ou `/ilha configurar`.';
         } else if (argLower == 'off' ||
             argLower == 'desligar' ||
             argLower == 'desativar') {
@@ -3935,7 +3978,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             argLower == 'ativar') {
           final ok = await _toggleDynamicIsland(forceValue: true);
           msg = ok
-              ? 'Ilha Dinâmica (Expressive Cutout) ativada ao redor da câmera frontal.'
+              ? 'Ilha Dinâmica (Expressive Cutout) ativada.'
               : 'Permissão "Aparecer sobre outros apps" pendente. Após conceder, execute `/ilha on` novamente.';
         } else {
           final ok = await _toggleDynamicIsland();
@@ -4576,6 +4619,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           onToggleAudio: _toggleAudio,
           onToggleNightFocus: _toggleNightFocusMode,
           onToggleDynamicIsland: () => unawaited(_toggleDynamicIsland()),
+          onConfigureDynamicIsland: () => unawaited(_configureDynamicIsland()),
           onSelectPersona: (p) => unawaited(_selectPersonaProfile(p)),
           onSelectSpeechStyle: (s) => unawaited(_selectSpeechStyle(s)),
           onSelectVadProfile: (p) => unawaited(_updateVadProfile(p)),

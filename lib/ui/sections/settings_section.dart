@@ -34,6 +34,7 @@ class SettingsSection extends StatelessWidget {
     this.onSelectSpeechStyle,
     this.dynamicIslandEnabled = false,
     this.onToggleDynamicIsland,
+    this.onConfigureDynamicIsland,
   });
 
   final bool isAudioOn;
@@ -49,6 +50,7 @@ class SettingsSection extends StatelessWidget {
   final VoidCallback onToggleAudio;
   final VoidCallback onToggleNightFocus;
   final VoidCallback? onToggleDynamicIsland;
+  final VoidCallback? onConfigureDynamicIsland;
   final ValueChanged<VadProfile> onSelectVadProfile;
   final ValueChanged<int> onSelectVadHangoverMs;
   final VoidCallback onOpenVoiceSelector;
@@ -356,6 +358,23 @@ class SettingsSection extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (onConfigureDynamicIsland != null) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: onConfigureDynamicIsland,
+                        icon: Icon(
+                          Icons.open_with_rounded,
+                          size: 17,
+                          color: accent,
+                        ),
+                        label: const Text('Configurar ilha dinâmica'),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ],
           ),

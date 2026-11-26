@@ -485,10 +485,10 @@ class SlashCommandParser {
               'Importa backups JSON/CSV offline do app openGym para o Obsidian (Modo Treino) com PRs, volume e peso corporal.',
         },
         {
-          'command': '/ilha [on|off|status]',
+          'command': '/ilha [on|off|configurar|reset|status]',
           'aliases': '/island, /cutout, /ilha_dinamica',
           'description':
-              'Ativa ou desativa a Ilha Dinâmica (Expressive Cutout) ancorada no recorte da câmera frontal.',
+              'Ativa, desativa ou abre o posicionamento interativo da Ilha Dinâmica (topo, em pé nas laterais ou livre).',
         },
         {
           'command': '/dj [humor/bpm|transicao <chave>|players|salvar <pedido>|pc <app>]',

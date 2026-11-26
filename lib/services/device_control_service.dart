@@ -2147,6 +2147,38 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     } catch (_) {}
   }
 
+  Future<bool> openDynamicIslandConfigurator() async {
+    try {
+      final res =
+          await _channel.invokeMethod<bool>('openDynamicIslandConfigurator');
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>> getDynamicIslandConfig() async {
+    try {
+      final raw = await _channel
+          .invokeMethod<Map<Object?, Object?>>('getDynamicIslandConfig');
+      if (raw == null) return const <String, dynamic>{};
+      return raw.map((k, v) => MapEntry('$k', v));
+    } catch (_) {
+      return const <String, dynamic>{};
+    }
+  }
+
+  Future<Map<String, dynamic>> resetDynamicIslandConfig() async {
+    try {
+      final raw = await _channel
+          .invokeMethod<Map<Object?, Object?>>('resetDynamicIslandConfig');
+      if (raw == null) return const <String, dynamic>{};
+      return raw.map((k, v) => MapEntry('$k', v));
+    } catch (_) {
+      return const <String, dynamic>{};
+    }
+  }
+
   OpenGymService getOpenGymService() => OpenGymService(channel: _channel);
 
   static const String longTermProfileNotePath =

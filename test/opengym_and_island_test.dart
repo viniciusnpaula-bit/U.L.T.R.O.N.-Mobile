@@ -194,7 +194,16 @@ void main() {
             return true;
           case 'updateDynamicIslandState':
           case 'setDynamicIslandAccent':
+          case 'openDynamicIslandConfigurator':
             return true;
+          case 'getDynamicIslandConfig':
+          case 'resetDynamicIslandConfig':
+            return <String, Object>{
+              'enabled': true,
+              'customPosition': false,
+              'orientation': 'auto',
+              'zoneLabel': 'Topo (Câmera)',
+            };
           default:
             return null;
         }
@@ -232,6 +241,11 @@ void main() {
 
       expect(await device.setDynamicIsland(true), isTrue);
       expect(await device.isDynamicIslandRunning(), isTrue);
+      expect(await device.openDynamicIslandConfigurator(), isTrue);
+      final cfg = await device.getDynamicIslandConfig();
+      expect(cfg['zoneLabel'], 'Topo (Câmera)');
+      final reset = await device.resetDynamicIslandConfig();
+      expect(reset['orientation'], 'auto');
       await device.setDynamicIslandAccent(0xFFF10D28);
       await device.updateDynamicIslandState(
         mode: 'listening',
@@ -244,6 +258,9 @@ void main() {
         containsAll([
           'setDynamicIsland',
           'isDynamicIslandRunning',
+          'openDynamicIslandConfigurator',
+          'getDynamicIslandConfig',
+          'resetDynamicIslandConfig',
           'setDynamicIslandAccent',
           'updateDynamicIslandState',
         ]),
