@@ -652,3 +652,257 @@ void _paintOrbitalRings(
   );
   canvas.restore();
 }
+
+class _StarSpec {
+  const _StarSpec({
+    required this.nx,
+    required this.ny,
+    required this.radius,
+    required this.baseAlpha,
+    required this.twinkleSpeed,
+    required this.phase,
+    required this.driftX,
+    required this.driftY,
+    required this.tone,
+    required this.hasHalo,
+  });
+
+  final double nx;
+  final double ny;
+  final double radius;
+  final double baseAlpha;
+  final double twinkleSpeed;
+  final double phase;
+  final double driftX;
+  final double driftY;
+  final int tone; // 0 = crimson, 1 = soft rose, 2 = warm white
+  final bool hasHalo;
+}
+
+final List<_StarSpec> _precomputedStars = _generateStarfield(96);
+
+List<_StarSpec> _generateStarfield(int count) {
+  final rng = math.Random(20260711);
+  return List<_StarSpec>.generate(count, (i) {
+    // Quasi-uniform spread with slight organic clustering, avoiding dense clumping
+    final nx = rng.nextDouble();
+    final ny = rng.nextDouble();
+    final depth = rng.nextDouble(); // 0 = distant dust, 1 = closer pinpoint
+    final radius = 0.55 + depth * 1.15;
+    final baseAlpha = 0.14 + depth * 0.46;
+    final twinkleSpeed = 0.55 + rng.nextDouble() * 1.35;
+    final phase = rng.nextDouble() * math.pi * 2.0;
+    final angle = rng.nextDouble() * math.pi * 2.0;
+    final driftMag = (0.0012 + depth * 0.0024);
+    final toneRoll = rng.nextDouble();
+    final tone = toneRoll < 0.54 ? 0 : (toneRoll < 0.84 ? 1 : 2);
+    return _StarSpec(
+      nx: nx,
+      ny: ny,
+      radius: radius,
+      baseAlpha: baseAlpha,
+      twinkleSpeed: twinkleSpeed,
+      phase: phase,
+      driftX: math.cos(angle) * driftMag,
+      driftY: math.sin(angle) * driftMag,
+      tone: tone,
+      hasHalo: depth > 0.78,
+    );
+  }, growable: false);
+}
+
+/// Renders a subtle AMOLED deep-space starfield & atmospheric nebula vignette
+/// behind [CoreOrb], matching the crimson wireframe aesthetic with smooth
+/// twinkle, slow cosmic drift, persona accent tinting, and automatic lifecycle pause.
+class CoreStarfieldBackdrop extends StatefulWidget {
+  const CoreStarfieldBackdrop({
+    super.key,
+    this.active = true,
+    this.energy = 0.2,
+    this.accentColor = const Color(0xFFF10D28),
+    this.starCount = 78,
+    this.nebulaIntensity = 1.0,
+    this.centerAlignment = Alignment.center,
+  });
+
+  final bool active;
+  final double energy;
+  final Color accentColor;
+  final int starCount;
+  final double nebulaIntensity;
+  final Alignment centerAlignment;
+
+  @override
+  State<CoreStarfieldBackdrop> createState() => _CoreStarfieldBackdropState();
+}
+
+class _CoreStarfieldBackdropState extends State<CoreStarfieldBackdrop>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  late final Ticker _ticker;
+  final ValueNotifier<double> _time = ValueNotifier<double>(0);
+  bool _lifecycleActive = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final initial = WidgetsBinding.instance.lifecycleState;
+    _lifecycleActive =
+        initial == null || initial == AppLifecycleState.resumed;
+    _ticker = createTicker((elapsed) {
+      _time.value = elapsed.inMicroseconds / 1000000.0;
+    });
+    _syncTicker();
+  }
+
+  @override
+  void didUpdateWidget(covariant CoreStarfieldBackdrop oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.active != widget.active) {
+      _syncTicker();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycleActive = state == AppLifecycleState.resumed;
+    _syncTicker();
+  }
+
+  void _syncTicker() {
+    final shouldRun = _lifecycleActive && widget.active;
+    if (shouldRun && !_ticker.isActive) {
+      _ticker.start();
+    } else if (!shouldRun && _ticker.isActive) {
+      _ticker.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _ticker.dispose();
+    _time.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: CustomPaint(
+        painter: CoreStarfieldPainter(
+          timeListenable: _time,
+          energy: widget.energy,
+          accentColor: widget.accentColor,
+          starCount: widget.starCount,
+          nebulaIntensity: widget.nebulaIntensity,
+          centerAlignment: widget.centerAlignment,
+        ),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+}
+
+class CoreStarfieldPainter extends CustomPainter {
+  CoreStarfieldPainter({
+    required this.timeListenable,
+    this.energy = 0.2,
+    this.accentColor = const Color(0xFFF10D28),
+    this.starCount = 78,
+    this.nebulaIntensity = 1.0,
+    this.centerAlignment = Alignment.center,
+  }) : super(repaint: timeListenable);
+
+  final ValueListenable<double> timeListenable;
+  final double energy;
+  final Color accentColor;
+  final int starCount;
+  final double nebulaIntensity;
+  final Alignment centerAlignment;
+
+  final Paint _starPaint = Paint()..style = PaintingStyle.fill;
+  final Paint _haloPaint = Paint()..style = PaintingStyle.fill;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final t = timeListenable.value;
+    final e = energy.clamp(0.0, 1.2);
+    final neb = nebulaIntensity.clamp(0.0, 1.5);
+    final center = centerAlignment.alongSize(size);
+
+    // 1. Subtle deep atmospheric nebula glow behind the nucleus
+    if (neb > 0.01) {
+      final glowRadius = math.max(size.width, size.height) * 0.56;
+      final nebulaRect = Rect.fromCircle(center: center, radius: glowRadius);
+      final nebulaAlpha = (0.075 + e * 0.035) * neb;
+      final deepNebula = Color.lerp(accentColor, const Color(0xFF1A0408), 0.35)!;
+      canvas.drawRect(
+        Offset.zero & size,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [
+              deepNebula.withValues(alpha: nebulaAlpha),
+              deepNebula.withValues(alpha: nebulaAlpha * 0.38),
+              const Color(0x00080808),
+            ],
+            stops: const [0.0, 0.42, 1.0],
+          ).createShader(nebulaRect),
+      );
+    }
+
+    // 2. Multi-depth twinkling crimson/rose/white micro-stars
+    final crimsonTint = Color.lerp(accentColor, const Color(0xFFFF6B7D), 0.24)!;
+    final roseTint = Color.lerp(accentColor, Colors.white, 0.66)!;
+    const warmWhite = Color(0xFFFFF3F5);
+
+    final count = starCount.clamp(0, _precomputedStars.length);
+    final driftFactor = 1.0 + e * 0.55;
+
+    for (var i = 0; i < count; i++) {
+      final s = _precomputedStars[i];
+      var fx = (s.nx + s.driftX * t * driftFactor) % 1.0;
+      var fy = (s.ny + s.driftY * t * driftFactor) % 1.0;
+      if (fx < 0) fx += 1.0;
+      if (fy < 0) fy += 1.0;
+
+      final px = fx * size.width;
+      final py = fy * size.height;
+
+      // Soft radial edge fade so stars blend seamlessly into AMOLED borders
+      final edgeX = math.min(fx, 1.0 - fx) * 6.0;
+      final edgeY = math.min(fy, 1.0 - fy) * 6.0;
+      final edgeFade = math.min(1.0, math.min(edgeX, edgeY)).clamp(0.15, 1.0);
+
+      final twinkle = 0.52 + 0.48 * math.sin(t * s.twinkleSpeed + s.phase);
+      final alpha =
+          (s.baseAlpha * twinkle * (0.85 + 0.28 * e) * edgeFade * (0.45 + 0.55 * neb))
+              .clamp(0.0, 0.85);
+      if (alpha <= 0.01) continue;
+
+      final color = switch (s.tone) {
+        0 => crimsonTint,
+        1 => roseTint,
+        _ => warmWhite,
+      };
+
+      if (s.hasHalo) {
+        _haloPaint.color = color.withValues(alpha: alpha * 0.24);
+        canvas.drawCircle(Offset(px, py), s.radius * 2.7, _haloPaint);
+      }
+
+      _starPaint.color = color.withValues(alpha: alpha);
+      canvas.drawCircle(Offset(px, py), s.radius, _starPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CoreStarfieldPainter oldDelegate) =>
+      oldDelegate.timeListenable != timeListenable ||
+      oldDelegate.energy != energy ||
+      oldDelegate.accentColor != accentColor ||
+      oldDelegate.starCount != starCount ||
+      oldDelegate.nebulaIntensity != nebulaIntensity ||
+      oldDelegate.centerAlignment != centerAlignment;
+}

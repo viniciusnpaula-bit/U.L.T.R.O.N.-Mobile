@@ -15,6 +15,7 @@ import 'briefing_service.dart';
 import 'desktop_pairing_service.dart';
 import 'eletrica_engine.dart';
 import 'file_utilities_service.dart';
+import 'music_curator_service.dart';
 import 'obsidian_service.dart';
 import 'opengym_service.dart';
 import 'reminder_service.dart';
@@ -985,12 +986,19 @@ class DeviceControlService {
     SpeechStyle? speechStyle,
     String? lexicalRecallContext,
     String? compactedHistoryDigest,
+    bool nightFocusMode = false,
   }) async {
     final activeMode = mode ?? TacticalMode.geral;
     final sections = <String>[
       buildSystemPromptForMode(activeMode),
       if (persona != null) persona.promptDirective,
       if (speechStyle != null) 'Estilo de fala ativo: ${speechStyle.promptDirective}',
+      if (activeMode == TacticalMode.musica)
+        MusicCuratorService.buildPromptGuidance(
+          now: now,
+          mode: activeMode,
+          nightFocusMode: nightFocusMode,
+        ),
       'Registro emocional TTS: você pode abrir sua resposta com UMA tag curta opcional '
           '([neutro], [lamento], [encorajador], [alerta], [comemorando], [serio] ou [duvida]) '
           'para modular o tom de voz automaticamente (a tag será removida antes de exibir).',
@@ -1007,13 +1015,28 @@ class DeviceControlService {
     if (lexicalRecallContext != null &&
         lexicalRecallContext.trim().isNotEmpty) {
       sections.add(
-        '=== MEMÓRIA LEXICAL LOCAL (ÚLTIMOS 120 DIAS) ===\n'
+        '=== MEMÓRIA LEXICAL LOCAL (ÚLTIMOS 365 DIAS) ===\n'
         '${lexicalRecallContext.trim()}\n'
         '=== FIM DA MEMÓRIA LEXICAL ===',
       );
     }
     try {
       final vault = await _getObsidian();
+      try {
+        final rawFacts =
+            await vault.readNote('Memoria/Sessoes/Contexto_Longo_Prazo.md');
+        final cleanFacts = ObsidianService.sanitizeForExternalAi(rawFacts);
+        if (cleanFacts.trim().isNotEmpty) {
+          final clipped = cleanFacts.length > 900
+              ? cleanFacts.substring(cleanFacts.length - 900)
+              : cleanFacts;
+          sections.add(
+            '=== PERFIL E CONTEXTO DE LONGO PRAZO (SESSÕES ANTERIORES) ===\n'
+            '${clipped.trim()}\n'
+            '=== FIM DO PERFIL DE LONGO PRAZO ===',
+          );
+        }
+      } catch (_) {}
       final rawMemory = await vault.readLongTermMemory(
         maxChars: activeMode.isGeneral ? 2000 : 800,
       );
@@ -2126,6 +2149,125 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
 
   OpenGymService getOpenGymService() => OpenGymService(channel: _channel);
 
+  static const String longTermProfileNotePath =
+      'Memoria/Sessoes/Contexto_Longo_Prazo.md';
+
+  /// Salva fatos/preferências duradouros extraídos de conversas no Obsidian
+  /// (com deduplicação) para enriquecer respostas de sessões futuras.
+  Future<int> persistLongTermSessionFacts(List<String> facts) async {
+    if (facts.isEmpty) return 0;
+    try {
+      final vault = await _getObsidian();
+      await vault.initialize();
+      var existing = '';
+      try {
+        existing = await vault.readNote(longTermProfileNotePath);
+      } catch (_) {}
+      final existingLower = existing.toLowerCase();
+      final toAdd = <String>[];
+      for (final fact in facts) {
+        final clean = fact.trim();
+        if (clean.length < 12) continue;
+        if (existingLower.contains(clean.toLowerCase())) continue;
+        toAdd.add(clean);
+      }
+      if (toAdd.isEmpty) return 0;
+      final now = DateTime.now();
+      final stamp =
+          '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      final block = toAdd.map((f) => '- [$stamp] $f').join('\n');
+      await vault.appendToNote(
+        longTermProfileNotePath,
+        existing.trim().isEmpty
+            ? '# Contexto de Longo Prazo do Operador\n\n$block\n'
+            : '$block\n',
+        createIfMissing: true,
+      );
+      _cachedVaultSearch?.invalidateSyncCache();
+      return toAdd.length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Future<DeviceActionResult> executeDjCommand(
+    String rawArg, {
+    TacticalMode mode = TacticalMode.musica,
+    bool nightFocusMode = false,
+    ActionGateConfirmCallback? confirmAction,
+  }) async {
+    const curator = MusicCuratorService();
+    final arg = rawArg.trim();
+    final lower = arg.toLowerCase();
+
+    if (lower == 'players' || lower == 'apps' || lower == 'controladores') {
+      return DeviceActionResult(
+        handled: true,
+        message: curator.formatSupportedPlayersList(),
+        speakText:
+            'Integro Spotify, YouTube Music, Deezer, Apple Music, SoundCloud, Tidal, Poweramp, VLC, djay, edjing, Cross DJ, rekordbox, Traktor, Serato e VirtualDJ.',
+      );
+    }
+
+    final camelotMatch = RegExp(
+      r'^(?:transi[cç][aã]o|camelot|tom|chave)\s+(1[0-2]|[1-9])([ab])$',
+      caseSensitive: false,
+    ).firstMatch(arg);
+    if (camelotMatch != null) {
+      final key =
+          '${camelotMatch.group(1)}${camelotMatch.group(2)!.toUpperCase()}';
+      final compat = MusicCuratorService.compatibleCamelotKeys(key);
+      return DeviceActionResult(
+        handled: true,
+        message: 'Mixagem Harmônica (Roda de Camelot) — Chave $key:\n'
+            '${compat.map((k) => '• $k').join('\n')}',
+        speakText: 'Para a chave $key, as transições harmônicas são ${compat.take(4).join(', ')}.',
+      );
+    }
+
+    if (lower.startsWith('pc ')) {
+      final appName = arg.substring(3).trim();
+      if (appName.isNotEmpty) {
+        final res = await sendDesktopBridgeCommand(
+          command: 'PC_OPEN_APP',
+          args: <String, dynamic>{'app': appName},
+          confirmAction: confirmAction,
+        );
+        return DeviceActionResult(
+          handled: true,
+          message: res.sent
+              ? 'Comando enviado ao Desktop LAN para abrir $appName.'
+              : 'Não foi possível abrir $appName no PC (${res.error ?? 'Desktop não pareado ou ação cancelada'}).',
+          speakText: res.sent
+              ? 'Abrindo $appName no computador.'
+              : 'Não consegui abrir $appName no computador.',
+        );
+      }
+    }
+
+    final shouldSave = lower.startsWith('salvar ') || lower == 'salvar';
+    final effectiveQuery =
+        shouldSave ? arg.replaceFirst(RegExp(r'^salvar\s*', caseSensitive: false), '') : arg;
+
+    var plan = curator.curate(
+      effectiveQuery,
+      mode: mode,
+      nightFocusMode: nightFocusMode,
+    );
+    if (shouldSave) {
+      try {
+        final vault = await _getObsidian();
+        plan = await curator.saveSetlistToObsidian(plan, vault);
+        _cachedVaultSearch?.invalidateSyncCache();
+      } catch (_) {}
+    }
+    return DeviceActionResult(
+      handled: true,
+      message: plan.formatChatOutput(),
+      speakText: plan.speakText,
+    );
+  }
+
   Future<DeviceActionResult> executeOpenGymCommand(String rawArg) async {
     final arg = rawArg.trim();
     final lower = arg.toLowerCase();
@@ -2524,6 +2666,18 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         return await executeOpenGymCommand('abrir');
       }
 
+      // 0C. Creative Music/DJ Curator & Camelot shortcuts
+      final djNatural = RegExp(
+        r'^(?:(?:sugerir|recomendar|montar|criar)\s+(?:um\s+|uma\s+)?(?:set|setlist|playlist|mix|m[uú]sicas?)\s*(?:para|de|pro|pra)?\s*(.*)|transi[cç][aã]o\s+camelot\s+(1[0-2]|[1-9][ab]))$',
+      ).firstMatch(lower);
+      if (djNatural != null) {
+        final camelotArg = djNatural.group(2);
+        if (camelotArg != null && camelotArg.isNotEmpty) {
+          return await executeDjCommand('transicao $camelotArg');
+        }
+        return await executeDjCommand(djNatural.group(1) ?? '');
+      }
+
       // 1. Flashlight / Torch
       if (RegExp(
         r'\b(ligar|acender|ativar|liga|acende)\b.*\b(lanterna|flash|luz)\b|\b(lanterna|flash)\s+(on|ligar|acesa)\b',
@@ -2607,23 +2761,16 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         );
       }
 
-      // 2B. Media Playback Control (play, pause, next, previous, stop)
+      // 2B. Media Playback Control (Spotify, YouTube Music, Deezer, Apple Music, Tidal, SoundCloud, Poweramp, VLC, DJ apps)
       final mediaMatch = _matchMediaNaturalCommand(lower);
       if (mediaMatch != null) {
-        final preferredApp = lower.contains('spotify')
-            ? 'spotify'
-            : lower.contains('youtube')
-                ? 'youtube'
-                : '';
+        final detectedPlayer = MusicCuratorService.detectPlayerMention(lower);
+        final preferredApp = detectedPlayer?.id ?? '';
         final mediaRes = await controlMediaDetailed(
           mediaMatch.action,
           preferredApp: preferredApp,
         );
-        final appLabel = preferredApp == 'spotify'
-            ? 'Spotify'
-            : preferredApp == 'youtube'
-                ? 'YouTube'
-                : 'player de mídia';
+        final appLabel = detectedPlayer?.label ?? 'player de mídia';
         if (mediaRes.status == MediaControlStatus.confirmed) {
           await recordAudit(
             actor: 'OPERATOR',

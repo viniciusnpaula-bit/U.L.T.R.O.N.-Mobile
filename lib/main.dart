@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'core/security/auth_gate.dart';
 import 'core/security/pin_vault.dart';
+import 'models/assistant_persona.dart';
 import 'services/audio_capture_service.dart';
 import 'services/startup_coordinator.dart';
 import 'services/stt_service.dart';
@@ -67,30 +68,33 @@ class _UltronAppState extends State<UltronApp> {
   }
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-        title: 'U.L.T.R.O.N.',
-        debugShowCheckedModeBanner: false,
-        theme: UltronTheme.dark(),
-        home: AnimatedBuilder(
-          animation: Listenable.merge([widget.gate, _coordinator]),
-          builder: (context, child) {
-            if (!widget.gate.isAuthenticated) {
-              return AuthScreen(gate: widget.gate, vault: widget.vault);
-            }
-            if (!_coordinator.isReady) {
-              return BootLoadingScreen(coordinator: _coordinator);
-            }
-            return CoreScreen(
-              gate: widget.gate,
-              vault: widget.vault,
-              voiceService: _voiceService,
-              captureSource: widget.audioCapture,
-              sttService: widget.sttService,
-              shaderProgram: _coordinator.shaderProgram,
-              announceOnline: true,
-            );
-          },
+  Widget build(BuildContext context) => ValueListenableBuilder<AssistantPersona>(
+        valueListenable: UltronTheme.personaNotifier,
+        builder: (context, persona, _) => MaterialApp(
+          title: persona.displayName,
+          debugShowCheckedModeBanner: false,
+          theme: UltronTheme.dark(persona: persona),
+          home: AnimatedBuilder(
+            animation: Listenable.merge([widget.gate, _coordinator]),
+            builder: (context, child) {
+              if (!widget.gate.isAuthenticated) {
+                return AuthScreen(gate: widget.gate, vault: widget.vault);
+              }
+              if (!_coordinator.isReady) {
+                return BootLoadingScreen(coordinator: _coordinator);
+              }
+              return CoreScreen(
+                gate: widget.gate,
+                vault: widget.vault,
+                voiceService: _voiceService,
+                captureSource: widget.audioCapture,
+                sttService: widget.sttService,
+                shaderProgram: _coordinator.shaderProgram,
+                announceOnline: true,
+              );
+            },
+          ),
+          routes: {'/ai-settings': (_) => const AiSettingsScreen()},
         ),
-        routes: {'/ai-settings': (_) => const AiSettingsScreen()},
       );
 }

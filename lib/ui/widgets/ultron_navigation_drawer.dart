@@ -209,6 +209,7 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = UltronTheme.accentOf(context);
     return Material(
       color: selected ? UltronColors.surfaceElevated : Colors.transparent,
       shape: RoundedRectangleBorder(
@@ -230,16 +231,14 @@ class _NavItem extends StatelessWidget {
                 height: selected ? 16 : 0,
                 margin: EdgeInsets.only(right: selected ? 9 : 0),
                 decoration: BoxDecoration(
-                  color: UltronColors.crimson,
+                  color: accent,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
               Icon(
                 selected ? section.selectedIcon : section.icon,
                 size: 19,
-                color: selected
-                    ? UltronColors.crimson
-                    : UltronColors.textSecondary,
+                color: selected ? accent : UltronColors.textSecondary,
               ),
               const SizedBox(width: 12),
               Expanded(

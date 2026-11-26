@@ -219,7 +219,11 @@ object DeviceHardwareHelper {
 
         if (sessions != null) {
             val matchedController: MediaController? = if (normApp.isNotEmpty()) {
-                sessions.firstOrNull { it.packageName.lowercase().contains(normApp) }
+                val pkgHints = mediaAppPackageHints(normApp)
+                sessions.firstOrNull { ctrl ->
+                    val p = ctrl.packageName.lowercase()
+                    p.contains(normApp) || pkgHints.any { p.contains(it) }
+                }
             } else {
                 sessions.firstOrNull {
                     val st = it.playbackState?.state
@@ -478,6 +482,22 @@ object DeviceHardwareHelper {
         RegexOption.IGNORE_CASE,
     )
 
+    private fun mediaAppPackageHints(normApp: String): List<String> = when (normApp) {
+        "youtube music", "yt music", "ytmusic" -> listOf("youtube.music")
+        "apple music" -> listOf("apple.android.music")
+        "amazon music" -> listOf("amazon.mp3")
+        "tidal" -> listOf("aspiro.tidal", "tidal")
+        "poweramp" -> listOf("maxmpz.audioplayer", "poweramp")
+        "vlc" -> listOf("videolan.vlc", "vlc")
+        "djay", "algoriddim" -> listOf("algoriddim.djay", "djay")
+        "edjing", "edjing mix" -> listOf("edjing")
+        "cross dj", "crossdj" -> listOf("mixvibes.crossdj", "crossdj")
+        "rekordbox", "pioneer" -> listOf("rekordbox", "pioneer")
+        "traktor" -> listOf("traktor", "nativeinstruments")
+        "bandlab" -> listOf("bandlab")
+        else -> listOf(normApp)
+    }
+
     fun sanitizeAppQuery(rawQuery: String): String {
         var cleaned = rawQuery.trim()
             .trimEnd('.', '!', '?', ',', ';', ':')
@@ -574,6 +594,22 @@ object DeviceHardwareHelper {
             "instagram" to listOf("com.instagram.android"),
             "chrome" to listOf("com.android.chrome"),
             "spotify" to listOf("com.spotify.music"),
+            "youtube music" to listOf("com.google.android.apps.youtube.music"),
+            "yt music" to listOf("com.google.android.apps.youtube.music"),
+            "deezer" to listOf("deezer.android.app"),
+            "apple music" to listOf("com.apple.android.music"),
+            "soundcloud" to listOf("com.soundcloud.android"),
+            "tidal" to listOf("com.aspiro.tidal"),
+            "amazon music" to listOf("com.amazon.mp3"),
+            "poweramp" to listOf("com.maxmpz.audioplayer"),
+            "vlc" to listOf("org.videolan.vlc"),
+            "bandlab" to listOf("com.bandlab.bandlab"),
+            "djay" to listOf("com.algoriddim.djay_free", "com.algoriddim.djay"),
+            "edjing" to listOf("com.edjing.edjingdjturntable"),
+            "edjing mix" to listOf("com.edjing.edjingdjturntable"),
+            "cross dj" to listOf("com.mixvibes.crossdjfree", "com.mixvibes.crossdjapp"),
+            "rekordbox" to listOf("jp.pioneer.mbg.rekordbox"),
+            "traktor" to listOf("com.nativeinstruments.traktor"),
             "gmail" to listOf("com.google.android.gm"),
             "maps" to listOf("com.google.android.apps.maps"),
             "mapa" to listOf("com.google.android.apps.maps"),

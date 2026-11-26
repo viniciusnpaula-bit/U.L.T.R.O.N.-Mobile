@@ -37,6 +37,7 @@ enum UltronCommand {
   research,
   opengym,
   island,
+  dj,
 }
 
 class CommandResult {
@@ -182,6 +183,10 @@ class SlashCommandParser {
     '/island': UltronCommand.island,
     '/cutout': UltronCommand.island,
     '/ilha_dinamica': UltronCommand.island,
+    '/dj': UltronCommand.dj,
+    '/curador': UltronCommand.dj,
+    '/bpm': UltronCommand.dj,
+    '/setlist': UltronCommand.dj,
   };
 
   static CommandResult? parse(String input) {
@@ -484,6 +489,12 @@ class SlashCommandParser {
           'aliases': '/island, /cutout, /ilha_dinamica',
           'description':
               'Ativa ou desativa a Ilha Dinâmica (Expressive Cutout) ancorada no recorte da câmera frontal.',
+        },
+        {
+          'command': '/dj [humor/bpm|transicao <chave>|players|salvar <pedido>|pc <app>]',
+          'aliases': '/curador, /bpm, /setlist',
+          'description':
+              'Curadoria criativa por humor, BPM, contexto e Roda de Camelot, com integração multi-player e controladores DJ.',
         },
       ];
 }

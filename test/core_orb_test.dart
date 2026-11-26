@@ -134,4 +134,48 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+      'CoreStarfieldBackdrop renders deep-space starfield behind CoreOrb without throwing',
+      (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          backgroundColor: Color(0xFF080808),
+          body: SizedBox(
+            width: 360,
+            height: 420,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                CoreStarfieldBackdrop(
+                  active: true,
+                  energy: 0.45,
+                  accentColor: Color(0xFFF10D28),
+                  starCount: 72,
+                ),
+                Center(
+                  child: SizedBox(
+                    width: 220,
+                    height: 220,
+                    child: CoreOrb(stage: CoreStage.center, energy: 0.45),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 48));
+    expect(find.byType(CoreStarfieldBackdrop), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Pause lifecycle and verify clean teardown
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
 }

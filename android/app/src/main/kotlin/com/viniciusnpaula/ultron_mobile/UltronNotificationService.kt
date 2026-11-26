@@ -336,14 +336,24 @@ class UltronNotificationService : NotificationListenerService() {
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: return
 
-        // Atualiza mídia na Ilha Dinâmica (notificações de player são normalmente ongoing).
+        // Atualiza mídia na Ilha Dinâmica (players de streaming, locais e controladores DJ).
         val isMediaNotification = extras.containsKey(Notification.EXTRA_MEDIA_SESSION) ||
             notification.category == Notification.CATEGORY_TRANSPORT ||
             pkg.contains("spotify") ||
             pkg.contains("youtube.music") ||
             pkg.contains("deezer") ||
             pkg.contains("soundcloud") ||
-            pkg.contains("apple.android.music")
+            pkg.contains("apple.android.music") ||
+            pkg.contains("aspiro.tidal") ||
+            pkg.contains("amazon.mp3") ||
+            pkg.contains("maxmpz.audioplayer") ||
+            pkg.contains("videolan.vlc") ||
+            pkg.contains("algoriddim.djay") ||
+            pkg.contains("edjing") ||
+            pkg.contains("mixvibes") ||
+            pkg.contains("rekordbox") ||
+            pkg.contains("bandlab") ||
+            pkg.contains("traktor")
         if (isMediaNotification) {
             val mediaTitle = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
             val mediaArtist = (

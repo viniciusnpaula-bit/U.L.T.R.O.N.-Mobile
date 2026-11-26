@@ -63,6 +63,8 @@ class SettingsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = UltronTheme.accentOf(context);
+    final accentBorder = UltronTheme.accentBorderOf(context);
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
@@ -91,7 +93,7 @@ class SettingsSection extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     const Text(
-                      'Personalidade e estilo de fala',
+                      'Personalidade e tema visual',
                       style: TextStyle(
                         color: UltronColors.textPrimary,
                         fontSize: 14,
@@ -102,7 +104,7 @@ class SettingsSection extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  activePersona.tagline,
+                  '${activePersona.tagline} · Tema: ${activePersona.themeName}',
                   style: const TextStyle(
                     color: UltronColors.textSecondary,
                     fontSize: 12,
@@ -117,11 +119,19 @@ class SettingsSection extends StatelessWidget {
                       final selected =
                           activePersona.wakeProfile == persona.wakeProfile;
                       return ChoiceChip(
+                        avatar: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: persona.accentColor,
+                          ),
+                        ),
                         label: Text(persona.displayName),
                         selected: selected,
                         onSelected: (_) =>
                             onSelectPersona!(persona.wakeProfile),
-                        selectedColor: UltronColors.surfaceElevated,
+                        selectedColor: persona.accentDark,
                         backgroundColor: UltronColors.bg,
                         side: BorderSide(
                           color: selected
@@ -216,9 +226,7 @@ class SettingsSection extends StatelessWidget {
                     selectedColor: UltronColors.surfaceElevated,
                     backgroundColor: UltronColors.bg,
                     side: BorderSide(
-                      color: selected
-                          ? UltronColors.crimson
-                          : UltronColors.borderSubtle,
+                      color: selected ? accent : UltronColors.borderSubtle,
                     ),
                     labelStyle: TextStyle(
                       color: selected
@@ -289,7 +297,7 @@ class SettingsSection extends StatelessWidget {
                 contentPadding: EdgeInsets.zero,
                 value: isAudioOn,
                 onChanged: (_) => onToggleAudio(),
-                activeThumbColor: UltronColors.crimson,
+                activeThumbColor: accent,
                 title: const Text(
                   'Respostas por voz',
                   style: TextStyle(
@@ -310,7 +318,7 @@ class SettingsSection extends StatelessWidget {
                 contentPadding: EdgeInsets.zero,
                 value: nightFocusMode,
                 onChanged: (_) => onToggleNightFocus(),
-                activeThumbColor: UltronColors.crimson,
+                activeThumbColor: accent,
                 title: const Text(
                   'Modo foco noturno',
                   style: TextStyle(
@@ -332,7 +340,7 @@ class SettingsSection extends StatelessWidget {
                   contentPadding: EdgeInsets.zero,
                   value: dynamicIslandEnabled,
                   onChanged: (_) => onToggleDynamicIsland!(),
-                  activeThumbColor: UltronColors.crimson,
+                  activeThumbColor: accent,
                   title: const Text(
                     'Ilha Dinâmica (Expressive Cutout)',
                     style: TextStyle(
@@ -381,12 +389,12 @@ class SettingsSection extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: UltronColors.surfaceElevated,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: UltronColors.crimsonBorder),
+                    border: Border.all(color: accentBorder),
                   ),
-                  child: const Text(
+                  child: Text(
                     'Nova',
                     style: TextStyle(
-                      color: UltronColors.crimson,
+                      color: accent,
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
                     ),

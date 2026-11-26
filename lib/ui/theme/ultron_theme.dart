@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
-/// Tokens visuais do U.L.T.R.O.N. Mobile (AMOLED Carmesim contido).
+import '../../models/assistant_persona.dart';
+
+/// Tokens visuais do U.L.T.R.O.N. Mobile (AMOLED com destaque dinâmico por persona).
 abstract final class UltronColors {
   static const Color bg = Color(0xFF080808);
   static const Color surface = Color(0xFF111114);
@@ -18,17 +20,52 @@ abstract final class UltronColors {
 }
 
 abstract final class UltronTheme {
+  static final ValueNotifier<AssistantPersona> personaNotifier =
+      ValueNotifier<AssistantPersona>(AssistantPersona.ultron);
+
+  static void setPersona(AssistantPersona persona) {
+    if (personaNotifier.value.wakeProfile != persona.wakeProfile) {
+      personaNotifier.value = persona;
+    }
+  }
+
+  static Color accentOf(BuildContext context) =>
+      Theme.of(context).colorScheme.primary;
+
+  static Color accentDarkOf(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    for (final p in AssistantPersona.all) {
+      if (p.accentColor == primary) return p.accentDark;
+    }
+    return Color.lerp(primary, UltronColors.bg, 0.84)!;
+  }
+
+  static Color accentBorderOf(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    for (final p in AssistantPersona.all) {
+      if (p.accentColor == primary) return p.accentBorder;
+    }
+    return Color.lerp(primary, UltronColors.bg, 0.65)!;
+  }
+
+  static Color onAccentFor(Color accent) =>
+      accent.computeLuminance() > 0.42
+          ? const Color(0xFF0B0B0D)
+          : UltronColors.textPrimary;
+
   static const TextStyle mono = TextStyle(
     fontFamily: 'monospace',
     fontFeatures: [FontFeature.tabularFigures()],
   );
 
-  static ThemeData dark() {
-    const colorScheme = ColorScheme.dark(
-      primary: UltronColors.crimson,
-      onPrimary: UltronColors.textPrimary,
-      secondary: UltronColors.crimson,
-      onSecondary: UltronColors.textPrimary,
+  static ThemeData dark({AssistantPersona persona = AssistantPersona.ultron}) {
+    final accent = persona.accentColor;
+    final onAccent = onAccentFor(accent);
+    final colorScheme = ColorScheme.dark(
+      primary: accent,
+      onPrimary: onAccent,
+      secondary: accent,
+      onSecondary: onAccent,
       surface: UltronColors.surface,
       onSurface: UltronColors.textPrimary,
       error: UltronColors.crimson,
@@ -43,6 +80,23 @@ abstract final class UltronTheme {
       colorScheme: colorScheme,
       canvasColor: UltronColors.surface,
       dividerColor: UltronColors.borderSubtle,
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return accent;
+          return UltronColors.textSecondary;
+        }),
+        trackColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) return persona.accentDark;
+          return UltronColors.surfaceElevated;
+        }),
+        trackOutlineColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return persona.accentBorder;
+          }
+          return UltronColors.border;
+        }),
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: accent),
       appBarTheme: const AppBarTheme(
         backgroundColor: UltronColors.bg,
         foregroundColor: UltronColors.textPrimary,
@@ -86,8 +140,8 @@ abstract final class UltronTheme {
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: UltronColors.crimson,
-          foregroundColor: UltronColors.textPrimary,
+          backgroundColor: accent,
+          foregroundColor: onAccent,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
@@ -129,7 +183,7 @@ abstract final class UltronTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: UltronColors.crimson),
+          borderSide: BorderSide(color: accent),
         ),
         hintStyle: const TextStyle(
           color: UltronColors.textMuted,
@@ -289,20 +343,30 @@ class UltronActionTile extends StatelessWidget {
 
 /// Emblema geométrico minimalista do U.L.T.R.O.N.
 class UltronMark extends StatelessWidget {
-  const UltronMark({super.key, this.size = 24});
+  const UltronMark({super.key, this.size = 24, this.accentColor});
 
   final double size;
+  final Color? accentColor;
 
   @override
   Widget build(BuildContext context) {
+    final accent = accentColor ?? UltronTheme.accentOf(context);
+    final accentDark = accentColor == null
+        ? UltronTheme.accentDarkOf(context)
+        : Color.lerp(accent, UltronColors.bg, 0.84)!;
     return CustomPaint(
       size: Size.square(size),
-      painter: _UltronMarkPainter(),
+      painter: _UltronMarkPainter(accent: accent, accentDark: accentDark),
     );
   }
 }
 
 class _UltronMarkPainter extends CustomPainter {
+  const _UltronMarkPainter({required this.accent, required this.accentDark});
+
+  final Color accent;
+  final Color accentDark;
+
   @override
   void paint(Canvas canvas, Size size) {
     final s = size.shortestSide;
@@ -326,20 +390,20 @@ class _UltronMarkPainter extends CustomPainter {
     canvas.drawPath(
       hex,
       Paint()
-        ..color = UltronColors.crimsonDark
+        ..color = accentDark
         ..style = PaintingStyle.fill,
     );
     canvas.drawPath(
       hex,
       Paint()
-        ..color = UltronColors.crimson
+        ..color = accent
         ..style = PaintingStyle.stroke
         ..strokeWidth = s * 0.08,
     );
     canvas.drawCircle(
       center,
       s * 0.14,
-      Paint()..color = UltronColors.crimson,
+      Paint()..color = accent,
     );
   }
 
@@ -371,5 +435,6 @@ class _UltronMarkPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _UltronMarkPainter oldDelegate) =>
+      oldDelegate.accent != accent || oldDelegate.accentDark != accentDark;
 }

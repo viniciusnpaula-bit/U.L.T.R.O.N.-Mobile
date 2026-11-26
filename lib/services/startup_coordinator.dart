@@ -3,6 +3,8 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 
+import '../models/assistant_persona.dart';
+import '../ui/theme/ultron_theme.dart';
 import 'ai_provider_service.dart';
 import 'conversation_history.dart';
 import 'voice_service.dart';
@@ -127,7 +129,11 @@ class StartupCoordinator extends ChangeNotifier {
 
   Future<void> _defaultInitAudio() async {
     try {
-      await (_voiceService ??= VoiceService()).initialize();
+      final voice = _voiceService ??= VoiceService();
+      await voice.initialize();
+      UltronTheme.setPersona(
+        AssistantPersona.forWakeProfile(voice.wakeWordProfile),
+      );
     } catch (_) {
       // TTS absence must not lock the user out of text/STT controls.
     }

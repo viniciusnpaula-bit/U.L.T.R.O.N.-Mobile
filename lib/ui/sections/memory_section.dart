@@ -119,9 +119,9 @@ class _MemorySectionState extends State<MemorySection> {
               IconButton(
                 tooltip: 'Pesquisar no cofre',
                 onPressed: _runSearch,
-                icon: const Icon(
+                icon: Icon(
                   Icons.search_rounded,
-                  color: UltronColors.crimson,
+                  color: UltronTheme.accentOf(context),
                 ),
               ),
             ],
@@ -173,10 +173,10 @@ class _MemorySectionState extends State<MemorySection> {
                 icon: Icons.auto_stories_outlined,
                 title: skill.title,
                 subtitle: skill.slug,
-                trailing: const Icon(
+                trailing: Icon(
                   Icons.play_arrow_rounded,
                   size: 18,
-                  color: UltronColors.crimson,
+                  color: UltronTheme.accentOf(context),
                 ),
                 onTap: () => widget.onExecuteSkill(skill),
               ),

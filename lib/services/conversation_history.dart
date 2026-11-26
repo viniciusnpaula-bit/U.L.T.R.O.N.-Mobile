@@ -341,14 +341,43 @@ class ConversationHistory {
     );
   }
 
-  /// Recall lexical local (até 120 dias) por sobreposição de tokens + bônus de
-  /// recência, sem embeddings pesados nem envio da base inteira à nuvem.
+  /// Extrai fatos duradouros e preferências declaradas pelo operador
+  /// (gostos, rotina, objetivos, ferramentas, BPM/treino) para memória de longo prazo.
+  static List<String> extractLongTermFacts(
+    List<ChatMessage> history, {
+    int maxFacts = 8,
+  }) {
+    final durablePattern = RegExp(
+      r'\b(eu\s+(?:prefiro|gosto|uso|treino|trabalho|estudo|ou[cç]o|quero|moro|fa[cç]o)|'
+      r'meu\s+(?:objetivo|treino|foco|bpm|estilo|player|projeto|app)|'
+      r'minha\s+(?:rotina|meta|playlist|dieta|faculdade|empresa)|'
+      r'lembre(?:-se)?\s+que|sempre\s+que\s+eu|nunca\s+(?:use|fa[cç]a))\b',
+      caseSensitive: false,
+    );
+    final seen = <String>{};
+    final out = <String>[];
+    for (final msg in history.reversed) {
+      if (msg.role != ChatRole.user) continue;
+      final clean = msg.content.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (clean.length < 12 || clean.startsWith('/')) continue;
+      if (!durablePattern.hasMatch(clean)) continue;
+      final norm = PtBrTextNormalizer.normalizePhrase(clean);
+      if (norm.isEmpty || !seen.add(norm)) continue;
+      out.add(clean.length > 180 ? '${clean.substring(0, 177)}...' : clean);
+      if (out.length >= maxFacts) break;
+    }
+    return out;
+  }
+
+  /// Recall lexical local de longo prazo (até 365 dias) por sobreposição de tokens
+  /// + bônus de recência + prioridade para a conversa ativa, com fallback entre sessões.
   Future<List<HistoryRecallMatch>> recallRelevant(
     String query, {
     String? conversationId,
-    int maxDays = 120,
-    int limit = 4,
-    int scanLimit = 600,
+    int maxDays = 365,
+    int limit = 6,
+    int scanLimit = 1500,
+    bool includeCrossSession = true,
     DateTime? now,
   }) async {
     final queryTokens = _tokenize(query);
@@ -358,11 +387,12 @@ class ConversationHistory {
     final cutoff = refNow.subtract(Duration(days: maxDays)).toIso8601String();
     final db = await database;
 
+    final targetConv = conversationId?.trim() ?? '';
     final whereParts = <String>['created_at >= ?'];
     final whereArgs = <Object?>[cutoff];
-    if (conversationId != null && conversationId.trim().isNotEmpty) {
+    if (!includeCrossSession && targetConv.isNotEmpty) {
       whereParts.add('conversation_id = ?');
-      whereArgs.add(conversationId.trim());
+      whereArgs.add(targetConv);
     }
 
     final rows = await db.query(
@@ -388,7 +418,11 @@ class ConversationHistory {
       final ageDays =
           refNow.difference(msg.createdAt.toUtc()).inHours.abs() / 24.0;
       final recencyBonus = (1.0 - (ageDays / maxDays)).clamp(0.0, 1.0) * 0.25;
-      final score = coverage + recencyBonus;
+      final sameConvBonus =
+          (targetConv.isNotEmpty && msg.conversationId == targetConv)
+              ? 0.16
+              : 0.0;
+      final score = coverage + recencyBonus + sameConvBonus;
 
       if (score >= 0.30) {
         scored.add(
@@ -409,9 +443,10 @@ class ConversationHistory {
   Future<String> buildRecallContext(
     String query, {
     String? conversationId,
-    int maxDays = 120,
-    int limit = 4,
-    int maxChars = 900,
+    int maxDays = 365,
+    int limit = 6,
+    int maxChars = 1200,
+    bool includeCrossSession = true,
     DateTime? now,
   }) async {
     final matches = await recallRelevant(
@@ -419,6 +454,7 @@ class ConversationHistory {
       conversationId: conversationId,
       maxDays: maxDays,
       limit: limit,
+      includeCrossSession: includeCrossSession,
       now: now,
     );
     if (matches.isEmpty) return '';

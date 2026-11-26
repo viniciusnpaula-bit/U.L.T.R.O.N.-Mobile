@@ -46,7 +46,7 @@ import '../sections/memory_section.dart';
 import '../sections/settings_section.dart';
 import '../theme/ultron_theme.dart';
 import '../widgets/action_confirmation_dialog.dart';
-import '../widgets/core_orb.dart' show CoreOrb, CoreStage;
+import '../widgets/core_orb.dart' show CoreOrb, CoreStage, CoreStarfieldBackdrop;
 import '../widgets/ultron_navigation_drawer.dart';
 import '../widgets/voice_selector_sheet.dart';
 import 'ai_settings_screen.dart';
@@ -167,7 +167,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   SessionTelemetry sessionTelemetry = SessionTelemetry.initial();
   TacticalMode activeTacticalMode = TacticalMode.geral;
   bool pcLanConfigured = false;
-  String installedVersion = 'v1.6.2';
+  String installedVersion = 'v1.6.3';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -907,6 +907,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           activePersona.accentColor.toARGB32(),
         ),
       );
+      UltronTheme.setPersona(activePersona);
       if (!mounted) return;
       setState(() {
         authFailures = failures;
@@ -1086,6 +1087,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     HapticFeedback.selectionClick();
     await voiceService.setWakeWordProfile(profile);
     final persona = AssistantPersona.forWakeProfile(profile);
+    UltronTheme.setPersona(persona);
     if (!mounted) return;
     setState(() {
       selectedSpeechStyle = persona.defaultStyle;
@@ -2524,15 +2526,18 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         )
         .toList();
 
-    await ConversationHistory.instance.save(
-      ChatMessage(
-        id: null,
-        conversationId: activeConvId,
-        role: ChatRole.user,
-        content: text,
-        createdAt: now,
-      ),
+    final userTurn = ChatMessage(
+      id: null,
+      conversationId: activeConvId,
+      role: ChatRole.user,
+      content: text,
+      createdAt: now,
     );
+    await ConversationHistory.instance.save(userTurn);
+    final durableFacts = ConversationHistory.extractLongTermFacts([userTurn]);
+    if (durableFacts.isNotEmpty) {
+      unawaited(deviceService.persistLongTermSessionFacts(durableFacts));
+    }
     if (!mounted) return;
     setState(() => sending = true);
 
@@ -2544,8 +2549,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         recallContext = await ConversationHistory.instance.buildRecallContext(
           text,
           conversationId: activeConvId,
-          maxDays: 120,
-          limit: 4,
+          maxDays: 365,
+          limit: 6,
+          includeCrossSession: true,
         );
       } catch (_) {}
       final baseSystemPrompt = await deviceService.buildContextualSystemPrompt(
@@ -2555,6 +2561,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         speechStyle: selectedSpeechStyle,
         lexicalRecallContext: recallContext,
         compactedHistoryDigest: compactedHistory.summaryDigest,
+        nightFocusMode: nightFocusMode,
       );
       final reusingSessionVision = attachedVision == null &&
           lastSessionVisionImage != null &&
@@ -3943,6 +3950,23 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           timestamp: timeStr,
         ));
         break;
+      case UltronCommand.dj:
+        final djRes = await deviceService.executeDjCommand(
+          argument,
+          mode: activeTacticalMode,
+          nightFocusMode: nightFocusMode,
+          confirmAction: _confirmActionSimulation,
+        );
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Curadoria Musical / DJ',
+          text: djRes.message,
+          timestamp: timeStr,
+        ));
+        if (djRes.speakText != null && _isForegroundActive) {
+          await voiceService.speak(djRes.speakText!);
+        }
+        break;
     }
   }
 
@@ -4868,7 +4892,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                           style: IconButton.styleFrom(
                             backgroundColor: (listeningVoice ||
                                     voicePipeline.isPushToTalkActive)
-                                ? UltronColors.crimsonDark
+                                ? activePersona.accentDark
                                 : Colors.transparent,
                             minimumSize: const Size(38, 38),
                             padding: EdgeInsets.zero,
@@ -4880,7 +4904,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             size: 20,
                             color: (listeningVoice ||
                                     voicePipeline.isPushToTalkActive)
-                                ? UltronColors.crimson
+                                ? activePersona.accentColor
                                 : UltronColors.textSecondary,
                           ),
                         ),
@@ -4889,7 +4913,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                       Material(
                         color: sending
                             ? UltronColors.surfaceElevated
-                            : UltronColors.crimson,
+                            : activePersona.accentColor,
                         shape: const CircleBorder(),
                         clipBehavior: Clip.antiAlias,
                         child: InkWell(
@@ -4899,18 +4923,20 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                             height: 36,
                             child: Center(
                               child: sending
-                                  ? const SizedBox(
+                                  ? SizedBox(
                                       width: 16,
                                       height: 16,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        color: UltronColors.crimson,
+                                        color: activePersona.accentColor,
                                       ),
                                     )
-                                  : const Icon(
+                                  : Icon(
                                       Icons.arrow_upward_rounded,
                                       size: 18,
-                                      color: UltronColors.textPrimary,
+                                      color: UltronTheme.onAccentFor(
+                                        activePersona.accentColor,
+                                      ),
                                     ),
                             ),
                           ),
@@ -4978,53 +5004,70 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
 
     if (!hasConversation) {
       final idleSize = keyboardOpen ? 120.0 : 220.0;
-      return Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              GestureDetector(
-                onTap: _startVoiceInput,
-                onLongPress: () => _setStage(CoreStage.corner),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 220),
-                  curve: Curves.easeOutCubic,
-                  width: idleSize,
-                  height: idleSize,
-                  child: CoreOrb(
-                    stage: stage,
-                    shaderProgram: widget.shaderProgram,
-                    energy: orbEnergy,
-                    accentColor: activePersona.accentColor,
-                  ),
-                ),
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CoreStarfieldBackdrop(
+                active: stage != CoreStage.hidden,
+                energy: orbEnergy,
+                accentColor: activePersona.accentColor,
+                starCount: keyboardOpen ? 46 : 82,
+                nebulaIntensity: nightFocusMode ? 0.55 : 1.0,
+                centerAlignment: const Alignment(0, -0.14),
               ),
-              const SizedBox(height: 14),
-              Text(
-                statusText,
-                style: TextStyle(
-                  color: (listeningVoice || sending)
-                      ? UltronColors.crimson
-                      : UltronColors.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                nightFocusMode
-                    ? 'Modo sussurro ativo. Toque no núcleo para falar.'
-                    : 'Toque no núcleo para falar ou envie um comando abaixo.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: UltronColors.textSecondary,
-                  fontSize: 13,
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+          Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GestureDetector(
+                    onTap: _startVoiceInput,
+                    onLongPress: () => _setStage(CoreStage.corner),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeOutCubic,
+                      width: idleSize,
+                      height: idleSize,
+                      child: CoreOrb(
+                        stage: stage,
+                        shaderProgram: widget.shaderProgram,
+                        energy: orbEnergy,
+                        accentColor: activePersona.accentColor,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    statusText,
+                    style: TextStyle(
+                      color: (listeningVoice || sending)
+                          ? activePersona.accentColor
+                          : UltronColors.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    nightFocusMode
+                        ? 'Modo sussurro ativo. Toque no núcleo para falar.'
+                        : 'Toque no núcleo para falar ou envie um comando abaixo.',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: UltronColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       );
     }
 
@@ -5038,6 +5081,17 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           child: Stack(
             alignment: Alignment.center,
             children: [
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: CoreStarfieldBackdrop(
+                    active: stage != CoreStage.hidden,
+                    energy: orbEnergy,
+                    accentColor: activePersona.accentColor,
+                    starCount: keyboardOpen ? 28 : 48,
+                    nebulaIntensity: nightFocusMode ? 0.45 : 0.85,
+                  ),
+                ),
+              ),
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -5063,7 +5117,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                       statusText,
                       style: TextStyle(
                         color: (listeningVoice || sending)
-                            ? UltronColors.crimson
+                            ? activePersona.accentColor
                             : UltronColors.textSecondary,
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
@@ -7803,12 +7857,15 @@ class _HomeQuickAction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = UltronTheme.accentOf(context);
+    final accentDark = UltronTheme.accentDarkOf(context);
+    final accentBorder = UltronTheme.accentBorderOf(context);
     return Material(
-      color: active ? UltronColors.crimsonDark : UltronColors.surface,
+      color: active ? accentDark : UltronColors.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(14),
         side: BorderSide(
-          color: active ? UltronColors.crimsonBorder : UltronColors.border,
+          color: active ? accentBorder : UltronColors.border,
         ),
       ),
       clipBehavior: Clip.antiAlias,
@@ -7823,8 +7880,7 @@ class _HomeQuickAction extends StatelessWidget {
               Icon(
                 icon,
                 size: 16,
-                color:
-                    active ? UltronColors.crimson : UltronColors.textSecondary,
+                color: active ? accent : UltronColors.textSecondary,
               ),
               const SizedBox(width: 6),
               Flexible(
