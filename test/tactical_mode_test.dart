@@ -15,6 +15,9 @@ void main() {
     expect(TacticalMode.parse('ENEM'), TacticalMode.estudos);
     expect(TacticalMode.parse('dieta'), TacticalMode.treino);
     expect(TacticalMode.parse('código'), TacticalMode.dev);
+    expect(TacticalMode.parse('música'), TacticalMode.musica);
+    expect(TacticalMode.parse('spotify'), TacticalMode.musica);
+    expect(TacticalMode.parse('dj'), TacticalMode.musica);
     expect(TacticalMode.parse('padrão'), TacticalMode.geral);
     expect(TacticalMode.parse('desconhecido'), isNull);
   });
@@ -29,6 +32,9 @@ void main() {
     );
     final devPrompt = DeviceControlService.buildSystemPromptForMode(
       TacticalMode.dev,
+    );
+    final musicPrompt = DeviceControlService.buildSystemPromptForMode(
+      TacticalMode.musica,
     );
 
     expect(fullPrompt, DeviceControlService.aiSystemPrompt);
@@ -49,6 +55,12 @@ void main() {
     // Dev mode keeps Desktop bridge tools but excludes Spotify
     expect(devPrompt, contains('PC_EXEC_TOOL'));
     expect(devPrompt, isNot(contains('SPOTIFY_PLAY')));
+
+    // Music mode keeps Spotify & media/hardware controls and isolates Memoria/Musica
+    expect(musicPrompt, contains('MODO MÚSICA/DJ'));
+    expect(musicPrompt, contains('Memoria/Musica'));
+    expect(musicPrompt, contains('SPOTIFY_PLAY'));
+    expect(musicPrompt, isNot(contains('WHATSAPP')));
   });
 
   test('buildContextualSystemPrompt scopes RAG FTS5 to active TacticalMode folder',

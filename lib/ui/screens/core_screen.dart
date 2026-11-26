@@ -150,6 +150,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   bool criticalBatteryAlerted = false;
   bool notificationSentinelEnabled = false;
   bool ecoVadSentinelRunning = false;
+  bool dynamicIslandEnabled = false;
   double speechRms = 0.0;
   VoiceProfile selectedVoiceProfile = VoiceProfile.grave;
   SpeechStyle selectedSpeechStyle = SpeechStyle.direto;
@@ -166,7 +167,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   SessionTelemetry sessionTelemetry = SessionTelemetry.initial();
   TacticalMode activeTacticalMode = TacticalMode.geral;
   bool pcLanConfigured = false;
-  String installedVersion = 'v1.6.1';
+  String installedVersion = 'v1.6.2';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -644,6 +645,13 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
                 ? 'falando'
                 : 'ocioso';
     unawaited(deviceService.updateFloatingOrbState(orbState));
+    final islandMode = switch (orbState) {
+      'ouvindo' => 'listening',
+      'processando' => 'processing',
+      'falando' => 'speaking',
+      _ => 'idle',
+    };
+    unawaited(deviceService.updateDynamicIslandState(mode: islandMode));
   }
 
   Future<void> _handleVoiceTranscript(String transcript) async {
@@ -884,14 +892,21 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       } catch (_) {}
       DeviceStatus? hwStatus;
       bool notifEnabled = false;
+      bool islandRunning = false;
       List<CapturedNotification> loadedMsgs = const [];
       try {
         hwStatus = await deviceService.getStatus();
         notifEnabled = await deviceService.isNotificationListenerEnabled();
+        islandRunning = await deviceService.isDynamicIslandRunning();
         if (notifEnabled) {
           loadedMsgs = await deviceService.getRecentMessages(limit: 12);
         }
       } catch (_) {}
+      unawaited(
+        deviceService.setDynamicIslandAccent(
+          activePersona.accentColor.toARGB32(),
+        ),
+      );
       if (!mounted) return;
       setState(() {
         authFailures = failures;
@@ -900,6 +915,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         nfcTags = storedNfcTags;
         nfcStatus = hwNfc;
         notificationSentinelEnabled = notifEnabled;
+        dynamicIslandEnabled = islandRunning;
         selectedVoiceProfile = voiceService.profile;
         selectedSpeechStyle = loadedSpeechStyle;
         vadProfile = loadedVadProfile;
@@ -1078,6 +1094,46 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       await _userPrefs.set('speech_style', persona.defaultStyle.id);
     } catch (_) {}
     unawaited(_syncBackgroundVoiceConfig());
+    unawaited(
+      deviceService.setDynamicIslandAccent(persona.accentColor.toARGB32()),
+    );
+  }
+
+  Future<bool> _toggleDynamicIsland({bool? forceValue}) async {
+    HapticFeedback.selectionClick();
+    final target = forceValue ?? !dynamicIslandEnabled;
+    if (target) {
+      final canOverlay = await deviceService.canDrawOverlays();
+      if (!canOverlay) {
+        await deviceService.requestOverlayPermission();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Conceda "Aparecer sobre outros apps" para ativar a Ilha Dinâmica.',
+                style: TextStyle(fontSize: 12),
+              ),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+        return false;
+      }
+      await deviceService.setDynamicIslandAccent(
+        activePersona.accentColor.toARGB32(),
+      );
+      final started = await deviceService.setDynamicIsland(true);
+      if (mounted) {
+        setState(() => dynamicIslandEnabled = started);
+      }
+      return started;
+    } else {
+      await deviceService.setDynamicIsland(false);
+      if (mounted) {
+        setState(() => dynamicIslandEnabled = false);
+      }
+      return false;
+    }
   }
 
   Future<void> _selectSpeechStyle(SpeechStyle style) async {
@@ -3815,7 +3871,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               isUser: false,
               senderLabel: 'Modos Táticos',
               text:
-                  'Modo "$arg" não reconhecido. Opções: `geral`, `engenharia`, `estudos`, `treino`, `dev`.',
+                  'Modo "$arg" não reconhecido. Opções: `geral`, `engenharia`, `estudos`, `treino`, `dev`, `musica`.',
               timestamp: timeStr,
             ));
           } else {
@@ -3840,6 +3896,52 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         break;
       case UltronCommand.research:
         await _runResearchCommand(argument, timeStr);
+        break;
+      case UltronCommand.opengym:
+        final gymRes = await deviceService.executeOpenGymCommand(argument);
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'openGym (Modo Treino)',
+          text: gymRes.message,
+          timestamp: timeStr,
+        ));
+        if (gymRes.speakText != null && _isForegroundActive) {
+          await voiceService.speak(gymRes.speakText!);
+        }
+        break;
+      case UltronCommand.island:
+        final argLower = argument.trim().toLowerCase();
+        String msg;
+        if (argLower == 'status') {
+          final running = await deviceService.isDynamicIslandRunning();
+          if (mounted) setState(() => dynamicIslandEnabled = running);
+          msg = running
+              ? 'Ilha Dinâmica (Expressive Cutout) está ativa sobre a câmera frontal.'
+              : 'Ilha Dinâmica está desativada. Use `/ilha on` ou ative em Configurações.';
+        } else if (argLower == 'off' ||
+            argLower == 'desligar' ||
+            argLower == 'desativar') {
+          await _toggleDynamicIsland(forceValue: false);
+          msg = 'Ilha Dinâmica desativada.';
+        } else if (argLower == 'on' ||
+            argLower == 'ligar' ||
+            argLower == 'ativar') {
+          final ok = await _toggleDynamicIsland(forceValue: true);
+          msg = ok
+              ? 'Ilha Dinâmica (Expressive Cutout) ativada ao redor da câmera frontal.'
+              : 'Permissão "Aparecer sobre outros apps" pendente. Após conceder, execute `/ilha on` novamente.';
+        } else {
+          final ok = await _toggleDynamicIsland();
+          msg = ok
+              ? 'Ilha Dinâmica (Expressive Cutout) ativada.'
+              : 'Ilha Dinâmica desativada (ou aguardando permissão de sobreposição).';
+        }
+        _appendFeed(_FeedEntry(
+          isUser: false,
+          senderLabel: 'Ilha Dinâmica',
+          text: msg,
+          timestamp: timeStr,
+        ));
         break;
     }
   }
@@ -4436,6 +4538,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       UltronSection.settings => SettingsSection(
           isAudioOn: isAudioOn,
           nightFocusMode: nightFocusMode,
+          dynamicIslandEnabled: dynamicIslandEnabled,
           selectedVoiceProfile: selectedVoiceProfile,
           activePersona: activePersona,
           speechStyle: selectedSpeechStyle,
@@ -4448,6 +4551,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           hasUpdate: hasUpdate,
           onToggleAudio: _toggleAudio,
           onToggleNightFocus: _toggleNightFocusMode,
+          onToggleDynamicIsland: () => unawaited(_toggleDynamicIsland()),
           onSelectPersona: (p) => unawaited(_selectPersonaProfile(p)),
           onSelectSpeechStyle: (s) => unawaited(_selectSpeechStyle(s)),
           onSelectVadProfile: (p) => unawaited(_updateVadProfile(p)),

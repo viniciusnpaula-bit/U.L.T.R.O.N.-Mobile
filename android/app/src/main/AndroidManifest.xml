@@ -118,6 +118,11 @@
             android:name=".FloatingOrbService"
             android:enabled="true"
             android:exported="false"/>
+        <!-- Ilha Dinâmica Expressiva (inspirada em EvanKoe/expressive-cutout) -->
+        <service
+            android:name=".DynamicIslandService"
+            android:enabled="true"
+            android:exported="false"/>
         <!-- Reativação opt-in do sentinela após reiniciar o aparelho. -->
         <receiver
             android:name=".BootReceiver"

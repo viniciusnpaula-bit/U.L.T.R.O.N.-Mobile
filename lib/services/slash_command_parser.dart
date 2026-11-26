@@ -35,6 +35,8 @@ enum UltronCommand {
   mode,
   eletrica,
   research,
+  opengym,
+  island,
 }
 
 class CommandResult {
@@ -172,6 +174,14 @@ class SlashCommandParser {
     '/pesquisar': UltronCommand.research,
     '/research': UltronCommand.research,
     '/deep': UltronCommand.research,
+    '/opengym': UltronCommand.opengym,
+    '/open_gym': UltronCommand.opengym,
+    '/gym': UltronCommand.opengym,
+    '/treino_sync': UltronCommand.opengym,
+    '/ilha': UltronCommand.island,
+    '/island': UltronCommand.island,
+    '/cutout': UltronCommand.island,
+    '/ilha_dinamica': UltronCommand.island,
   };
 
   static CommandResult? parse(String input) {
@@ -445,7 +455,7 @@ class SlashCommandParser {
               'Utilitários de arquivos via SAF/Downloads: limpeza SHA-256, conversão .webp/.heic, padronização de PDFs e ETL em lote para Inbox/ do Obsidian.',
         },
         {
-          'command': '/modo [geral|engenharia|estudos|treino|dev]',
+          'command': '/modo [geral|engenharia|estudos|treino|dev|musica]',
           'aliases': '/mode, /agente, /helper',
           'description':
               'Alterna entre Modos Táticos isolados com memória filtrada no Obsidian, histórico separado e ferramentas enxutas.',
@@ -462,6 +472,18 @@ class SlashCommandParser {
           'aliases': '/pesquisar, /research, /deep',
           'description':
               'Executa pesquisa profunda assíncrona (local ou delegada ao PC via LAN) com relatório Markdown no Obsidian.',
+        },
+        {
+          'command': '/opengym [importar|auto|resumo|abrir]',
+          'aliases': '/open_gym, /gym, /treino_sync',
+          'description':
+              'Importa backups JSON/CSV offline do app openGym para o Obsidian (Modo Treino) com PRs, volume e peso corporal.',
+        },
+        {
+          'command': '/ilha [on|off|status]',
+          'aliases': '/island, /cutout, /ilha_dinamica',
+          'description':
+              'Ativa ou desativa a Ilha Dinâmica (Expressive Cutout) ancorada no recorte da câmera frontal.',
         },
       ];
 }

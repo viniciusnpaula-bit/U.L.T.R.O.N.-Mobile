@@ -722,6 +722,12 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
         ) {
             FloatingOrbService.start(this)
         }
+        if (DynamicIslandService.isEnabledPref(this) &&
+            !DynamicIslandService.isRunning &&
+            DynamicIslandService.canDraw(this)
+        ) {
+            DynamicIslandService.start(this)
+        }
         // Entrega com pequeno atraso para o Dart já ter registrado o handler (cold start).
         window?.decorView?.postDelayed({
             deliverPendingWakeWord()
@@ -889,10 +895,14 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 isUltronSpeakingGlobal = speaking
                 if (speaking) {
                     FloatingOrbService.updateState(OrbState.SPEAKING)
+                    DynamicIslandService.updateState("speaking")
                 } else {
                     UltronTtsHelper.stopAll()
                     if (FloatingOrbService.currentState == OrbState.SPEAKING) {
                         FloatingOrbService.updateState(OrbState.IDLE)
+                    }
+                    if (DynamicIslandService.currentMode == IslandMode.SPEAKING) {
+                        DynamicIslandService.updateState("idle")
                     }
                 }
                 result.success(true)
@@ -1132,6 +1142,34 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 val locked = call.argument<Boolean>("locked") ?: true
                 val accessLevel = call.argument<String>("accessLevel") ?: "locked"
                 FloatingOrbService.updateAuthState(locked, accessLevel)
+                DynamicIslandService.updateAuthState(locked)
+                result.success(true)
+            }
+            "isDynamicIslandRunning" -> {
+                result.success(DynamicIslandService.isRunning)
+            }
+            "setDynamicIsland" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                if (!enabled) {
+                    DynamicIslandService.stop(this)
+                    result.success(false)
+                } else {
+                    val started = DynamicIslandService.start(this)
+                    result.success(started)
+                }
+            }
+            "updateDynamicIslandState" -> {
+                val mode = call.argument<String>("mode") ?: "idle"
+                val title = call.argument<String>("title") ?: ""
+                val detail = call.argument<String>("detail") ?: ""
+                DynamicIslandService.updateState(mode, title, detail)
+                result.success(true)
+            }
+            "setDynamicIslandAccent" -> {
+                val colorArgb = call.argument<Number>("colorArgb")?.toInt()
+                if (colorArgb != null) {
+                    DynamicIslandService.setAccentColor(colorArgb)
+                }
                 result.success(true)
             }
             "consumePendingFloatingOrbTap" -> {

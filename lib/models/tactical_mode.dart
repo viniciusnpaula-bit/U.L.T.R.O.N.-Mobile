@@ -147,12 +147,34 @@ class TacticalMode {
         'boas práticas de segurança e arquitetura. Salve notas técnicas em Memoria/Dev/.',
   );
 
+  static const musica = TacticalMode(
+    id: 'musica',
+    label: 'Música / DJ',
+    shortLabel: 'MÚSICA',
+    description: 'Controle de reprodução, Spotify, curadoria de playlists, teoria musical e letras.',
+    conversationId: 'mode_musica',
+    vaultPathPrefix: 'Memoria/Musica',
+    allowedCategories: {
+      TacticalActionCategory.core,
+      TacticalActionCategory.hardware,
+      TacticalActionCategory.spotify,
+      TacticalActionCategory.obsidian,
+      TacticalActionCategory.webAndInfo,
+      TacticalActionCategory.desktop,
+    },
+    personaDirective:
+        'Você está no MODO MÚSICA/DJ do U.L.T.R.O.N. Priorize controle ágil de reprodução, '
+        'Spotify (celular e Desktop), recomendações precisas por clima/gênero/BPM, montagem de playlists, '
+        'letras, cifras e teoria musical. Salve playlists, descobertas e anotações musicais em Memoria/Musica/.',
+  );
+
   static const List<TacticalMode> presets = <TacticalMode>[
     geral,
     engenharia,
     estudos,
     treino,
     dev,
+    musica,
   ];
 
   /// Resolve um modo tático a partir de nome, apelido ou ID.
@@ -175,6 +197,7 @@ class TacticalMode {
       'estudos' || 'estudo' || 'enem' || 'prova' || 'escola' => estudos,
       'treino' || 'dieta' || 'academia' || 'saude' || 'fitness' => treino,
       'dev' || 'codigo' || 'code' || 'programacao' || 'software' => dev,
+      'musica' || 'music' || 'som' || 'audio' || 'spotify' || 'dj' || 'playlist' || 'playlists' => musica,
       _ => null,
     };
   }

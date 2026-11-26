@@ -331,10 +331,34 @@ class UltronNotificationService : NotificationListenerService() {
         if (sbn == null) return
         val pkg = sbn.packageName ?: return
         // Auto-exclusão obrigatória: nunca reprocessar notificações do próprio U.L.T.R.O.N.
-        if (pkg == packageName || sbn.isOngoing) return
+        if (pkg == packageName) return
 
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: return
+
+        // Atualiza mídia na Ilha Dinâmica (notificações de player são normalmente ongoing).
+        val isMediaNotification = extras.containsKey(Notification.EXTRA_MEDIA_SESSION) ||
+            notification.category == Notification.CATEGORY_TRANSPORT ||
+            pkg.contains("spotify") ||
+            pkg.contains("youtube.music") ||
+            pkg.contains("deezer") ||
+            pkg.contains("soundcloud") ||
+            pkg.contains("apple.android.music")
+        if (isMediaNotification) {
+            val mediaTitle = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+            val mediaArtist = (
+                extras.getCharSequence(Notification.EXTRA_TEXT)
+                    ?: extras.getCharSequence(Notification.EXTRA_SUB_TEXT)
+                )?.toString()?.trim().orEmpty()
+            if (mediaTitle.isNotEmpty()) {
+                val audio = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+                val isPlaying = audio?.isMusicActive ?: sbn.isOngoing
+                DynamicIslandService.updateMediaState(mediaTitle, mediaArtist, isPlaying)
+            }
+            if (sbn.isOngoing) return
+        }
+
+        if (sbn.isOngoing) return
 
         val rawTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)
             ?: extras.getCharSequence(Notification.EXTRA_TITLE)
@@ -385,6 +409,20 @@ class UltronNotificationService : NotificationListenerService() {
         }
 
         evaluateSmartTriage(captured)
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        super.onNotificationRemoved(sbn)
+        val notification = sbn?.notification ?: return
+        val extras = notification.extras ?: return
+        val pkg = sbn.packageName ?: ""
+        val isMedia = extras.containsKey(Notification.EXTRA_MEDIA_SESSION) ||
+            notification.category == Notification.CATEGORY_TRANSPORT ||
+            pkg.contains("spotify") ||
+            pkg.contains("youtube.music")
+        if (isMedia) {
+            DynamicIslandService.updateMediaState("", "", false)
+        }
     }
 
     private fun evaluateSmartTriage(msg: CapturedMessage) {
@@ -495,6 +533,7 @@ class UltronNotificationService : NotificationListenerService() {
         MainActivity.notifyUrgentNotificationDetected()
 
         postUrgentNotification(msg, finalScore, reasonLabel)
+        DynamicIslandService.showNotificationAlert(msg.sender, msg.text, msg.appLabel)
 
         if (prefs.getBoolean(KEY_SPEAK_URGENT, false) && (!isNight || isVip)) {
             UltronTtsHelper.speak(

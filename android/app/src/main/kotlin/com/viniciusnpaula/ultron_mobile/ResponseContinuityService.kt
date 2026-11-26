@@ -175,6 +175,10 @@ class ResponseContinuityService : Service() {
                 startForeground(FOREGROUND_ID, notification)
             }
             isActive = true
+            DynamicIslandService.updateState(
+                modeId = if (phase == "thinking") "processing" else "speaking",
+                detail = preview,
+            )
             try {
                 // Limite de segurança de 5 minutos por resposta longa
                 wakeLock?.acquire(5 * 60 * 1000L)
@@ -237,6 +241,11 @@ class ResponseContinuityService : Service() {
 
     private fun releaseAndStop() {
         isActive = false
+        if (DynamicIslandService.currentMode == IslandMode.PROCESSING ||
+            DynamicIslandService.currentMode == IslandMode.SPEAKING
+        ) {
+            DynamicIslandService.updateState("idle")
+        }
         try {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()

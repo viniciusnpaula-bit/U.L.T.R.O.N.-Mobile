@@ -16,6 +16,7 @@ import 'desktop_pairing_service.dart';
 import 'eletrica_engine.dart';
 import 'file_utilities_service.dart';
 import 'obsidian_service.dart';
+import 'opengym_service.dart';
 import 'reminder_service.dart';
 import 'speech_text.dart';
 import 'spotify_service.dart';
@@ -2081,6 +2082,163 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
     }
   }
 
+  Future<bool> isDynamicIslandRunning() async {
+    try {
+      final res = await _channel.invokeMethod<bool>('isDynamicIslandRunning');
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> setDynamicIsland(bool enabled) async {
+    try {
+      final res = await _channel.invokeMethod<bool>('setDynamicIsland', {
+        'enabled': enabled,
+      });
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> updateDynamicIslandState({
+    required String mode,
+    String title = '',
+    String detail = '',
+  }) async {
+    try {
+      await _channel.invokeMethod<bool>('updateDynamicIslandState', {
+        'mode': mode,
+        'title': title,
+        'detail': detail,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> setDynamicIslandAccent(int colorArgb) async {
+    try {
+      await _channel.invokeMethod<bool>('setDynamicIslandAccent', {
+        'colorArgb': colorArgb,
+      });
+    } catch (_) {}
+  }
+
+  OpenGymService getOpenGymService() => OpenGymService(channel: _channel);
+
+  Future<DeviceActionResult> executeOpenGymCommand(String rawArg) async {
+    final arg = rawArg.trim();
+    final lower = arg.toLowerCase();
+
+    if (lower == 'abrir' || lower == 'open' || lower == 'app') {
+      try {
+        final label = await openApp('opengym');
+        return DeviceActionResult(
+          handled: true,
+          message: 'Abrindo $label (ch.duartesantos.opengym).',
+          speakText: 'Abrindo OpenGym.',
+        );
+      } catch (e) {
+        return DeviceActionResult(
+          handled: true,
+          message:
+              'Não encontrei o app openGym instalado (ch.duartesantos.opengym). Detalhe: $e',
+          speakText: 'Não encontrei o aplicativo OpenGym instalado.',
+        );
+      }
+    }
+
+    if (lower == 'resumo' || lower == 'status' || lower == 'prs' || lower == 'pr') {
+      try {
+        final vault = await _getObsidian();
+        final content = await vault.readNote(OpenGymService.summaryNotePath);
+        if (content.trim().isEmpty) {
+          return const DeviceActionResult(
+            handled: true,
+            message:
+                'Nenhum backup do openGym importado ainda. Use `/opengym importar` para escolher o JSON/CSV exportado do app openGym.',
+            speakText: 'Nenhum backup do OpenGym foi importado ainda.',
+          );
+        }
+        return DeviceActionResult(
+          handled: true,
+          message: content,
+          speakText: 'Aqui está o resumo mais recente do OpenGym salvo no Modo Treino.',
+        );
+      } catch (_) {
+        return const DeviceActionResult(
+          handled: true,
+          message:
+              'Nenhum resumo do openGym encontrado em `${OpenGymService.summaryNotePath}`. '
+              'Exporte o backup JSON/CSV dentro do app openGym e execute `/opengym importar`.',
+          speakText:
+              'Nenhum resumo do OpenGym encontrado. Exporte o backup no OpenGym e use importar.',
+        );
+      }
+    }
+
+    final openGym = getOpenGymService();
+    File? sourceFile;
+    if (arg.isNotEmpty &&
+        lower != 'importar' &&
+        lower != 'import' &&
+        lower != 'sync' &&
+        lower != 'sincronizar' &&
+        lower != 'auto') {
+      final direct = File(arg);
+      if (await direct.exists()) {
+        sourceFile = direct;
+      }
+    }
+
+    if (sourceFile == null) {
+      if (lower == 'auto') {
+        sourceFile = await openGym.findLatestLocalBackup();
+      } else {
+        sourceFile = await openGym.pickBackupFileSaf() ??
+            await openGym.findLatestLocalBackup();
+      }
+    }
+
+    if (sourceFile == null) {
+      return const DeviceActionResult(
+        handled: true,
+        message:
+            'Nenhum arquivo de backup do openGym selecionado ou encontrado em Downloads.\n'
+            'Como sincronizar offline:\n'
+            '1. Abra o openGym > Configurações > Exportar backup JSON (`opengym-state.json`) ou CSV.\n'
+            '2. Execute `/opengym importar` (ou `/opengym auto` após salvar em Downloads).',
+        speakText:
+            'Nenhum backup do OpenGym selecionado. Exporte o JSON ou CSV no OpenGym e tente novamente.',
+      );
+    }
+
+    try {
+      final vault = await _getObsidian();
+      final summary = await openGym.importFile(sourceFile, obsidian: vault);
+      _cachedVaultSearch?.invalidateSyncCache();
+      await recordAudit(
+        actor: 'OPERATOR',
+        action: 'OPENGYM_IMPORT',
+        target: summary.savedNotePath ?? sourceFile.path,
+        status: summary.isEmpty ? 'EMPTY' : 'EXECUTED',
+        detail:
+            'workouts=${summary.workouts.length}, prs=${summary.personalRecords.length}, weights=${summary.weightEntries.length}',
+      );
+      return DeviceActionResult(
+        handled: true,
+        message: summary.formatChatSummary(),
+        speakText: summary.speakText,
+      );
+    } catch (e) {
+      return DeviceActionResult(
+        handled: true,
+        message: 'Falha ao importar backup do openGym: $e',
+        speakText: 'Falha ao ler o arquivo do OpenGym.',
+      );
+    }
+  }
+
   Future<bool> canDrawOverlays() async {
     try {
       final res = await _channel.invokeMethod<bool>('canDrawOverlays');
@@ -2349,6 +2507,21 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
           message: 'Nenhuma manchete disponível no momento.',
           speakText: 'Não encontrei manchetes no momento.',
         );
+      }
+
+      // 0B. Offline openGym integration shortcuts
+      if (RegExp(
+        r'^(?:importar|sincronizar|conectar|atualizar)\s+(?:o\s+|os\s+dados\s+do\s+)?open\s*gym$',
+      ).hasMatch(lower)) {
+        return await executeOpenGymCommand('importar');
+      }
+      if (RegExp(
+        r'^(?:resumo|prs?|recordes?|treinos?)\s+(?:do\s+)?open\s*gym$',
+      ).hasMatch(lower)) {
+        return await executeOpenGymCommand('resumo');
+      }
+      if (RegExp(r'^abrir\s+(?:o\s+)?open\s*gym$').hasMatch(lower)) {
+        return await executeOpenGymCommand('abrir');
       }
 
       // 1. Flashlight / Torch

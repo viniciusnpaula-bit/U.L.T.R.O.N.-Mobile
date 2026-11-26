@@ -586,7 +586,9 @@ object DeviceHardwareHelper {
             "play store" to listOf("com.android.vending"),
             "tiktok" to listOf("com.zhiliaoapp.musically"),
             "netflix" to listOf("com.netflix.mediaclient"),
-            "obsidian" to listOf("md.obsidian")
+            "obsidian" to listOf("md.obsidian"),
+            "opengym" to listOf("ch.duartesantos.opengym"),
+            "open gym" to listOf("ch.duartesantos.opengym"),
         )
 
         val pm = context.packageManager

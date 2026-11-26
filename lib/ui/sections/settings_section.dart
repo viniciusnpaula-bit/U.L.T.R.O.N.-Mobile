@@ -32,10 +32,13 @@ class SettingsSection extends StatelessWidget {
     this.speechStyle = SpeechStyle.direto,
     this.onSelectPersona,
     this.onSelectSpeechStyle,
+    this.dynamicIslandEnabled = false,
+    this.onToggleDynamicIsland,
   });
 
   final bool isAudioOn;
   final bool nightFocusMode;
+  final bool dynamicIslandEnabled;
   final VoiceProfile selectedVoiceProfile;
   final VadProfile vadProfile;
   final int vadHangoverMs;
@@ -45,6 +48,7 @@ class SettingsSection extends StatelessWidget {
   final bool hasUpdate;
   final VoidCallback onToggleAudio;
   final VoidCallback onToggleNightFocus;
+  final VoidCallback? onToggleDynamicIsland;
   final ValueChanged<VadProfile> onSelectVadProfile;
   final ValueChanged<int> onSelectVadHangoverMs;
   final VoidCallback onOpenVoiceSelector;
@@ -322,6 +326,29 @@ class SettingsSection extends StatelessWidget {
                   ),
                 ),
               ),
+              if (onToggleDynamicIsland != null) ...[
+                const Divider(height: 1, color: UltronColors.borderSubtle),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: dynamicIslandEnabled,
+                  onChanged: (_) => onToggleDynamicIsland!(),
+                  activeThumbColor: UltronColors.crimson,
+                  title: const Text(
+                    'Ilha Dinâmica (Expressive Cutout)',
+                    style: TextStyle(
+                      color: UltronColors.textPrimary,
+                      fontSize: 14,
+                    ),
+                  ),
+                  subtitle: const Text(
+                    'Pílula animada ao redor da câmera para voz, mídia, alertas e carga',
+                    style: TextStyle(
+                      color: UltronColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

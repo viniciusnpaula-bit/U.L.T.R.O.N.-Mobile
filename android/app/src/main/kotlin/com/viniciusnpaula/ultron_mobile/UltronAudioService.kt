@@ -843,10 +843,22 @@ class UltronAudioService : Service() {
     }
 
     private fun handleBackgroundHandsFreeCommand() {
+        DynamicIslandService.updateState("listening", "Ouvindo...", "Comando por voz")
         try {
             BackgroundVoiceResponder.runBackgroundTurn(
                 context = this,
-                onStatusUpdate = { status -> updateNotification(status) },
+                onStatusUpdate = { status ->
+                    updateNotification(status)
+                    if (status.contains("Processando", ignoreCase = true) ||
+                        status.contains("Pensando", ignoreCase = true)
+                    ) {
+                        DynamicIslandService.updateState("processing", "Processando...", status)
+                    } else if (status.contains("Falando", ignoreCase = true) ||
+                        status.contains("Respondendo", ignoreCase = true)
+                    ) {
+                        DynamicIslandService.updateState("speaking", "Respondendo", status)
+                    }
+                },
                 onReplyNotification = { heard, reply ->
                     showBackgroundReplyNotification(heard, reply)
                 },
@@ -858,6 +870,7 @@ class UltronAudioService : Service() {
         } catch (e: Exception) {
             Stats.lastError = "bg voice: ${e.message}"
         } finally {
+            DynamicIslandService.updateState("idle")
             if (workerActive.get() && !userPaused) {
                 updateNotification("sherpa-onnx KWS carregado — diga \"${currentWakeProfile.displayName}\"")
             }
@@ -894,6 +907,7 @@ class UltronAudioService : Service() {
      */
     private fun onWakeConfirmed(phrase: String) {
         wakeHandoffUntilMs = System.currentTimeMillis() + WAKE_HANDOFF_GUARD_MS
+        DynamicIslandService.updateState("listening", "Ouvindo...", "Palavra \"$phrase\" detectada")
         MainActivity.notifyWakeWord(phrase)
         if (!MainActivity.isActivityResumed) {
             showWakeAlert()
