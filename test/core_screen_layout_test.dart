@@ -136,4 +136,57 @@ void main() {
     expect(find.text('Engenharia'), findsOneWidget);
     expect(find.text('Segurança'), findsOneWidget);
   });
+
+  testWidgets('tapping cockpit telemetry bar opens provider breakdown sheet and Signal Ledger button opens 3-state board',
+      (tester) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final gate = AuthGate();
+    await gate.authenticatePin('1234', (_) async => true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(useMaterial3: true),
+        home: CoreScreen(
+          gate: gate,
+          vault: PinVault(),
+          voiceService: VoiceService(tts: _SilentTts()),
+          captureSource: _StubCapture(),
+          sttService: GroqWhisperSttService(
+            config: const SttConfig(endpointUrl: 'http://127.0.0.1:1', apiKey: 'k'),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // Tap telemetry bar -> opens provider telemetry breakdown sheet
+    await tester.tap(find.byKey(const Key('cockpit_telemetry_bar_tap')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(tester.takeException(), isNull);
+    expect(find.text('Consumo e Telemetria por Provedor'), findsOneWidget);
+    expect(find.text('TOKENS REAIS VS. ESTIMADOS'), findsOneWidget);
+    expect(find.text('BREAKDOWN POR PROVEDOR / MODELO'), findsOneWidget);
+    expect(find.text('EVENTOS DE FAILOVER DA SESSÃO'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.close_rounded));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+
+    // Tap Signal Ledger button -> opens Sinal vs. Ruído board
+    await tester.tap(find.byKey(const Key('signal_ledger_top_button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(tester.takeException(), isNull);
+    expect(find.text('Sinal vs. Ruído'), findsOneWidget);
+    expect(find.byKey(const Key('signal_tab_in_progress')), findsOneWidget);
+    expect(find.byKey(const Key('signal_tab_awaiting')), findsOneWidget);
+    expect(find.byKey(const Key('signal_tab_completed')), findsOneWidget);
+  });
 }

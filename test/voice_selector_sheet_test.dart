@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:ultron_mobile/services/audio_capture_service.dart';
 import 'package:ultron_mobile/services/voice_service.dart';
 import 'package:ultron_mobile/ui/widgets/voice_selector_sheet.dart';
 
@@ -79,6 +82,101 @@ class _StubTts extends FlutterTts {
   Future<dynamic> stop() async => 1;
 }
 
+class _FakeAudioInputRouter implements AudioInputRouterService {
+  int selectedId = -1;
+  bool btGranted = true;
+  final List<AudioInputDevice> savedSelections = <AudioInputDevice>[];
+
+  @override
+  Future<bool> hasBluetoothPermission() async => btGranted;
+
+  @override
+  Future<bool> requestBluetoothPermission() async {
+    btGranted = true;
+    return true;
+  }
+
+  @override
+  Future<AudioInputSelection> getPreferredInputDevice() async {
+    return AudioInputSelection(
+      id: selectedId,
+      type: selectedId == 2 ? 15 : -1,
+      name: selectedId == 2
+          ? 'Microfone do Celular'
+          : 'Automático (Padrão do Android)',
+      isAuto: selectedId == -1,
+    );
+  }
+
+  @override
+  Future<List<AudioInputDevice>> listInputDevices() async {
+    return [
+      AudioInputDevice.auto(selected: selectedId == -1),
+      AudioInputDevice(
+        id: 7,
+        type: 7,
+        category: 'bluetooth',
+        name: 'Galaxy Buds (Bluetooth)',
+        typeLabel: 'Bluetooth (HFP/SCO)',
+        isBluetooth: true,
+        isSelected: selectedId == 7,
+      ),
+      AudioInputDevice(
+        id: 2,
+        type: 15,
+        category: 'builtin',
+        name: 'Microfone do Celular',
+        typeLabel: 'Microfone do aparelho',
+        isBuiltIn: true,
+        isSelected: selectedId == 2,
+      ),
+    ];
+  }
+
+  @override
+  Future<bool> setPreferredInputDevice(AudioInputDevice device) async {
+    selectedId = device.id;
+    savedSelections.add(device);
+    return true;
+  }
+}
+
+class _FakeMicCaptureSource implements AudioCaptureSource {
+  final StreamController<Uint8List> _controller =
+      StreamController<Uint8List>.broadcast();
+  bool started = false;
+  bool stopped = false;
+
+  @override
+  Stream<Uint8List> get frames => _controller.stream;
+
+  @override
+  Future<bool> hasPermission() async => true;
+
+  @override
+  Future<bool> requestPermission() async => true;
+
+  @override
+  Future<AudioEffectsReport> start({int sampleRate = 16000}) async {
+    started = true;
+    return AudioEffectsReport(
+      aecEnabled: true,
+      nsEnabled: true,
+      agcEnabled: true,
+      sampleRate: sampleRate,
+      routedDeviceName: 'Microfone do Celular',
+      routedDeviceType: 15,
+    );
+  }
+
+  @override
+  Future<void> stop() async {
+    stopped = true;
+  }
+
+  Future<void> close() => _controller.close();
+}
+
 void main() {
   testWidgets(
     'VoiceSelectorSheet lists installed PT-BR voices and applies voice + profile immediately with preview',
@@ -102,6 +200,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Voz ativa: pt-br-x-ptd-local'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('pt-br-x-pte-local'),
+        150,
+        scrollable: find.byType(Scrollable).first,
+      );
       expect(find.text('pt-br-x-pte-local'), findsOneWidget);
       expect(find.text('pt-br-x-ptd-local'), findsOneWidget);
 
@@ -113,6 +216,13 @@ void main() {
       expect(fakeTts.spoken, isNotEmpty);
       expect(changedCount, greaterThanOrEqualTo(1));
 
+      await tester.drag(find.byType(ListView), const Offset(0, 500));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('NATURAL'),
+        -150,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.text('NATURAL'));
       await tester.pumpAndSettle();
 
@@ -155,6 +265,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('fish_audio_header')),
+        120,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.tap(find.byKey(const ValueKey('fish_audio_header')));
       await tester.pumpAndSettle();
 
@@ -179,8 +294,11 @@ void main() {
       expect(voiceService.activeVoiceLabel, 'Fish Audio (pt • s2.1-pro)');
       expect(nativePlayed, greaterThanOrEqualTo(1));
 
-      await tester.drag(find.byType(ListView), const Offset(0, 500));
-      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('Voz ativa: Fish Audio (pt • s2.1-pro)'),
+        -200,
+        scrollable: find.byType(Scrollable).first,
+      );
       expect(
           find.text('Voz ativa: Fish Audio (pt • s2.1-pro)'), findsOneWidget);
 
@@ -189,11 +307,68 @@ void main() {
         150,
         scrollable: find.byType(Scrollable).first,
       );
+      await tester.ensureVisible(find.text('pt-br-x-pte-local'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('pt-br-x-pte-local'));
       await tester.pumpAndSettle();
 
       expect(voiceService.isFishAudioActive, isFalse);
       expect(voiceService.activeVoiceName, 'pt-br-x-pte-local');
+    },
+  );
+
+  testWidgets(
+    'VoiceSelectorSheet lists input microphones, switches to built-in phone mic, and runs capture route test',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues(<String, String>{});
+      final fakeTts = _StubTts();
+      final voiceService = VoiceService(tts: fakeTts);
+      final audioInput = _FakeAudioInputRouter();
+      final captureSource = _FakeMicCaptureSource();
+      addTearDown(captureSource.close);
+      var changedCount = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.dark(useMaterial3: true),
+          home: Scaffold(
+            body: VoiceSelectorSheet(
+              voiceService: voiceService,
+              audioInputService: audioInput,
+              captureSource: captureSource,
+              onChanged: () => changedCount += 1,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Galaxy Buds (Bluetooth)'), findsOneWidget);
+      expect(find.text('Microfone do Celular'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('mic_option_2_builtin')));
+      await tester.pumpAndSettle();
+      // Aguarda o SnackBar de 2s sumir antes de clicar em mic_test_button.
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(audioInput.selectedId, 2);
+      expect(audioInput.savedSelections.single.name, 'Microfone do Celular');
+      expect(find.text('Ativo: Microfone do Celular'), findsOneWidget);
+      expect(changedCount, 1);
+
+      await tester.ensureVisible(find.byKey(const Key('mic_test_button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('mic_test_button')));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(captureSource.started, isTrue);
+      expect(find.textContaining('Microfone do Celular'), findsWidgets);
+
+      await tester.tap(find.byKey(const Key('mic_test_button')));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pump();
+      expect(captureSource.stopped, isTrue);
     },
   );
 }

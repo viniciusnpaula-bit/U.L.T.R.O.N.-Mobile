@@ -15,10 +15,12 @@ import 'briefing_service.dart';
 import 'desktop_pairing_service.dart';
 import 'eletrica_engine.dart';
 import 'file_utilities_service.dart';
+import 'headset_handoff_service.dart';
 import 'music_curator_service.dart';
 import 'obsidian_service.dart';
 import 'opengym_service.dart';
 import 'reminder_service.dart';
+import 'skill_bridge_service.dart';
 import 'speech_text.dart';
 import 'spotify_service.dart';
 import 'vault_search_service.dart';
@@ -434,10 +436,12 @@ class DeviceControlService {
     this.webInfoProvider,
     this.workflowSchedulerProvider,
     this.spotifyProvider,
+    this.headsetHandoffProvider,
     this.desktopPairingProvider,
     this.fileUtilitiesProvider,
     this.authGate,
     this.onRequestElevation,
+    this.onProgressSpeak,
     this.actionGate = const ActionGate(),
   })  : _channel = channel ??
             const MethodChannel('com.viniciusnpaula.ultron_mobile/device'),
@@ -452,11 +456,13 @@ class DeviceControlService {
   final WebInfoService Function()? webInfoProvider;
   final Future<WorkflowSchedulerService> Function()? workflowSchedulerProvider;
   final SpotifyService Function()? spotifyProvider;
+  final HeadsetHandoffService Function()? headsetHandoffProvider;
   final DesktopPairingService Function()? desktopPairingProvider;
   final FileUtilitiesService Function()? fileUtilitiesProvider;
   final AuthGate? authGate;
   final Future<bool> Function(AccessLevel requiredLevel, String reason)?
       onRequestElevation;
+  final Future<void> Function(String text)? onProgressSpeak;
   final ActionGate actionGate;
   static const _pcEndpointKey = 'ultron.pc.killswitch.v1';
   static const _pcSecretKey = 'ultron.pc.killswitch.secret.v1';
@@ -670,6 +676,113 @@ class DeviceControlService {
   SpotifyService getSpotifyService() => spotifyProvider != null
       ? spotifyProvider!()
       : SpotifyService(storage: _storage);
+
+  Future<BluetoothAudioSnapshot> getConnectedBluetoothAudioDevices() async {
+    try {
+      final raw = await _channel.invokeMapMethod<Object?, Object?>(
+        'getBluetoothAudioDevices',
+      );
+      return BluetoothAudioSnapshot.fromMap(raw);
+    } catch (_) {
+      return const BluetoothAudioSnapshot(connected: false);
+    }
+  }
+
+  Future<BluetoothAudioSnapshot> waitForBluetoothAudioDevice({
+    String preferredName = HeadsetHandoffService.defaultHeadsetName,
+    Duration timeout = const Duration(seconds: 22),
+    Duration pollInterval = const Duration(milliseconds: 450),
+  }) async {
+    try {
+      final raw = await _channel.invokeMapMethod<Object?, Object?>(
+        'waitForBluetoothAudioDevice',
+        <String, dynamic>{
+          'preferredName': preferredName,
+          'timeoutMs': timeout.inMilliseconds.clamp(1000, 60000),
+          'pollIntervalMs': pollInterval.inMilliseconds.clamp(150, 2000),
+        },
+      );
+      return BluetoothAudioSnapshot.fromMap(raw);
+    } catch (_) {
+      return const BluetoothAudioSnapshot(connected: false);
+    }
+  }
+
+  HeadsetHandoffService getHeadsetHandoffService({
+    ActionGateConfirmCallback? confirmAction,
+    String actor = 'OPERATOR',
+  }) {
+    if (headsetHandoffProvider != null) {
+      return headsetHandoffProvider!();
+    }
+    return HeadsetHandoffService(
+      getBluetoothSnapshot: getConnectedBluetoothAudioDevices,
+      waitForBluetoothAudio: ({
+        required String preferredName,
+        required Duration timeout,
+      }) =>
+          waitForBluetoothAudioDevice(
+        preferredName: preferredName,
+        timeout: timeout,
+      ),
+      getSpotifyService: getSpotifyService,
+      triggerDesktopSkill: ({
+        required String direction,
+        required String headsetName,
+      }) =>
+          sendDesktopBridgeCommand(
+        command: 'PC_RUN_SKILL',
+        args: <String, dynamic>{
+          'skill': HeadsetHandoffService.skillId,
+          'args': direction,
+          'direction': direction,
+          'headset': headsetName,
+        },
+        confirmAction: confirmAction,
+        actor: actor,
+      ),
+      hasDesktopPaired: _hasDesktopPairedSafe,
+      openSpotifyApp: () async {
+        try {
+          await openApp('spotify');
+        } catch (_) {}
+      },
+      resumeLocalMedia: () async {
+        try {
+          return await controlMedia('play', preferredApp: 'spotify');
+        } catch (_) {
+          return false;
+        }
+      },
+    );
+  }
+
+  Future<HeadsetHandoffResult> executeHeadsetHandoff({
+    HandoffDirection direction = HandoffDirection.auto,
+    String headsetName = HeadsetHandoffService.defaultHeadsetName,
+    bool fromDesktop = false,
+    ActionGateConfirmCallback? confirmAction,
+    String actor = 'OPERATOR',
+  }) async {
+    final service = getHeadsetHandoffService(
+      confirmAction: confirmAction,
+      actor: actor,
+    );
+    final res = await service.execute(
+      direction: direction,
+      headsetName: headsetName,
+      fromDesktop: fromDesktop,
+      onProgressSpeak: onProgressSpeak,
+    );
+    await recordAudit(
+      actor: actor,
+      action: 'HEADSET_HANDOFF',
+      target: '${res.direction.name}:$headsetName',
+      status: res.ok ? 'EXECUTED' : 'FAILED',
+      detail: res.message,
+    );
+    return res;
+  }
 
   /// Consome um link `ultron://spotify-callback?...` pendente recebido via Intent/deep link.
   Future<String?> consumePendingSpotifyCallbackUri() async {
@@ -942,6 +1055,16 @@ class DeviceControlService {
         '- Criar timer (segundos:Título): [ACTION:TIMER:1500:Foco]\n'
         '- Volume: [ACTION:VOLUME_SET:50], [ACTION:VOLUME_MUTE]',
       );
+    if (cats.contains(TacticalActionCategory.messaging)) {
+      sb.writeln(
+        '- Mensagens e Ligações (com confirmação obrigatória): '
+        '[ACTION:WHATSAPP:contato_ou_numero:mensagem], '
+        '[ACTION:CALL_PHONE:contato_ou_numero], '
+        '[ACTION:WHATSAPP_CALL:contato_ou_numero], '
+        '[ACTION:WHATSAPP_CALL:contato_ou_numero:video], '
+        '[ACTION:SMS:contato_ou_numero:mensagem]',
+      );
+    }
     if (cats.contains(TacticalActionCategory.obsidian)) {
       sb.writeln(
         '- Listar notas / tarefas / status / desfazer no Obsidian: '
@@ -963,13 +1086,15 @@ class DeviceControlService {
     }
     if (cats.contains(TacticalActionCategory.spotify)) {
       sb.writeln(
-        '- Spotify: [ACTION:SPOTIFY_STATE], [ACTION:SPOTIFY_PLAY:busca_ou_uri], [ACTION:SPOTIFY_SEARCH:termo]',
+        '- Spotify: [ACTION:SPOTIFY_STATE], [ACTION:SPOTIFY_PLAY:busca_ou_uri], '
+        '[ACTION:SPOTIFY_SEARCH:termo], [ACTION:SPOTIFY_DEVICES], '
+        '[ACTION:SPOTIFY_TRANSFER:smartphone|computer], [ACTION:HEADSET_HANDOFF:auto|to_mobile|to_desktop]',
       );
     }
     if (cats.contains(TacticalActionCategory.desktop)) {
       sb.writeln(
         '- Ponte Desktop LAN (HMAC-SHA256): [ACTION:PC_STATUS], [ACTION:PC_CLIPBOARD_PUSH:texto], '
-        '[ACTION:PC_CLIPBOARD_PULL], [ACTION:PC_RUN_SKILL:nome_skill], '
+        '[ACTION:PC_CLIPBOARD_PULL], [ACTION:PC_LIST_SKILLS], [ACTION:PC_RUN_SKILL:nome_skill], '
         '[ACTION:PC_EXEC_TOOL:nome_ferramenta|{"param":"valor"}]',
       );
     }
@@ -1021,17 +1146,28 @@ class DeviceControlService {
       );
     }
     try {
+      final refNow = now ?? DateTime.now();
       final vault = await _getObsidian();
+      var hasOkfWarnings = false;
       try {
         final rawFacts =
             await vault.readNote('Memoria/Sessoes/Contexto_Longo_Prazo.md');
-        final cleanFacts = ObsidianService.sanitizeForExternalAi(rawFacts);
+        final parsedFacts = OkfMetadata.parse(rawFacts);
+        final cleanFacts =
+            ObsidianService.sanitizeForExternalAi(parsedFacts.body);
         if (cleanFacts.trim().isNotEmpty) {
           final clipped = cleanFacts.length > 900
               ? cleanFacts.substring(cleanFacts.length - 900)
               : cleanFacts;
+          final factTag =
+              parsedFacts.metadata.statusTag(now: refNow, isContextNote: true);
+          if (parsedFacts.metadata.isStale(now: refNow) ||
+              parsedFacts.metadata.isUnverified) {
+            hasOkfWarnings = true;
+          }
+          final okfLine = factTag.isEmpty ? '' : ' [OKF: $factTag]';
           sections.add(
-            '=== PERFIL E CONTEXTO DE LONGO PRAZO (SESSÕES ANTERIORES) ===\n'
+            '=== PERFIL E CONTEXTO DE LONGO PRAZO (SESSÕES ANTERIORES)$okfLine ===\n'
             '${clipped.trim()}\n'
             '=== FIM DO PERFIL DE LONGO PRAZO ===',
           );
@@ -1039,9 +1175,13 @@ class DeviceControlService {
       } catch (_) {}
       final rawMemory = await vault.readLongTermMemory(
         maxChars: activeMode.isGeneral ? 2000 : 800,
+        now: refNow,
       );
       final memory = ObsidianService.sanitizeForExternalAi(rawMemory);
       if (memory.trim().isNotEmpty) {
+        if (memory.contains('[OKF:') || memory.contains('[ALERTA OKF:')) {
+          hasOkfWarnings = true;
+        }
         sections.add(
           '=== SEGUNDO CÉREBRO — MEMÓRIA ATIVA DO COFRE OBSIDIAN ===\n'
           'As informações abaixo são notas e memórias reais do operador gravadas no Obsidian:\n'
@@ -1049,32 +1189,44 @@ class DeviceControlService {
           '=== FIM DA MEMÓRIA DO COFRE ===',
         );
       }
-    } catch (_) {}
 
-    final query = userQuery?.trim() ?? '';
-    if (query.isNotEmpty) {
-      try {
-        final search = await _getVaultSearch();
-        await search.sync(minInterval: const Duration(seconds: 30));
-        final rawRag = await search.buildRagContext(
-          query,
-          limit: 3,
-          maxChars: 1400,
-          pathPrefix: activeMode.vaultPathPrefix,
-        );
-        final rag = ObsidianService.sanitizeForExternalAi(rawRag);
-        if (rag.trim().isNotEmpty) {
-          final scopeLabel = activeMode.vaultPathPrefix != null
-              ? ' (${activeMode.vaultPathPrefix} · RAG FTS5)'
-              : ' (RAG FTS5)';
-          sections.add(
-            '=== NOTAS RELEVANTES DO COFRE$scopeLabel ===\n'
-            '$rag\n'
-            '=== FIM DO CONTEXTO RAG ===',
+      final query = userQuery?.trim() ?? '';
+      if (query.isNotEmpty) {
+        try {
+          final search = await _getVaultSearch();
+          await search.sync(minInterval: const Duration(seconds: 30));
+          final rawRag = await search.buildRagContext(
+            query,
+            limit: 3,
+            maxChars: 1400,
+            pathPrefix: activeMode.vaultPathPrefix,
+            now: refNow,
           );
-        }
-      } catch (_) {}
-    }
+          final rag = ObsidianService.sanitizeForExternalAi(rawRag);
+          if (rag.trim().isNotEmpty) {
+            if (rag.contains('[OKF:')) {
+              hasOkfWarnings = true;
+            }
+            final scopeLabel = activeMode.vaultPathPrefix != null
+                ? ' (${activeMode.vaultPathPrefix} · RAG FTS5)'
+                : ' (RAG FTS5)';
+            sections.add(
+              '=== NOTAS RELEVANTES DO COFRE$scopeLabel ===\n'
+              '$rag\n'
+              '=== FIM DO CONTEXTO RAG ===',
+            );
+          }
+        } catch (_) {}
+      }
+
+      if (hasOkfWarnings) {
+        sections.add(
+          '=== GOVERNANÇA OKF ===\n'
+          'Notas marcadas com [OKF: VENCIDA ...] ou [OKF: NÃO VERIFICADA] exigem cautela: '
+          'avise o operador antes de assumir como fato atual e sugira /vault verificar <nota>.',
+        );
+      }
+    } catch (_) {}
 
     return sections.join('\n\n');
   }
@@ -1244,6 +1396,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
 - Ler mensagens/notificações recentes: [ACTION:READ_MESSAGES]
 - Responder mensagem/notificação em 2º plano (RemoteInput): [ACTION:REPLY_MESSAGE:ultimo_ou_nome:texto da resposta]
 - Enviar mensagem no WhatsApp (busca contato na agenda ou número): [ACTION:WHATSAPP:nome_ou_numero:texto da mensagem]
+- Efetuar ligação telefônica (com confirmação, por contato ou número): [ACTION:CALL_PHONE:nome_ou_numero]
+- Efetuar ligação no WhatsApp (com confirmação, voz ou vídeo): [ACTION:WHATSAPP_CALL:nome_ou_numero] ou [ACTION:WHATSAPP_CALL:nome_ou_numero:video]
 - Enviar SMS (busca contato na agenda ou número): [ACTION:SMS:nome_ou_numero:texto da mensagem]
 - Ligar lanterna/flash: [ACTION:TORCH_ON]
 - Desligar lanterna/flash: [ACTION:TORCH_OFF]
@@ -1269,7 +1423,7 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
 - Criar alarme (HH:MM:Título): [ACTION:ALARM:07:30:Acordar]
 - Criar timer em segundos (segundos:Título): [ACTION:TIMER:300:Timer]
 - Vibrar celular: [ACTION:VIBRATE]
-- Discar número: [ACTION:DIAL:11999999999]
+- Discar número (apenas abrir discador): [ACTION:DIAL:11999999999]
 - Abrir pesquisa no navegador web: [ACTION:SEARCH:termo de busca]
 - Pesquisa web textual resumida direto no chat: [ACTION:WEB_SEARCH:termo de busca]
 - Consultar clima atual (cidade opcional): [ACTION:WEATHER:São Paulo]
@@ -1292,12 +1446,16 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
   * Tocar faixa ou URI no Spotify: [ACTION:SPOTIFY_PLAY:uri_ou_busca]
   * Listar playlists do Spotify: [ACTION:SPOTIFY_PLAYLISTS]
   * Adicionar faixa (ou música atual) a playlist: [ACTION:SPOTIFY_ADD_PLAYLIST:nome_ou_id_playlist|track_uri_opcional]
+  * Listar dispositivos Spotify Connect: [ACTION:SPOTIFY_DEVICES]
+  * Transferir música via Spotify Connect: [ACTION:SPOTIFY_TRANSFER:smartphone|computer|nome_dispositivo]
+  * Permutação do Fone (PC Dongle ⇄ Celular Bluetooth + Spotify Connect): [ACTION:HEADSET_HANDOFF:auto|to_mobile|to_desktop]
 - Controlar PC / Desktop pareado via LAN (HMAC-SHA256 + timestamp + nonce):
   * Abrir app/jogo no PC: [ACTION:PC_OPEN_APP:chrome]
   * Status do PC: [ACTION:PC_STATUS]
   * Mídia do PC (play_pause|next|previous|stop|mute): [ACTION:PC_MEDIA:play_pause]
   * Copiar texto para clipboard do PC: [ACTION:PC_CLIPBOARD_PUSH:texto]
   * Ler clipboard do PC: [ACTION:PC_CLIPBOARD_PULL]
+  * Listar skills disponíveis no PC: [ACTION:PC_LIST_SKILLS]
   * Executar skill no PC: [ACTION:PC_RUN_SKILL:nome_skill]
   * Proteção térmica e telemetria CPU/GPU/RAM do PC: [ACTION:PC_THERMAL]
   * Plano de energia do PC (high_performance|balanced|power_saver): [ACTION:PC_POWER_PLAN:high_performance]
@@ -1450,6 +1608,147 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
 
   Future<void> dialNumber(String number) async {
     await _channel.invokeMethod<bool>('dialNumber', {'number': number});
+  }
+
+  /// Resolve um contato da agenda (nome ou número) para exibição na confirmação antes de ligar.
+  Future<({bool found, String name, String phone})> resolveContact(
+    String query,
+  ) async {
+    final clean = query.trim();
+    if (clean.isEmpty) {
+      return (found: false, name: '', phone: '');
+    }
+    try {
+      final raw = await _channel.invokeMapMethod<Object?, Object?>(
+        'resolveContact',
+        {'query': clean},
+      );
+      if (raw == null) {
+        return (found: false, name: '', phone: '');
+      }
+      final found = raw['found'] == true;
+      final name = '${raw['name'] ?? ''}'.trim();
+      final phone = '${raw['phone'] ?? ''}'.trim();
+      return (found: found, name: name, phone: phone);
+    } catch (_) {
+      return (found: false, name: '', phone: '');
+    }
+  }
+
+  Future<String> placePhoneCall(String target) async {
+    final res = await _channel.invokeMethod<dynamic>(
+      'placePhoneCall',
+      {'target': target.trim()},
+    );
+    if (res is String && res.trim().isNotEmpty) return res.trim();
+    return 'Ligação telefônica solicitada para $target.';
+  }
+
+  Future<String> placeWhatsAppCall({
+    required String target,
+    bool video = false,
+  }) async {
+    final res = await _channel.invokeMethod<dynamic>(
+      'placeWhatsAppCall',
+      {'target': target.trim(), 'video': video},
+    );
+    if (res is String && res.trim().isNotEmpty) return res.trim();
+    return 'Chamada ${video ? 'de vídeo ' : ''}no WhatsApp solicitada para $target.';
+  }
+
+  static ({String target, bool viaWhatsApp, bool video})? _parseNaturalCallIntent(
+    String rawInput,
+  ) {
+    var clean = rawInput.trim();
+    if (clean.isEmpty) return null;
+
+    clean = clean
+        .replaceFirst(
+          RegExp(
+            r'^(?:(?:ei|ok|oi)\s+)?(?:ultron\s*[,\s]+)?(?:(?:por\s+favor|pfv|pode|poderia|quero|vai|agora)\s+)*',
+            caseSensitive: false,
+          ),
+          '',
+        )
+        .trim();
+
+    final viaWhatsApp =
+        RegExp(r'\b(?:whatsapp|whats|zap|wpp)\b', caseSensitive: false)
+            .hasMatch(clean);
+    final video =
+        RegExp(r'\b(?:v[ií]deo|videochamada)\b', caseSensitive: false)
+            .hasMatch(clean);
+
+    final matchers = <RegExp>[
+      RegExp(
+        r'^(?:fazer|fa[çc]a|realizar|efetuar)\s+(?:uma\s+)?(?:liga[çc][aã]o(?:\s+de\s+(?:voz|v[ií]deo))?|chamada(?:\s+de\s+(?:voz|v[ií]deo))?|videochamada)(?:\s+(?:pelo|no|via|por)\s+(?:whatsapp|whats|zap|wpp|telefone|celular|chip))?\s+(?:para\s+(?:(?:o|a)\s+)?|pro\s+|pra\s+)(.+)$',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'^(?:liga[çc][aã]o(?:\s+de\s+(?:voz|v[ií]deo))?|chamada(?:\s+de\s+(?:voz|v[ií]deo))?|videochamada)(?:\s+(?:pelo|no|via|por)\s+(?:whatsapp|whats|zap|wpp|telefone|celular|chip))?\s+(?:para\s+(?:(?:o|a)\s+)?|pro\s+|pra\s+)(.+)$',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'^(?:ligar|liga|telefonar|telefona)\s+(?:(?:pelo|no|via|por)\s+(?:whatsapp|whats|zap|wpp|telefone|celular|chip)\s+)?(?:para\s+(?:(?:o|a)\s+)?|pro\s+|pra\s+)(.+)$',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'^(?:chamar|chama)\s+(?:(?:o|a)\s+)?(.+?)\s+(?:pelo|no|via|por)\s+(?:whatsapp|whats|zap|wpp|telefone|celular)(?:\s+(?:em|por)\s+v[ií]deo)?$',
+        caseSensitive: false,
+      ),
+    ];
+
+    String? extracted;
+    for (final rx in matchers) {
+      final m = rx.firstMatch(clean);
+      if (m != null) {
+        extracted = m.group(1)?.trim();
+        break;
+      }
+    }
+    if (extracted == null || extracted.isEmpty) return null;
+
+    var target = extracted
+        .replaceAll(
+          RegExp(
+            r'\b(?:pelo|no|via|por)\s+(?:whatsapp|whats|zap|wpp|telefone|celular|chamada\s+normal|liga[çc][aã]o\s+normal|chip)\b',
+            caseSensitive: false,
+          ),
+          ' ',
+        )
+        .replaceAll(
+          RegExp(
+            r'\b(?:(?:em|de|por)\s+)?(?:chamada\s+de\s+)?(?:voz|v[ií]deo|videochamada)\b',
+            caseSensitive: false,
+          ),
+          ' ',
+        )
+        .replaceFirst(RegExp(r'[.!?,;:]+$'), '')
+        .replaceFirst(_trailingCourtesyRegex, '')
+        .replaceAll(RegExp(r'\s{2,}'), ' ')
+        .trim();
+
+    if (target.isEmpty) return null;
+
+    final lowerTarget = target.toLowerCase();
+    const blockedHardwareTokens = <String>{
+      'lanterna',
+      'flash',
+      'luz',
+      'sentinela',
+      'escuta',
+      'microfone',
+      'wifi',
+      'wi-fi',
+      'bluetooth',
+    };
+    if (blockedHardwareTokens.contains(lowerTarget)) return null;
+
+    return (
+      target: target,
+      viaWhatsApp: viaWhatsApp || (video && !RegExp(r'\b(telefone|celular|chip)\b', caseSensitive: false).hasMatch(clean)),
+      video: video,
+    );
   }
 
   Future<void> shareText(String text) async {
@@ -1687,6 +1986,41 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
       engine = search.engine;
     } catch (_) {}
     return vault.getVaultStatus(searchEngine: engine);
+  }
+
+  /// OKF: Marca uma nota como verificada e renova a data `stale_after`.
+  Future<OkfNoteStatus> verifyObsidianNote(
+    String notePath, {
+    bool verified = true,
+    int renewDays = OkfMetadata.defaultStaleDays,
+    List<String>? addSources,
+    DateTime? now,
+    String actor = 'OPERATOR',
+  }) async {
+    final vault = await _getObsidian();
+    final updated = await vault.verifyNote(
+      notePath,
+      verified: verified,
+      renewDays: renewDays,
+      addSources: addSources,
+      now: now,
+    );
+    invalidateVaultSearchCache();
+    await recordAudit(
+      actor: actor,
+      action: 'OBSIDIAN_VERIFY',
+      target: updated.relativePath,
+      status: 'EXECUTED',
+      detail:
+          'verified=$verified • stale_after=${updated.metadata.staleAfterIso ?? '-'}',
+    );
+    return updated;
+  }
+
+  /// OKF: Lista notas com validade `stale_after` vencida no cofre Obsidian.
+  Future<List<OkfNoteStatus>> listStaleObsidianNotes({DateTime? now}) async {
+    final vault = await _getObsidian();
+    return vault.listStaleNotes(now: now);
   }
 
   /// UNDO: Desfaz a última operação mutável no cofre Obsidian.
@@ -3013,16 +3347,82 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         );
       }
 
-      // 9. Dial phone number
+      // 9. Efetuar ligação (Telefone ou WhatsApp voz/vídeo) com confirmação obrigatória
+      final naturalCall = _parseNaturalCallIntent(text);
+      if (naturalCall != null) {
+        final resolved = await resolveContact(naturalCall.target);
+        final displayTarget = resolved.found && resolved.phone.isNotEmpty
+            ? (resolved.name.isNotEmpty && resolved.name != resolved.phone
+                ? '${resolved.name} (${resolved.phone})'
+                : resolved.phone)
+            : naturalCall.target;
+        final actionTag = naturalCall.viaWhatsApp
+            ? (naturalCall.video
+                ? 'WHATSAPP_CALL:$displayTarget:video'
+                : 'WHATSAPP_CALL:$displayTarget')
+            : 'CALL_PHONE:$displayTarget';
+        final sim = actionGate.simulate(actionTag);
+        // Fail-closed: ligações sempre exigem confirmação explícita do operador.
+        final allowed = await authorizeAction(
+          sim,
+          confirmAction: confirmAction ?? (_) async => false,
+          actor: 'OPERATOR',
+        );
+        if (!allowed) {
+          return const DeviceActionResult(
+            handled: true,
+            message: '🚫 Ligação cancelada ou bloqueada pelo nível de acesso.',
+            speakText: 'Ligação cancelada.',
+          );
+        }
+        try {
+          final statusMsg = naturalCall.viaWhatsApp
+              ? await placeWhatsAppCall(
+                  target: naturalCall.target,
+                  video: naturalCall.video,
+                )
+              : await placePhoneCall(naturalCall.target);
+          await recordAudit(
+            actor: 'OPERATOR',
+            action: sim.actionCode,
+            target: sim.targetResource,
+            status: 'EXECUTED',
+            detail: statusMsg,
+          );
+          final icon = naturalCall.viaWhatsApp ? '📱' : '📞';
+          return DeviceActionResult(
+            handled: true,
+            message: '$icon $statusMsg',
+            speakText: naturalCall.viaWhatsApp
+                ? 'Iniciando ${naturalCall.video ? 'chamada de vídeo' : 'ligação'} no WhatsApp para ${resolved.found && resolved.name.isNotEmpty ? resolved.name : naturalCall.target}.'
+                : 'Ligando para ${resolved.found && resolved.name.isNotEmpty ? resolved.name : naturalCall.target}.',
+          );
+        } catch (e) {
+          await recordAudit(
+            actor: 'OPERATOR',
+            action: sim.actionCode,
+            target: sim.targetResource,
+            status: 'FAILED',
+            detail: '$e',
+          );
+          return DeviceActionResult(
+            handled: true,
+            message: '⚠️ Não foi possível iniciar a ligação: $e',
+            speakText: 'Não consegui iniciar a ligação.',
+          );
+        }
+      }
+
+      // 9b. Discar número explicitamente ("discar 11999999999") -> abre apenas o discador (DIAL)
       final dialMatch = RegExp(
-        r'^(?:ligar para|discar|telefonar para)\s+([0-9+\-\s()]{3,})$',
+        r'^discar\s+(?:para\s+)?([0-9+\-\s()]{3,})$',
       ).firstMatch(lower);
       if (dialMatch != null) {
         final number = dialMatch.group(1)!.trim();
         final sim = actionGate.simulate('DIAL:$number');
         final allowed = await authorizeAction(
           sim,
-          confirmAction: confirmAction ?? (_) async => true,
+          confirmAction: confirmAction ?? (_) async => false,
         );
         if (!allowed) {
           return const DeviceActionResult(
@@ -3077,6 +3477,116 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
               '📝 Quick Capture salvo no Cofre Obsidian (${file.uri.pathSegments.last}):\n"$noteText"',
           speakText: 'Nota registrada no cofre.',
         );
+      }
+
+      // 11a. Skill "Permutação do Fone" ("permute/troque a conexão do fone", "permutação do fone")
+      final headsetHandoffMatch = RegExp(
+        r'^(?:(?:ei|ok|oi)\s+)?(?:ultron\s*[,\s]+)?(?:(?:por\s+favor|pfv|pode|poderia|quero|vai|agora)\s+)*(?:(?:permute|permutar|troque|trocar|mude|mudar|alterne|alternar|passe|passar)\s+(?:a\s+)?(?:conex[aã]o\s+d[eo]\s+|o\s+)?(?:meu\s+)?(?:fone|headset|fones)(?:\s+(?:para\s+o|pro|pra|no|para)\s+(celular|telefone|bluetooth|bt|pc|computador|desktop|dongle))?|(?:(?:ativar|rodar|executar|disparar|iniciar)\s+)?(?:a\s+)?(?:skill\s+)?permuta[cç][aã]o\s+d[eo]\s+fone(?:\s+(?:para\s+o|pro|pra|no|para)\s+(celular|telefone|bluetooth|bt|pc|computador|desktop|dongle))?)(?:\s+(?:para\s+mim|pra\s+mim|por\s+favor|pfv))?[.!?,;:]*$',
+        caseSensitive: false,
+      ).firstMatch(lower);
+      if (headsetHandoffMatch != null) {
+        final rawTarget =
+            (headsetHandoffMatch.group(1) ?? headsetHandoffMatch.group(2) ?? '')
+                .trim();
+        final direction = HandoffDirection.parse(rawTarget);
+        final res = await executeHeadsetHandoff(
+          direction: direction,
+          confirmAction: confirmAction,
+          actor: 'NATURAL',
+        );
+        return DeviceActionResult(
+          handled: true,
+          message: res.message,
+          speakText: res.speakText,
+        );
+      }
+
+      // 11b. Listar ou ativar skills do PC/Desktop via linguagem natural (antes das skills locais)
+      if (RegExp(
+        r'^(?:(?:ei|ok|oi)\s+)?(?:ultron\s*[,\s]+)?(?:(?:listar|mostrar|ver|quais(?:\s+s[aã]o)?(?:\s+as)?)\s+)?skills\s+(?:do|no)\s+(?:meu\s+)?(?:pc|computador|desktop|notebook)(?:\s*\?)?$',
+        caseSensitive: false,
+      ).hasMatch(lower)) {
+        final res = await sendDesktopBridgeCommand(
+          command: 'PC_LIST_SKILLS',
+          confirmAction: confirmAction,
+          actor: 'NATURAL',
+        );
+        if (res.deniedByUser) {
+          return const DeviceActionResult(
+            handled: true,
+            message: '🚫 Listagem de skills do PC cancelada no Action Gate (requer Biometria Nível 3).',
+          );
+        }
+        if (res.sent) {
+          final parsed = SkillBridgeService.parsePcSkillsResponse(res.responseBody);
+          final summary = parsed.isEmpty
+              ? (res.responseBody?.trim().isNotEmpty == true
+                  ? res.responseBody!.trim()
+                  : 'Nenhuma skill retornada pelo PC.')
+              : parsed
+                  .map(
+                    (s) => s.description.isEmpty
+                        ? '• ${s.id} (${s.title})'
+                        : '• ${s.id} — ${s.description}',
+                  )
+                  .join('\n');
+          return DeviceActionResult(
+            handled: true,
+            message: '💻 SKILLS DO DESKTOP PC:\n$summary',
+            speakText: parsed.isEmpty
+                ? 'Conectado ao computador, mas nenhuma skill foi listada.'
+                : 'O computador possui ${parsed.length} skills disponíveis.',
+          );
+        }
+        return DeviceActionResult(
+          handled: true,
+          message:
+              '⚠️ Não foi possível listar skills do PC: ${res.error ?? 'HTTP ${res.statusCode ?? '-'}'}',
+          speakText: 'Não consegui listar as skills do computador.',
+        );
+      }
+
+      final pcSkillMatchA = RegExp(
+        r'^(?:(?:ei|ok|oi)\s+)?(?:ultron\s*[,\s]+)?(?:(?:por\s+favor|pfv|pode|poderia|quero|vai|agora)\s+)*(?:ativar|rodar|executar|disparar|iniciar)\s+(?:a\s+)?skill\s+(.+?)\s+(?:no|pelo)\s+(?:meu\s+)?(?:pc|computador|desktop|notebook)(?:\s+(?:para\s+mim|pra\s+mim|por\s+favor|pfv))?[.!?,;:]*$',
+      ).firstMatch(lower);
+      final pcSkillMatchB = RegExp(
+        r'^(?:(?:ei|ok|oi)\s+)?(?:ultron\s*[,\s]+)?(?:no|pelo)\s+(?:meu\s+)?(?:pc|computador|desktop|notebook)\s*[,\s]+(?:(?:por\s+favor|pfv|pode|poderia|quero)\s+)*(?:ativar|rodar|executar|disparar|iniciar)\s+(?:a\s+)?skill\s+(.+?)[.!?,;:]*$',
+      ).firstMatch(lower);
+      final pcRawSkill = (pcSkillMatchA ?? pcSkillMatchB)?.group(1)?.trim() ?? '';
+      if (pcRawSkill.isNotEmpty) {
+        final cleanSkill = pcRawSkill
+            .replaceFirst(RegExp(r'[.!?,;:]+$'), '')
+            .replaceFirst(_trailingCourtesyRegex, '')
+            .trim();
+        if (cleanSkill.isNotEmpty) {
+          final res = await sendDesktopBridgeCommand(
+            command: 'PC_RUN_SKILL',
+            args: {'skill': cleanSkill},
+            confirmAction: confirmAction,
+            actor: 'NATURAL',
+          );
+          if (res.deniedByUser) {
+            return const DeviceActionResult(
+              handled: true,
+              message: '🚫 Execução de skill no Desktop cancelada no Action Gate.',
+            );
+          }
+          if (res.sent) {
+            return DeviceActionResult(
+              handled: true,
+              message:
+                  '⚡ Skill "$cleanSkill" ativada no Desktop (HTTP ${res.statusCode ?? 200}).'
+                  '${(res.responseBody ?? '').trim().isNotEmpty ? '\n${res.responseBody!.trim()}' : ''}',
+              speakText: 'Skill $cleanSkill ativada no computador.',
+            );
+          }
+          return DeviceActionResult(
+            handled: true,
+            message:
+                '⚠️ Desktop recusou skill "$cleanSkill": ${res.error ?? 'HTTP ${res.statusCode}'}',
+            speakText: 'O computador não conseguiu ativar a skill $cleanSkill.',
+          );
+        }
       }
 
       // 12. Mobile Skills (.md) ("skill modo_estudo", "executar skill ...", "modo estudo", "listar skills")
@@ -3724,6 +4234,30 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
               logs.add('📞 Discar: $arg1');
             }
             break;
+          case 'CALL_PHONE':
+          case 'CALL':
+          case 'LIGAR':
+            final callTarget = parts.skip(1).join(':').trim();
+            if (callTarget.isNotEmpty) {
+              final msg = await placePhoneCall(callTarget);
+              logs.add('📞 $msg');
+            }
+            break;
+          case 'WHATSAPP_CALL':
+          case 'CALL_WHATSAPP':
+          case 'LIGAR_WHATSAPP':
+          case 'WHATSAPP_VIDEO_CALL':
+            final rawTarget = arg1;
+            final isVideo = cmd == 'WHATSAPP_VIDEO_CALL' ||
+                parts.skip(2).join(':').trim().toLowerCase() == 'video';
+            if (rawTarget.isNotEmpty) {
+              final msg = await placeWhatsAppCall(
+                target: rawTarget,
+                video: isVideo,
+              );
+              logs.add('📱 $msg');
+            }
+            break;
           case 'SEARCH':
             final q = parts.skip(1).join(':').trim();
             if (q.isNotEmpty) {
@@ -3785,7 +4319,11 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
             final targetPath = parts.skip(1).join(':').trim();
             if (targetPath.isNotEmpty) {
               final content = await readObsidianNote(targetPath);
-              final snippet = content.trim().replaceAll(RegExp(r'\s+'), ' ');
+              final parsed = OkfMetadata.parse(content);
+              final bodyText = parsed.body.trim().isNotEmpty
+                  ? parsed.body.trim()
+                  : content.trim();
+              final snippet = bodyText.replaceAll(RegExp(r'\s+'), ' ');
               final shortSnippet = snippet.length > 120
                   ? '${snippet.substring(0, 120)}…'
                   : snippet;
@@ -3857,6 +4395,32 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
             logs.add(
               '📊 Cofre ${status.vaultName}: ${status.totalNotes} notas (${status.sizeLabel}) • Engine ${status.searchEngine.name}',
             );
+            break;
+          case 'OBSIDIAN_VERIFY':
+          case 'OBSIDIAN_RENOVAR':
+            if (arg1.isNotEmpty) {
+              final renewDays =
+                  int.tryParse(arg2.trim()) ?? OkfMetadata.defaultStaleDays;
+              final verifiedNote = await verifyObsidianNote(
+                arg1,
+                renewDays: renewDays.clamp(1, 3650),
+                actor: actor,
+              );
+              logs.add(
+                '✅ OKF verificado: ${verifiedNote.relativePath} (válido até ${verifiedNote.metadata.staleAfterIso ?? '-'})',
+              );
+            }
+            break;
+          case 'OBSIDIAN_STALE':
+          case 'OBSIDIAN_VENCIDAS':
+            final stale = await listStaleObsidianNotes();
+            if (stale.isEmpty) {
+              logs.add('📚 Nenhuma nota vencida no cofre OKF');
+            } else {
+              final preview =
+                  stale.take(5).map((s) => s.relativePath).join(', ');
+              logs.add('📚 ${stale.length} nota(s) vencida(s): $preview');
+            }
             break;
           case 'UNDO':
           case 'DESFAZER':
@@ -4154,6 +4718,8 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
           case 'PC_CLIPBOARD_PUSH':
           case 'PC_CLIPBOARD_PULL':
           case 'PC_RUN_SKILL':
+          case 'PC_LIST_SKILLS':
+          case 'PC_SYNC_MOBILE_SKILLS':
           case 'PC_THERMAL':
           case 'PC_TEMP':
           case 'PC_DELEGATE_TASK':
@@ -4468,6 +5034,64 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
               logs.add(msg);
             }
             break;
+          case 'SPOTIFY_DEVICES':
+          case 'SPOTIFY_DISPOSITIVOS':
+            final sp = getSpotifyService();
+            if (!await sp.isConnected()) {
+              final paired = await _hasDesktopPairedSafe();
+              logs.add(sp.buildNotConfiguredMessage(hasDesktopPaired: paired));
+            } else {
+              final devices = await sp.listDevices();
+              if (devices.isEmpty) {
+                logs.add('🎵 Nenhum dispositivo ativo no Spotify Connect.');
+              } else {
+                logs.add(
+                  '🎵 Spotify Connect (${devices.length}):\n${devices.map((d) => d.formatLine()).join('\n')}',
+                );
+              }
+            }
+            break;
+          case 'SPOTIFY_TRANSFER':
+          case 'SPOTIFY_TRANSFERIR':
+            final rawDest = parts.skip(1).join(':').trim();
+            final sp = getSpotifyService();
+            if (!await sp.isConnected()) {
+              final paired = await _hasDesktopPairedSafe();
+              logs.add(sp.buildNotConfiguredMessage(hasDesktopPaired: paired));
+            } else {
+              final destLower = rawDest.toLowerCase();
+              final isType = destLower.isEmpty ||
+                  destLower == 'smartphone' ||
+                  destLower == 'mobile' ||
+                  destLower == 'celular' ||
+                  destLower == 'computer' ||
+                  destLower == 'desktop' ||
+                  destLower == 'pc';
+              final dev = await sp.transferPlayback(
+                targetType: isType
+                    ? (rawDest.isEmpty ? 'Smartphone' : rawDest)
+                    : '',
+                preferredName: isType ? null : rawDest,
+                play: true,
+              );
+              logs.add(
+                '🎵 Spotify transferido para ${dev.name} (${dev.type}) e retomado.',
+              );
+            }
+            break;
+          case 'HEADSET_HANDOFF':
+          case 'PERMUTACAO_FONE':
+          case 'PERMUTACAO_DO_FONE':
+            final rawArg = parts.skip(1).join(':').trim();
+            final direction = HandoffDirection.parse(rawArg);
+            final handoff = await executeHeadsetHandoff(
+              direction: direction,
+              fromDesktop: actor == 'DESKTOP_LAN',
+              confirmAction: confirmAction,
+              actor: actor,
+            );
+            logs.add(handoff.message);
+            break;
           case 'HTTP_GET':
           case 'HTTP_POST':
           case 'HTTP_PUT':
@@ -4490,15 +5114,22 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
             break;
         }
         if (cmd == 'WHATSAPP' ||
+            cmd == 'WHATSAPP_CALL' ||
+            cmd == 'CALL_WHATSAPP' ||
+            cmd == 'LIGAR_WHATSAPP' ||
+            cmd == 'WHATSAPP_VIDEO_CALL' ||
             cmd == 'SMS' ||
             cmd == 'REPLY_MESSAGE' ||
-            cmd == 'DIAL') {
+            cmd == 'DIAL' ||
+            cmd == 'CALL_PHONE' ||
+            cmd == 'CALL' ||
+            cmd == 'LIGAR') {
           await recordAudit(
             actor: actor,
-            action: cmd,
+            action: sim.actionCode,
             target: sim.targetResource,
             status: 'EXECUTED',
-            detail: logs.isEmpty ? cmd : logs.last,
+            detail: logs.isEmpty ? sim.actionCode : logs.last,
           );
         }
       } catch (e) {
@@ -4942,6 +5573,44 @@ Sempre que o usuário pedir para realizar uma ação no celular (ler mensagens, 
         speakText: updated.completed
             ? 'Tarefa ${updated.text} marcada como concluída.'
             : 'Tarefa ${updated.text} reaberta.',
+      );
+    }
+
+    // 7. OKF: verificar/renovar nota ou listar notas vencidas
+    final verifyMatch = RegExp(
+      r'^(?:verificar|aprovar|renovar)\s+nota\s+(.+)$',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (verifyMatch != null) {
+      final target = verifyMatch.group(1)!.trim();
+      final status = await verifyObsidianNote(target);
+      return DeviceActionResult(
+        handled: true,
+        message:
+            '✅ Nota OKF verificada: ${status.relativePath}\n• Válida até: ${status.metadata.staleAfterIso ?? '-'}\n• Fontes: ${status.metadata.sources.join(', ')}',
+        speakText: 'Nota ${status.title} verificada e renovada por 30 dias.',
+      );
+    }
+
+    if (RegExp(
+      r'^(?:notas\s+vencidas|revisar\s+cofre|notas\s+obsoletas|okf\s+vencidas)$',
+      caseSensitive: false,
+    ).hasMatch(lower)) {
+      final stale = await listStaleObsidianNotes();
+      if (stale.isEmpty) {
+        return const DeviceActionResult(
+          handled: true,
+          message: '📚 Nenhuma nota vencida no cofre OKF.',
+          speakText: 'Todas as notas do cofre estão dentro da validade.',
+        );
+      }
+      final lines = stale.take(20).map((s) => s.formatReviewLine()).join('\n');
+      return DeviceActionResult(
+        handled: true,
+        message:
+            '📚 NOTAS VENCIDAS PARA REVISÃO OKF (${stale.length}):\n$lines\n\nUse `/vault verificar <nota>` para aprovar e renovar validade.',
+        speakText:
+            'Há ${stale.length} nota${stale.length == 1 ? '' : 's'} vencida${stale.length == 1 ? '' : 's'} no cofre Obsidian para revisão.',
       );
     }
 

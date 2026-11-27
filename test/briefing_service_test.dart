@@ -1,9 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:ultron_mobile/services/briefing_service.dart';
 import 'package:ultron_mobile/services/device_control_service.dart';
+import 'package:ultron_mobile/services/obsidian_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -191,5 +194,56 @@ void main() {
     expect(
         briefing.formattedReport, contains('Permissão de calendário pendente'));
     expect(briefing.formattedReport, contains('Previsão indisponível offline'));
+  });
+
+  test('generateBriefing alerts on stale OKF notes in Obsidian vault',
+      () async {
+    final tempVault =
+        await Directory.systemTemp.createTemp('ultron_briefing_okf_');
+    addTearDown(() async {
+      if (await tempVault.exists()) {
+        await tempVault.delete(recursive: true);
+      }
+    });
+    final vault = ObsidianService(tempVault);
+    await vault.initialize();
+    await File(p.join(tempVault.path, 'Memoria', 'Cliente_X.md')).writeAsString(
+      '---\nsources: [reuniao]\nverified: false\nstale_after: 2026-10-20\nupdated_at: 2026-09-20T10:00:00Z\n---\n# Cliente X\nEscopo antigo.\n',
+    );
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'getCalendarEvents':
+          return <Object?>[];
+        case 'isNotificationListenerEnabled':
+          return false;
+        case 'getDeviceStatus':
+          return {
+            'batteryLevel': 90,
+            'isCharging': false,
+            'ramFreeMb': 4000,
+            'wifiConnected': true,
+            'cellularConnected': false,
+          };
+        default:
+          return null;
+      }
+    });
+
+    final briefingService = BriefingService(
+      deviceService: DeviceControlService(channel: channel),
+      weatherFetcher: (_) async => null,
+      obsidianProvider: () async => vault,
+    );
+
+    final briefing = await briefingService.generateBriefing(
+      now: DateTime(2026, 11, 26, 8, 0),
+    );
+    expect(briefing.staleNotes.length, 1);
+    expect(briefing.staleNotes.first.relativePath, 'Memoria/Cliente_X.md');
+    expect(briefing.formattedReport, contains('REVISÃO DO COFRE OKF (1 nota(s) vencida(s))'));
+    expect(briefing.formattedReport, contains('Memoria/Cliente_X.md'));
+    expect(briefing.speakText, contains('1 nota vencida no cofre Obsidian'));
   });
 }

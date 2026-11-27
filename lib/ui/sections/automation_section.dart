@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../../services/signal_ledger_service.dart';
 import '../../services/smart_notification_triage_service.dart';
 import '../theme/ultron_theme.dart';
+import '../widgets/signal_ledger_panel.dart';
 
 /// Seção Automação: triagem inteligente de notificações em tempo real,
 /// fluxos agendados com checkpoints, lembretes, agenda, briefing e Spotify.
@@ -13,6 +15,8 @@ class AutomationSection extends StatefulWidget {
     required this.onUpdateTriageConfig,
     required this.onOpenNotificationAccessSettings,
     required this.onRunSlashCommand,
+    this.signalLedger,
+    this.onOpenSignalLedger,
   });
 
   final NotificationTriageConfig triageConfig;
@@ -20,6 +24,8 @@ class AutomationSection extends StatefulWidget {
   final ValueChanged<NotificationTriageConfig> onUpdateTriageConfig;
   final VoidCallback onOpenNotificationAccessSettings;
   final Future<void> Function(String slashCommand) onRunSlashCommand;
+  final SignalLedgerService? signalLedger;
+  final VoidCallback? onOpenSignalLedger;
 
   @override
   State<AutomationSection> createState() => _AutomationSectionState();
@@ -89,6 +95,14 @@ class _AutomationSectionState extends State<AutomationSection> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
+        if (widget.signalLedger != null && widget.onOpenSignalLedger != null) ...[
+          const UltronSectionLabel('Quadro Sinal vs. Ruído'),
+          SignalLedgerSummaryCard(
+            ledger: widget.signalLedger!,
+            onOpenBoard: widget.onOpenSignalLedger!,
+          ),
+          const SizedBox(height: 16),
+        ],
         const UltronSectionLabel('Triagem inteligente em tempo real'),
         UltronSurfaceCard(
           child: Column(

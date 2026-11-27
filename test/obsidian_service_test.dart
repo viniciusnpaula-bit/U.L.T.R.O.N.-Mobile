@@ -310,4 +310,89 @@ void main() {
     expect(sanitized, contains('[email ocultado]'));
     expect(sanitized, contains('[cpf ocultado]'));
   });
+
+  test('OKF metadata parses inline/block YAML, preserves legacy notes, and verifies/renews stale notes',
+      () async {
+    // 1. Parse inline and multi-line block sources while preserving extra YAML keys
+    const rawBlock = '''---
+tipo: garantia
+produto: "Osciloscópio Rigol"
+sources:
+  - nota_fiscal_pdf
+  - operador
+verified: false
+stale_after: 2026-10-01
+updated_at: 2026-09-01T10:00:00Z
+---
+# Osciloscópio Rigol
+Detalhes técnicos.''';
+    final parsed = OkfMetadata.parse(rawBlock);
+    expect(parsed.metadata.hasFrontmatter, isTrue);
+    expect(parsed.metadata.sources, ['nota_fiscal_pdf', 'operador']);
+    expect(parsed.metadata.verified, isFalse);
+    expect(parsed.metadata.staleAfterIso, '2026-10-01');
+    expect(parsed.metadata.extraFields['tipo'], 'garantia');
+    expect(parsed.metadata.isStale(now: DateTime(2026, 11, 26)), isTrue);
+    expect(parsed.body, contains('# Osciloscópio Rigol'));
+    expect(parsed.body, isNot(contains('stale_after:')));
+
+    // 2. Legacy notes without frontmatter remain 100% compatible
+    final legacyFile = File('${tempDir.path}/Memoria/Legada.md');
+    await legacyFile.writeAsString('# Nota Legada\nConteúdo antigo sem YAML.\n');
+    await service.saveMemory('Legada', 'Novo registro compatível.');
+    final legacyAfter = await legacyFile.readAsString();
+    expect(legacyAfter.startsWith('# Nota Legada'), isTrue);
+    expect(legacyAfter, contains('Novo registro compatível.'));
+
+    // 3. readLongTermMemory signals stale and unverified context notes
+    await File('${tempDir.path}/Memoria/Operador.md').writeAsString(
+      '---\nsources: [ultron_seed]\nverified: false\nstale_after: 2026-10-15\nupdated_at: 2026-09-15T10:00:00Z\n---\n'
+      '# Perfil do Operador\n- Nome: Operador\n',
+    );
+    await service.savePreferences(
+      'Preferir respostas diretas.',
+      sources: ['operador'],
+      verified: true,
+      staleDays: 30,
+      now: DateTime(2026, 11, 20),
+    );
+    final ltmWithWarning = await service.readLongTermMemory(
+      now: DateTime(2026, 11, 26),
+    );
+    expect(ltmWithWarning, contains('VENCIDA desde 2026-10-15'));
+    expect(ltmWithWarning, contains('NÃO VERIFICADA'));
+
+    final ltmExcluded = await service.readLongTermMemory(
+      now: DateTime(2026, 11, 26),
+      excludeStale: true,
+    );
+    expect(ltmExcluded, contains('ALERTA OKF: nota vencida desde 2026-10-15'));
+    expect(ltmExcluded, isNot(contains('- Nome: Operador')));
+
+    // 4. listStaleNotes and verifyNote renew validity + support UNDO
+    final staleList = await service.listStaleNotes(now: DateTime(2026, 11, 26));
+    expect(staleList.any((n) => n.relativePath == 'Memoria/Operador.md'), isTrue);
+
+    final verifiedStatus = await service.verifyNote(
+      'Memoria/Operador.md',
+      renewDays: 30,
+      addSources: ['revisao_manual'],
+      now: DateTime(2026, 11, 26),
+    );
+    expect(verifiedStatus.metadata.isVerified, isTrue);
+    expect(verifiedStatus.isStale, isFalse);
+    expect(verifiedStatus.metadata.staleAfterIso, '2026-12-26');
+    expect(verifiedStatus.metadata.sources, contains('revisao_manual'));
+
+    final staleAfterVerify =
+        await service.listStaleNotes(now: DateTime(2026, 11, 26));
+    expect(
+      staleAfterVerify.any((n) => n.relativePath == 'Memoria/Operador.md'),
+      isFalse,
+    );
+
+    final undone = await service.undoLastMutation();
+    expect(undone.undone, isTrue);
+    expect(undone.operation, 'OBSIDIAN_VERIFY');
+  });
 }

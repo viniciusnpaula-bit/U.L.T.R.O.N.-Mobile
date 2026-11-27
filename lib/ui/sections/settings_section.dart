@@ -35,11 +35,13 @@ class SettingsSection extends StatelessWidget {
     this.dynamicIslandEnabled = false,
     this.onToggleDynamicIsland,
     this.onConfigureDynamicIsland,
+    this.selectedMicLabel = 'Automático (Padrão do Android)',
   });
 
   final bool isAudioOn;
   final bool nightFocusMode;
   final bool dynamicIslandEnabled;
+  final String selectedMicLabel;
   final VoiceProfile selectedVoiceProfile;
   final VadProfile vadProfile;
   final int vadHangoverMs;
@@ -71,6 +73,13 @@ class SettingsSection extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
         const UltronSectionLabel('Voz e áudio (microfone nativo)'),
+        UltronActionTile(
+          icon: Icons.mic_none_rounded,
+          title: 'Microfone de entrada',
+          subtitle: 'Ativo: $selectedMicLabel',
+          onTap: onOpenVoiceSelector,
+        ),
+        const SizedBox(height: 8),
         UltronActionTile(
           icon: Icons.record_voice_over_outlined,
           title: 'Perfil de voz e síntese',

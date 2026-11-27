@@ -169,6 +169,46 @@ class SpotifyPlaylistItem {
       '• $name ($tracksTotal faixas) [ID: $id]';
 }
 
+class SpotifyDevice {
+  const SpotifyDevice({
+    required this.id,
+    required this.name,
+    required this.type,
+    this.isActive = false,
+    this.isRestricted = false,
+    this.volumePercent,
+  });
+
+  factory SpotifyDevice.fromJson(Map<String, dynamic> map) => SpotifyDevice(
+        id: '${map['id'] ?? ''}'.trim(),
+        name: '${map['name'] ?? 'Dispositivo'}'.trim(),
+        type: '${map['type'] ?? ''}'.trim(),
+        isActive: map['is_active'] == true,
+        isRestricted: map['is_restricted'] == true,
+        volumePercent: (map['volume_percent'] as num?)?.toInt(),
+      );
+
+  final String id;
+  final String name;
+  final String type;
+  final bool isActive;
+  final bool isRestricted;
+  final int? volumePercent;
+
+  bool get isMobile {
+    final t = type.toLowerCase();
+    return t == 'smartphone' || t == 'tablet';
+  }
+
+  bool get isComputer => type.toLowerCase() == 'computer';
+
+  String formatLine() {
+    final activeTag = isActive ? ' [ATIVO]' : '';
+    final vol = volumePercent != null ? ' • Vol $volumePercent%' : '';
+    return '• $name ($type)$activeTag$vol';
+  }
+}
+
 class SpotifyHttpResponse {
   const SpotifyHttpResponse({
     required this.statusCode,
@@ -630,6 +670,118 @@ class SpotifyService {
       );
     }
     return '➕ Adicionado "$trackLabel" à playlist "$resolvedPlaylistName".';
+  }
+
+  /// 6. SPOTIFY_DEVICES (`[ACTION:SPOTIFY_DEVICES]`): Lista dispositivos disponíveis no Spotify Connect.
+  Future<List<SpotifyDevice>> listDevices() async {
+    final uri = Uri.https('api.spotify.com', '/v1/me/player/devices');
+    final resp = await _authenticatedRequest('GET', uri);
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw HttpException(
+        'Falha ao listar dispositivos do Spotify Connect (HTTP ${resp.statusCode}).',
+      );
+    }
+    return parseDevicesJson(resp.body);
+  }
+
+  static List<SpotifyDevice> parseDevicesJson(String rawJson) {
+    final decoded = jsonDecode(rawJson);
+    if (decoded is! Map<String, dynamic>) return const [];
+    final devices = decoded['devices'];
+    if (devices is! List) return const [];
+    return devices
+        .whereType<Map<String, dynamic>>()
+        .map(SpotifyDevice.fromJson)
+        .where((d) => d.id.isNotEmpty)
+        .toList();
+  }
+
+  /// 7. SPOTIFY_TRANSFER (`[ACTION:SPOTIFY_TRANSFER:smartphone|computer|<nome_ou_id>]`):
+  /// Transfere a reprodução ativa via Spotify Connect (`PUT /v1/me/player`) mantendo o ponto exato da faixa.
+  Future<SpotifyDevice> transferPlayback({
+    String? deviceId,
+    String targetType = 'Smartphone',
+    String? preferredName,
+    bool play = true,
+  }) async {
+    SpotifyDevice? resolved;
+    final cleanId = (deviceId ?? '').trim();
+    if (cleanId.isNotEmpty) {
+      resolved = SpotifyDevice(
+        id: cleanId,
+        name: (preferredName ?? '').trim().isNotEmpty
+            ? preferredName!.trim()
+            : cleanId,
+        type: targetType,
+      );
+    } else {
+      final devices = await listDevices();
+      final usable = devices.where((d) => !d.isRestricted).toList();
+      if (usable.isEmpty) {
+        throw StateError(
+          'Nenhum dispositivo disponível no Spotify Connect. Abra o Spotify no aparelho de destino e tente novamente.',
+        );
+      }
+
+      final pref = (preferredName ?? '').trim().toLowerCase();
+      if (pref.isNotEmpty) {
+        for (final d in usable) {
+          if (d.id == preferredName?.trim() ||
+              d.name.toLowerCase() == pref ||
+              d.name.toLowerCase().contains(pref)) {
+            resolved = d;
+            break;
+          }
+        }
+      }
+
+      if (resolved == null) {
+        final normType = targetType.trim().toLowerCase();
+        if (normType == 'smartphone' ||
+            normType == 'mobile' ||
+            normType == 'celular') {
+          resolved = usable.cast<SpotifyDevice?>().firstWhere(
+                (d) => d != null && d.isMobile,
+                orElse: () => null,
+              );
+        } else if (normType == 'computer' ||
+            normType == 'desktop' ||
+            normType == 'pc') {
+          resolved = usable.cast<SpotifyDevice?>().firstWhere(
+                (d) => d != null && d.isComputer,
+                orElse: () => null,
+              );
+        } else if (normType.isNotEmpty) {
+          resolved = usable.cast<SpotifyDevice?>().firstWhere(
+                (d) => d != null && d.type.toLowerCase() == normType,
+                orElse: () => null,
+              );
+        }
+      }
+
+      if (resolved == null) {
+        final names = usable.map((d) => '${d.name} (${d.type})').join(', ');
+        throw StateError(
+          'Dispositivo "$targetType" não encontrado no Spotify Connect. Disponíveis: $names.',
+        );
+      }
+    }
+
+    final uri = Uri.https('api.spotify.com', '/v1/me/player');
+    final resp = await _authenticatedRequest(
+      'PUT',
+      uri,
+      body: jsonEncode({
+        'device_ids': [resolved.id],
+        'play': play,
+      }),
+    );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      throw HttpException(
+        'Falha ao transferir reprodução no Spotify Connect para "${resolved.name}" (HTTP ${resp.statusCode}).',
+      );
+    }
+    return resolved;
   }
 
   Future<SpotifyHttpResponse> _authenticatedRequest(

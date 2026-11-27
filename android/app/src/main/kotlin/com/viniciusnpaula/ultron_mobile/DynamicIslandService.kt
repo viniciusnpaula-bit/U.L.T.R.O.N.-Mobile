@@ -813,9 +813,13 @@ class DynamicIslandService : Service() {
     }
 
     private fun triggerVoiceAction() {
+        morphToTarget(expanded = false)
+        if (!MainActivity.isActivityResumed) {
+            UltronAudioService.triggerBackgroundVoiceTurn(this)
+            return
+        }
         val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
         val locked = isSessionLocked || km?.isDeviceLocked == true
-        morphToTarget(expanded = false)
         MainActivity.notifyFloatingOrbTap(requiresUnlock = locked)
         launchMainActivity(voiceTrigger = true, requireUnlock = locked)
     }

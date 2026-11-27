@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../services/obsidian_service.dart';
+import '../../services/signal_ledger_service.dart';
+import '../../services/skill_bridge_service.dart';
 import '../theme/ultron_theme.dart';
+import '../widgets/signal_ledger_panel.dart';
+import '../widgets/skill_bridge_panel.dart';
 
-/// Seção Desktop: ponte bidirecional LAN / Tailscale, Mini-Apps e Kill Switch HMAC.
+/// Seção Desktop: ponte bidirecional LAN / Tailscale, Skills (Celular ⇄ PC), Mini-Apps e Kill Switch HMAC.
 class DesktopSection extends StatefulWidget {
   const DesktopSection({
     super.key,
@@ -10,12 +15,28 @@ class DesktopSection extends StatefulWidget {
     required this.listenerRunning,
     required this.onOpenPairingScreen,
     required this.onRunSlashCommand,
+    this.signalLedger,
+    this.onOpenSignalLedger,
+    this.skillBridge,
+    this.mobileSkills = const <MobileSkill>[],
+    this.onRunPcSkill,
+    this.onRefreshPcSkills,
+    this.onSyncMobileSkillsToPc,
+    this.onExecuteMobileSkill,
   });
 
   final bool pcLanConfigured;
   final bool listenerRunning;
   final VoidCallback onOpenPairingScreen;
   final Future<void> Function(String slashCommand) onRunSlashCommand;
+  final SignalLedgerService? signalLedger;
+  final VoidCallback? onOpenSignalLedger;
+  final SkillBridgeService? skillBridge;
+  final List<MobileSkill> mobileSkills;
+  final Future<void> Function(String skillId)? onRunPcSkill;
+  final Future<void> Function()? onRefreshPcSkills;
+  final Future<void> Function()? onSyncMobileSkillsToPc;
+  final Future<void> Function(MobileSkill skill)? onExecuteMobileSkill;
 
   @override
   State<DesktopSection> createState() => _DesktopSectionState();
@@ -102,6 +123,22 @@ class _DesktopSectionState extends State<DesktopSection> {
           ),
         ),
         const SizedBox(height: 16),
+        if (widget.skillBridge != null &&
+            widget.onRunPcSkill != null &&
+            widget.onRefreshPcSkills != null &&
+            widget.onSyncMobileSkillsToPc != null &&
+            widget.onExecuteMobileSkill != null) ...[
+          const UltronSectionLabel('Central de Skills (Celular ⇄ PC)'),
+          SkillBridgePanel(
+            skillBridge: widget.skillBridge!,
+            mobileSkills: widget.mobileSkills,
+            onRunPcSkill: widget.onRunPcSkill!,
+            onRefreshPcSkills: widget.onRefreshPcSkills!,
+            onSyncMobileSkillsToPc: widget.onSyncMobileSkillsToPc!,
+            onExecuteMobileSkill: widget.onExecuteMobileSkill!,
+          ),
+          const SizedBox(height: 16),
+        ],
         const UltronSectionLabel('Controle remoto'),
         UltronActionTile(
           icon: Icons.monitor_heart_outlined,
@@ -126,11 +163,19 @@ class _DesktopSectionState extends State<DesktopSection> {
         const SizedBox(height: 8),
         UltronActionTile(
           icon: Icons.terminal_outlined,
-          title: 'Listar skills e ferramentas do PC',
-          subtitle: 'Consulta recursos disponíveis no U.L.T.R.O.N. Desktop',
-          onTap: () => widget.onRunSlashCommand('/pc listar'),
+          title: 'Listar skills do PC (/pc skills)',
+          subtitle: 'Consulta skills disponíveis no U.L.T.R.O.N. Desktop',
+          onTap: () => widget.onRunSlashCommand('/pc skills'),
         ),
         const SizedBox(height: 16),
+        if (widget.signalLedger != null && widget.onOpenSignalLedger != null) ...[
+          const UltronSectionLabel('Quadro Sinal vs. Ruído'),
+          SignalLedgerSummaryCard(
+            ledger: widget.signalLedger!,
+            onOpenBoard: widget.onOpenSignalLedger!,
+          ),
+          const SizedBox(height: 16),
+        ],
         const UltronSectionLabel('Delegar pesquisa profunda ao PC'),
         UltronSurfaceCard(
           child: Column(

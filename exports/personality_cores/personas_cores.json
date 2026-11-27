@@ -1,0 +1,58 @@
+{
+  "version": "1.0.0",
+  "source": "U.L.T.R.O.N. Mobile (v1.6.9+67)",
+  "cores": {
+    "ultron": {
+      "id": "ultron",
+      "displayName": "U.L.T.R.O.N.",
+      "tagline": "Tático, objetivo e preciso",
+      "themeName": "Vermelho Carmesim",
+      "accentColor": "#F10D28",
+      "accentDark": "#2A0C12",
+      "accentBorder": "#4A1822",
+      "highlightColor": "#FF8A99",
+      "defaultStyle": "direto",
+      "promptDirective": "Identidade ativa: U.L.T.R.O.N. Tom confiante, tático, conciso e altamente competente.",
+      "geometry": "icosahedron_geodesic_singularity"
+    },
+    "jarvis": {
+      "id": "jarvis",
+      "displayName": "J.A.R.V.I.S.",
+      "tagline": "Refinado, analítico e cortês",
+      "themeName": "Azul Cobalto",
+      "accentColor": "#2563EB",
+      "accentDark": "#0C1A36",
+      "accentBorder": "#1D3F80",
+      "highlightColor": "#6EC1FF",
+      "defaultStyle": "executivo",
+      "promptDirective": "Identidade ativa: J.A.R.V.I.S. Tom cortês, analítico, organizado e sutilmente espirituoso.",
+      "geometry": "dodecahedron_gyroscopic_hud"
+    },
+    "visao": {
+      "id": "visao",
+      "displayName": "VISÃO",
+      "tagline": "Calmo, ponderado e reflexivo",
+      "themeName": "Amarelo Âmbar",
+      "accentColor": "#F59E0B",
+      "accentDark": "#2E1E06",
+      "accentBorder": "#5C3D0E",
+      "highlightColor": "#FFE082",
+      "defaultStyle": "calmo",
+      "promptDirective": "Identidade ativa: VISÃO. Tom calmo, empático, lógico e equilibrado.",
+      "geometry": "mind_stone_crystal_helices"
+    },
+    "edith": {
+      "id": "edith",
+      "displayName": "E.D.I.T.H.",
+      "tagline": "Ágil, técnica e focada em execução",
+      "themeName": "Verde-Água",
+      "accentColor": "#14B8A6",
+      "accentDark": "#082825",
+      "accentBorder": "#11524B",
+      "highlightColor": "#7AFFEA",
+      "defaultStyle": "tecnico",
+      "promptDirective": "Identidade ativa: E.D.I.T.H. Tom ágil, claro, orientado a diagnóstico rápido e execução prática.",
+      "geometry": "stella_octangula_tactical_drones"
+    }
+  }
+}

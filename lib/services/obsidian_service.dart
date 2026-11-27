@@ -5,7 +5,10 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'okf_metadata.dart';
 import 'vault_search_service.dart';
+
+export 'okf_metadata.dart';
 
 class MobileSkill {
   const MobileSkill({
@@ -28,6 +31,7 @@ class ObsidianNoteSummary {
     required this.title,
     required this.sizeBytes,
     required this.modifiedAt,
+    this.okf,
   });
 
   final String relativePath;
@@ -35,6 +39,7 @@ class ObsidianNoteSummary {
   final String title;
   final int sizeBytes;
   final DateTime modifiedAt;
+  final OkfMetadata? okf;
 }
 
 class ObsidianTaskItem {
@@ -295,7 +300,18 @@ class ObsidianService {
   Future<void> _seedSecondBrainIndex() async {
     final indexFile = File(p.join(root.path, 'Memoria', 'Segundo_Cerebro.md'));
     if (!await indexFile.exists()) {
+      final now = DateTime.now();
+      final header = OkfMetadata.renderFrontmatter(
+        OkfMetadata(
+          sources: const ['ultron_seed'],
+          verified: false,
+          staleAfter: OkfMetadata.computeStaleAfter(now),
+          updatedAt: now.toUtc(),
+          hasFrontmatter: true,
+        ),
+      );
       await indexFile.writeAsString(
+        '$header\n'
         '# Segundo Cérebro (U.L.T.R.O.N.)\n\n'
         'Este cofre é a memória persistente e expandida do assistente U.L.T.R.O.N., '
         'sincronizado nativamente com o aplicativo Obsidian.\n\n'
@@ -313,7 +329,18 @@ class ObsidianService {
   Future<void> _seedOperatorMemory() async {
     final opFile = File(p.join(root.path, 'Memoria', 'Operador.md'));
     if (!await opFile.exists()) {
+      final now = DateTime.now();
+      final header = OkfMetadata.renderFrontmatter(
+        OkfMetadata(
+          sources: const ['ultron_seed'],
+          verified: false,
+          staleAfter: OkfMetadata.computeStaleAfter(now),
+          updatedAt: now.toUtc(),
+          hasFrontmatter: true,
+        ),
+      );
       await opFile.writeAsString(
+        '$header\n'
         '# Perfil do Operador\n\n'
         'Diretrizes de memória permanente do U.L.T.R.O.N.:\n'
         '- **Nome**: Operador\n'
@@ -338,6 +365,9 @@ class ObsidianService {
           'Aciona lanterna traseira no máximo e envia pulso háptico de alerta.\n'
           '[ACTION:TORCH_ON]\n'
           '[ACTION:VIBRATE]\n',
+      'permutacao_do_fone': '# Permutação do Fone\n'
+          'Alterna o headset dual-mode (Attack Shark L30 Pro: Dongle 2.4GHz ⇄ Bluetooth) entre PC e celular, aguardando a conexão Bluetooth e continuando a música no Spotify Connect.\n'
+          '[ACTION:HEADSET_HANDOFF:auto]\n',
       'garantias': '# Arquivo de Vida — Garantias e Manuais\n'
           'Fluxo tático para catalogar notas fiscais, etiquetas de equipamentos e manuais no cofre Obsidian.\n\n'
           '## Protocolo de Extração (/visao ou /ocr)\n'
@@ -391,8 +421,15 @@ class ObsidianService {
     return file;
   }
 
-  /// Salva ou atualiza um tópico de memória permanente em `Memoria/$topic.md`.
-  Future<File> saveMemory(String topic, String content) async {
+  /// Salva ou atualiza um tópico de memória permanente em `Memoria/$topic.md` com frontmatter OKF.
+  Future<File> saveMemory(
+    String topic,
+    String content, {
+    List<String> sources = const ['operador'],
+    bool verified = false,
+    int staleDays = OkfMetadata.defaultStaleDays,
+    DateTime? now,
+  }) async {
     final cleanTopic = topic
         .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
         .trim();
@@ -400,51 +437,121 @@ class ObsidianService {
     final file = File(p.join(root.path, 'Memoria', '$cleanTopic.md'));
     await file.parent.create(recursive: true);
     await _pushSnapshotForFile(file, operation: 'REMEMBER');
-    final now = DateTime.now();
+    final refNow = now ?? DateTime.now();
+    final updateBlock =
+        '\n\n## Atualização (${refNow.day.toString().padLeft(2, '0')}/${refNow.month.toString().padLeft(2, '0')} ${refNow.hour.toString().padLeft(2, '0')}:${refNow.minute.toString().padLeft(2, '0')})\n$content\n';
     if (await file.exists()) {
-      await file.writeAsString(
-        '\n\n## Atualização (${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')})\n$content\n',
-        mode: FileMode.append,
-      );
+      final current = await file.readAsString();
+      final doc = OkfMetadata.parse(current);
+      if (doc.metadata.hasFrontmatter) {
+        final mergedSources = <String>{
+          ...doc.metadata.sources,
+          ...sources.map((s) => s.trim()).where((s) => s.isNotEmpty),
+        }.toList(growable: false);
+        final updated = OkfMetadata.upsertFrontmatter(
+          '$current$updateBlock',
+          (meta) => meta.copyWith(
+            sources: mergedSources,
+            updatedAt: refNow.toUtc(),
+          ),
+        );
+        await file.writeAsString(updated);
+      } else {
+        await file.writeAsString(updateBlock, mode: FileMode.append);
+      }
     } else {
+      final header = OkfMetadata.renderFrontmatter(
+        OkfMetadata(
+          sources: sources,
+          verified: verified,
+          staleAfter: OkfMetadata.computeStaleAfter(refNow, days: staleDays),
+          updatedAt: refNow.toUtc(),
+          hasFrontmatter: true,
+        ),
+      );
       await file.writeAsString(
-        '# $cleanTopic\n\n- Criado em: ${now.toLocal()}\n\n$content\n',
+        '$header\n# $cleanTopic\n\n- Criado em: ${refNow.toLocal()}\n\n$content\n',
       );
     }
     return file;
   }
 
-  /// Lê a memória de longo prazo para injeção contextual no prompt do LLM.
-  Future<String> readLongTermMemory({int maxChars = 2000}) async {
+  /// Salva `Preferencias.md` na raiz do cofre com frontmatter OKF.
+  Future<File> savePreferences(
+    String content, {
+    List<String> sources = const ['operador'],
+    bool verified = false,
+    int staleDays = OkfMetadata.defaultStaleDays,
+    DateTime? now,
+  }) async {
+    final clean = content.trim();
+    if (clean.isEmpty) throw ArgumentError('Preferências não podem ser vazias.');
+    final file = File(p.join(root.path, 'Preferencias.md'));
+    await _pushSnapshotForFile(file, operation: 'PREFERENCES');
+    final refNow = now ?? DateTime.now();
+    final header = OkfMetadata.renderFrontmatter(
+      OkfMetadata(
+        sources: sources,
+        verified: verified,
+        staleAfter: OkfMetadata.computeStaleAfter(refNow, days: staleDays),
+        updatedAt: refNow.toUtc(),
+        hasFrontmatter: true,
+      ),
+    );
+    final body = clean.startsWith('#') ? '$clean\n' : '# Preferências\n\n$clean\n';
+    await file.writeAsString('$header\n$body');
+    return file;
+  }
+
+  /// Lê a memória de longo prazo para injeção contextual no prompt do LLM,
+  /// sinalizando notas vencidas (`stale_after < hoje`) ou não verificadas via OKF.
+  Future<String> readLongTermMemory({
+    int maxChars = 2000,
+    DateTime? now,
+    bool excludeStale = false,
+  }) async {
+    final refNow = now ?? DateTime.now();
     final buffer = StringBuffer();
+
+    void appendContextSection(String heading, String rawContent) {
+      if (rawContent.trim().isEmpty) return;
+      final doc = OkfMetadata.parse(rawContent);
+      final body = doc.body.trim();
+      if (body.isEmpty) return;
+      final isStale = doc.metadata.isStale(now: refNow);
+      final tag = doc.metadata.statusTag(now: refNow, isContextNote: true);
+      if (excludeStale && isStale) {
+        buffer.writeln(
+          '$heading [ALERTA OKF: nota vencida desde ${doc.metadata.staleAfterIso} omitida do contexto — revise ou renove com /vault verificar]',
+        );
+        return;
+      }
+      final label = tag.isEmpty ? heading : '$heading [OKF: $tag]';
+      buffer.writeln('$label:');
+      buffer.writeln(body);
+    }
 
     // 1. Perfil do Operador
     final opFile = File(p.join(root.path, 'Memoria', 'Operador.md'));
     if (await opFile.exists()) {
       final content = await opFile.readAsString();
-      if (content.trim().isNotEmpty) {
-        buffer.writeln('### Perfil do Operador:');
-        buffer.writeln(content.trim());
-      }
+      appendContextSection('### Perfil do Operador', content);
     }
 
     // 2. Preferências
     final prefFile = File(p.join(root.path, 'Preferencias.md'));
     if (await prefFile.exists()) {
       final pref = await prefFile.readAsString();
-      if (pref.trim().isNotEmpty) {
-        buffer.writeln('\n### Preferências:');
-        buffer.writeln(pref.trim());
-      }
+      if (buffer.isNotEmpty) buffer.writeln();
+      appendContextSection('### Preferências', pref);
     }
 
     // 3. Resumo da Nota do Dia Atual
-    final now = DateTime.now();
-    final todayNote = await readDailyNote(now);
+    final todayNote = await readDailyNote(refNow);
     if (todayNote.trim().isNotEmpty) {
       final lines = todayNote.trim().split('\n');
       final recent = lines.reversed.take(6).toList().reversed.join('\n');
-      buffer.writeln('\n### Registros Recentes de Hoje (${now.day}/${now.month}):');
+      buffer.writeln('\n### Registros Recentes de Hoje (${refNow.day}/${refNow.month}):');
       buffer.writeln(recent);
     }
 
@@ -743,7 +850,7 @@ class ObsidianService {
     return expiration.subtract(Duration(days: leadDays));
   }
 
-  /// Gera nota Markdown padronizada para `Inventario/<produto>.md` otimizada para busca FTS5.
+  /// Gera nota Markdown padronizada para `Inventario/<produto>.md` otimizada para busca FTS5 e OKF.
   static String buildWarrantyNoteMarkdown({
     required String product,
     required DateTime purchaseDate,
@@ -752,16 +859,25 @@ class ObsidianService {
     String? serialNumber,
     String? vendor,
     int leadDays = 15,
+    DateTime? now,
+    bool verified = false,
+    List<String> sources = const ['arquivo_de_vida'],
+    int staleDays = OkfMetadata.defaultStaleDays,
   }) {
     String fmtDate(DateTime d) =>
         '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+    final refNow = now ?? DateTime.now();
+    final staleAfter = OkfMetadata.computeStaleAfter(refNow, days: staleDays);
     final reminderAt = computeWarrantyReminderDate(
       purchaseDate: purchaseDate,
       warrantyMonths: warrantyMonths,
       leadDays: leadDays,
     );
     final expiration = reminderAt.add(Duration(days: leadDays));
+    final renderedSources = sources.isEmpty
+        ? '[]'
+        : '[${sources.map((s) => s.trim()).where((s) => s.isNotEmpty).join(', ')}]';
     final buffer = StringBuffer()
       ..writeln('---')
       ..writeln('tipo: garantia')
@@ -770,6 +886,10 @@ class ObsidianService {
       ..writeln('garantia_meses: $warrantyMonths')
       ..writeln('garantia_ate: ${fmtDate(expiration)}')
       ..writeln('lembrete_preventivo: ${fmtDate(reminderAt)}')
+      ..writeln('sources: $renderedSources')
+      ..writeln('verified: $verified')
+      ..writeln('stale_after: ${fmtDate(staleAfter)}')
+      ..writeln('updated_at: ${refNow.toUtc().toIso8601String()}')
       ..writeln('---')
       ..writeln('# ${product.trim()}')
       ..writeln()
@@ -906,6 +1026,7 @@ class ObsidianService {
       try {
         final stat = await entity.stat();
         final content = await entity.readAsString();
+        final parsed = OkfMetadata.parse(content);
         final title = _extractNoteTitle(rel, content);
         final folderName = parts.length > 1 ? parts.first : '';
         notes.add(
@@ -915,6 +1036,7 @@ class ObsidianService {
             title: title,
             sizeBytes: stat.size,
             modifiedAt: stat.modified,
+            okf: parsed.metadata,
           ),
         );
       } catch (_) {}
@@ -939,11 +1061,12 @@ class ObsidianService {
   }
 
   /// OBSIDIAN_APPEND: Anexa texto a uma nota existente (ou cria a nota caso [createIfMissing] seja true),
-  /// gravando snapshot prévio na pilha de UNDO.
+  /// gravando snapshot prévio na pilha de UNDO e aplicando frontmatter OKF em notas de contexto.
   Future<File> appendToNote(
     String notePath,
     String text, {
     bool createIfMissing = false,
+    DateTime? now,
   }) async {
     final cleanText = text.trim();
     if (cleanText.isEmpty) {
@@ -955,15 +1078,155 @@ class ObsidianService {
     );
     await file.parent.create(recursive: true);
     await _pushSnapshotForFile(file, operation: 'OBSIDIAN_APPEND');
+    final refNow = now ?? DateTime.now();
+    final relPath = p
+        .relative(file.path, from: root.path)
+        .replaceAll(r'\', '/');
     if (await file.exists()) {
       final current = await file.readAsString();
       final prefix = current.isEmpty || current.endsWith('\n') ? '' : '\n';
-      await file.writeAsString('$prefix$cleanText\n', mode: FileMode.append);
+      final doc = OkfMetadata.parse(current);
+      if (doc.metadata.hasFrontmatter) {
+        final combined = '$current$prefix$cleanText\n';
+        await file.writeAsString(
+          OkfMetadata.upsertFrontmatter(
+            combined,
+            (meta) => meta.copyWith(updatedAt: refNow.toUtc()),
+          ),
+        );
+      } else {
+        await file.writeAsString('$prefix$cleanText\n', mode: FileMode.append);
+      }
     } else {
-      final title = p.basenameWithoutExtension(file.path);
-      await file.writeAsString('# $title\n\n$cleanText\n');
+      if (cleanText.startsWith('---\n') || cleanText.startsWith('---\r\n')) {
+        await file.writeAsString('$cleanText\n');
+      } else if (OkfMetadata.isContextNotePath(relPath)) {
+        final title = p.basenameWithoutExtension(file.path);
+        final header = OkfMetadata.renderFrontmatter(
+          OkfMetadata(
+            sources: const ['obsidian_append'],
+            verified: false,
+            staleAfter: OkfMetadata.computeStaleAfter(refNow),
+            updatedAt: refNow.toUtc(),
+            hasFrontmatter: true,
+          ),
+        );
+        final body = cleanText.startsWith('#')
+            ? '$cleanText\n'
+            : '# $title\n\n$cleanText\n';
+        await file.writeAsString('$header\n$body');
+      } else {
+        final title = p.basenameWithoutExtension(file.path);
+        await file.writeAsString('# $title\n\n$cleanText\n');
+      }
     }
     return file;
+  }
+
+  /// OKF: Marca uma nota como verificada (ou rejeita verificação) e renova `stale_after` / `updated_at`,
+  /// gravando snapshot na pilha de UNDO.
+  Future<OkfNoteStatus> verifyNote(
+    String notePath, {
+    bool verified = true,
+    int renewDays = OkfMetadata.defaultStaleDays,
+    DateTime? staleAfter,
+    List<String>? addSources,
+    DateTime? now,
+  }) async {
+    final file = await _resolveExistingOrTargetNote(
+      notePath,
+      mustExist: true,
+    );
+    await _pushSnapshotForFile(file, operation: 'OBSIDIAN_VERIFY');
+    final refNow = now ?? DateTime.now();
+    final nextStaleAfter =
+        staleAfter ?? OkfMetadata.computeStaleAfter(refNow, days: renewDays);
+    final raw = await file.readAsString();
+    final updated = OkfMetadata.upsertFrontmatter(raw, (current) {
+      final merged = <String>{
+        ...current.sources,
+        if (addSources != null)
+          ...addSources.map((s) => s.trim()).where((s) => s.isNotEmpty),
+      };
+      if (verified && merged.isEmpty) {
+        merged.add('revisao_humana');
+      }
+      return current.copyWith(
+        sources: merged.toList(growable: false),
+        verified: verified,
+        staleAfter: nextStaleAfter,
+        updatedAt: refNow.toUtc(),
+        hasFrontmatter: true,
+      );
+    });
+    await file.writeAsString(updated);
+    final rel = p.relative(file.path, from: root.path).replaceAll(r'\', '/');
+    final parsed = OkfMetadata.parse(updated);
+    return OkfNoteStatus(
+      relativePath: rel,
+      title: _extractNoteTitle(rel, updated),
+      metadata: parsed.metadata,
+      isStale: parsed.metadata.isStale(now: refNow),
+      isUnverified: !parsed.metadata.isVerified,
+    );
+  }
+
+  /// Lista notas com `stale_after < hoje` (vencidas para revisão OKF).
+  Future<List<OkfNoteStatus>> listStaleNotes({
+    DateTime? now,
+    bool onlyContextFolders = false,
+  }) async {
+    final refNow = now ?? DateTime.now();
+    final notes = await listNotes();
+    final stale = <OkfNoteStatus>[];
+    for (final n in notes) {
+      if (onlyContextFolders && !OkfMetadata.isContextNotePath(n.relativePath)) {
+        continue;
+      }
+      final meta = n.okf;
+      if (meta == null || !meta.isStale(now: refNow)) continue;
+      stale.add(
+        OkfNoteStatus(
+          relativePath: n.relativePath,
+          title: n.title,
+          metadata: meta,
+          isStale: true,
+          isUnverified: !meta.isVerified,
+        ),
+      );
+    }
+    stale.sort((a, b) {
+      final da = a.metadata.staleAfter;
+      final db = b.metadata.staleAfter;
+      if (da != null && db != null) {
+        final cmp = da.compareTo(db);
+        if (cmp != 0) return cmp;
+      }
+      return a.relativePath.compareTo(b.relativePath);
+    });
+    return stale;
+  }
+
+  /// Lista notas de contexto (`Memoria/`, `Inventario/`, `Preferencias.md`) sem verificação humana.
+  Future<List<OkfNoteStatus>> listUnverifiedContextNotes({DateTime? now}) async {
+    final refNow = now ?? DateTime.now();
+    final notes = await listNotes();
+    final unverified = <OkfNoteStatus>[];
+    for (final n in notes) {
+      if (!OkfMetadata.isContextNotePath(n.relativePath)) continue;
+      final meta = n.okf ?? const OkfMetadata();
+      if (meta.isVerified) continue;
+      unverified.add(
+        OkfNoteStatus(
+          relativePath: n.relativePath,
+          title: n.title,
+          metadata: meta,
+          isStale: meta.isStale(now: refNow),
+          isUnverified: true,
+        ),
+      );
+    }
+    return unverified;
   }
 
   static final RegExp _taskLineRegex = RegExp(
@@ -1276,7 +1539,8 @@ class ObsidianService {
   }
 
   static String _extractNoteTitle(String relPath, String content) {
-    for (final line in content.split('\n')) {
+    final body = OkfMetadata.parse(content).body;
+    for (final line in body.split('\n')) {
       final trimmed = line.trim();
       if (trimmed.startsWith('#')) {
         final heading = trimmed.replaceFirst(RegExp(r'^#+\s*'), '').trim();

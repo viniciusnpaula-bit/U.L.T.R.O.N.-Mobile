@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>U.L.T.R.O.N. — Núcleos das 4 Personalidades</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080808;
+      --panel: #101012;
+      --border: #232329;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --accent: #F10D28;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      gap: 20px;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 12px 16px;
+    }
+    button {
+      background: #17171b;
+      color: var(--text);
+      border: 1px solid #2b2b33;
+      border-radius: 10px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 140ms, background 140ms;
+    }
+    button.active {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 18%, #101012);
+    }
+    .slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: 8px;
+    }
+    .stage-single {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .stage-grid {
+      display: none;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      width: min(980px, 100%);
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .meta-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+    }
+    .meta-sub {
+      font-size: 12px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button data-persona="ultron" class="active">U.L.T.R.O.N.</button>
+    <button data-persona="jarvis">J.A.R.V.I.S.</button>
+    <button data-persona="visao">VISÃO</button>
+    <button data-persona="edith">E.D.I.T.H.</button>
+    <button id="toggleGrid">Ver 4 juntos</button>
+    <label class="slider-wrap">
+      Energia
+      <input id="energySlider" type="range" min="0" max="1.2" step="0.05" value="0.25" />
+      <span id="energyVal">0.25</span>
+    </label>
+  </div>
+
+  <div id="singleStage" class="stage-single">
+    <canvas id="singleCanvas" style="width: 340px; height: 340px;"></canvas>
+    <div id="singleTitle" class="meta-title">U.L.T.R.O.N.</div>
+    <div id="singleTagline" class="meta-sub">Tático, objetivo e preciso</div>
+  </div>
+
+  <div id="gridStage" class="stage-grid"></div>
+
+  <script type="module">
+    import { mountPersonaCore, PERSONA_CORES } from './personality_cores.js';
+
+    const singleCanvas = document.getElementById('singleCanvas');
+    const singleStage = document.getElementById('singleStage');
+    const gridStage = document.getElementById('gridStage');
+    const singleTitle = document.getElementById('singleTitle');
+    const singleTagline = document.getElementById('singleTagline');
+    const energySlider = document.getElementById('energySlider');
+    const energyVal = document.getElementById('energyVal');
+    const toggleGridBtn = document.getElementById('toggleGrid');
+    const personaButtons = Array.from(document.querySelectorAll('button[data-persona]'));
+
+    const singleCtrl = mountPersonaCore(singleCanvas, {
+      persona: 'ultron',
+      energy: 0.25,
+      showStarfield: true,
+    });
+
+    const gridCtrls = [];
+    for (const id of ['ultron', 'jarvis', 'visao', 'edith']) {
+      const spec = PERSONA_CORES[id];
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.style.borderColor = spec.accentBorder;
+
+      const canvas = document.createElement('canvas');
+      canvas.style.width = '200px';
+      canvas.style.height = '200px';
+      const title = document.createElement('div');
+      title.className = 'meta-title';
+      title.style.color = spec.accentColor;
+      title.textContent = spec.displayName;
+      const sub = document.createElement('div');
+      sub.className = 'meta-sub';
+      sub.textContent = spec.tagline;
+
+      card.append(canvas, title, sub);
+      gridStage.appendChild(card);
+      gridCtrls.push(
+        mountPersonaCore(canvas, {
+          persona: id,
+          energy: 0.25,
+          showStarfield: true,
+          active: false,
+        })
+      );
+    }
+
+    let gridMode = false;
+
+    function selectPersona(id) {
+      const spec = PERSONA_CORES[id];
+      singleCtrl.setPersona(id);
+      singleTitle.textContent = spec.displayName;
+      singleTitle.style.color = spec.accentColor;
+      singleTagline.textContent = `${spec.themeName} · ${spec.tagline}`;
+      document.documentElement.style.setProperty('--accent', spec.accentColor);
+      personaButtons.forEach((btn) =>
+        btn.classList.toggle('active', btn.dataset.persona === id)
+      );
+    }
+
+    personaButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (gridMode) setGridMode(false);
+        selectPersona(btn.dataset.persona);
+      });
+    });
+
+    function setGridMode(next) {
+      gridMode = next;
+      singleStage.style.display = gridMode ? 'none' : 'flex';
+      gridStage.style.display = gridMode ? 'grid' : 'none';
+      singleCtrl.setActive(!gridMode);
+      gridCtrls.forEach((c) => c.setActive(gridMode));
+      toggleGridBtn.classList.toggle('active', gridMode);
+    }
+
+    toggleGridBtn.addEventListener('click', () => setGridMode(!gridMode));
+
+    energySlider.addEventListener('input', () => {
+      const val = parseFloat(energySlider.value);
+      energyVal.textContent = val.toFixed(2);
+      singleCtrl.setEnergy(val);
+      gridCtrls.forEach((c) => c.setEnergy(val));
+    });
+
+    selectPersona('ultron');
+  </script>
+</body>
+</html>

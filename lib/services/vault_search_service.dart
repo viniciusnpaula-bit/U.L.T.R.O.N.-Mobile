@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
+import 'okf_metadata.dart';
+
 enum VaultSearchEngine { fts5, fts4, lexicalFallback }
 
 class VaultDocumentRecord {
@@ -33,6 +35,10 @@ class VaultSearchHit {
     required this.snippet,
     required this.score,
     required this.modifiedAt,
+    this.isStale = false,
+    this.verified,
+    this.staleAfter,
+    this.sources = const <String>[],
   });
 
   final String path;
@@ -41,6 +47,25 @@ class VaultSearchHit {
   final String snippet;
   final double score;
   final DateTime modifiedAt;
+  final bool isStale;
+  final bool? verified;
+  final DateTime? staleAfter;
+  final List<String> sources;
+
+  bool get isUnverified => verified == false;
+
+  String get okfWarningTag {
+    final flags = <String>[];
+    if (isStale) {
+      final dateStr =
+          staleAfter == null ? 'data expirada' : OkfMetadata.formatIsoDate(staleAfter!);
+      flags.add('VENCIDA desde $dateStr');
+    }
+    if (verified == false) {
+      flags.add('NÃO VERIFICADA');
+    }
+    return flags.join(' · ');
+  }
 }
 
 class VaultSyncStats {
@@ -421,7 +446,8 @@ class VaultSearchService {
   }
 
   static String _extractTitle(String relPath, String content) {
-    for (final line in content.split('\n')) {
+    final body = OkfMetadata.parse(content).body;
+    for (final line in body.split('\n')) {
       final trimmed = line.trim();
       if (trimmed.startsWith('#')) {
         final heading = trimmed.replaceFirst(RegExp(r'^#+\s*'), '').trim();
@@ -450,36 +476,67 @@ class VaultSearchService {
 
   /// Executa busca ranqueada nas notas indexadas usando o melhor motor disponível.
   /// Quando [pathPrefix] é fornecido, restringe os resultados àquela subpasta do cofre.
+  /// Suporta filtros OKF ([excludeStale], [onlyVerified]) e sinaliza notas vencidas/não verificadas.
   Future<List<VaultSearchHit>> search(
     String query, {
     int limit = 3,
     String? pathPrefix,
+    bool excludeStale = false,
+    bool onlyVerified = false,
+    DateTime? now,
   }) async {
     if (limit <= 0) return const [];
     final terms = extractQueryTerms(query);
     if (terms.isEmpty) return const [];
     final prefix = normalizePathPrefix(pathPrefix);
+    final refNow = now ?? _now();
 
     if (_engine == VaultSearchEngine.fts5) {
-      final ftsHits = await _searchFts5(terms, limit: limit, pathPrefix: prefix);
+      final ftsHits = await _searchFts5(
+        terms,
+        limit: limit,
+        pathPrefix: prefix,
+        excludeStale: excludeStale,
+        onlyVerified: onlyVerified,
+        now: refNow,
+      );
       if (ftsHits.isNotEmpty) return ftsHits;
     } else if (_engine == VaultSearchEngine.fts4) {
-      final fts4Hits = await _searchFts4(terms, limit: limit, pathPrefix: prefix);
+      final fts4Hits = await _searchFts4(
+        terms,
+        limit: limit,
+        pathPrefix: prefix,
+        excludeStale: excludeStale,
+        onlyVerified: onlyVerified,
+        now: refNow,
+      );
       if (fts4Hits.isNotEmpty) return fts4Hits;
     }
 
     // Fallback léxico (ou se FTS não cobrir alguma variação sem acento)
     final allRows = await _db.query('vault_docs');
     final docs = allRows.map(_rowToRecord).toList();
-    return rankLexicalDocuments(docs, query, limit: limit, pathPrefix: prefix);
+    return rankLexicalDocuments(
+      docs,
+      query,
+      limit: limit,
+      pathPrefix: prefix,
+      excludeStale: excludeStale,
+      onlyVerified: onlyVerified,
+      now: refNow,
+    );
   }
 
   Future<List<VaultSearchHit>> _searchFts5(
     List<String> terms, {
     required int limit,
     String? pathPrefix,
+    bool excludeStale = false,
+    bool onlyVerified = false,
+    DateTime? now,
   }) async {
     final ftsQuery = _buildFtsMatchQuery(terms);
+    final fetchLimit = (excludeStale || onlyVerified) ? limit * 4 : limit * 2;
     try {
       final hasPrefix = pathPrefix != null && pathPrefix.isNotEmpty;
       final prefixLower = pathPrefix?.toLowerCase() ?? '';
@@ -505,23 +562,41 @@ class VaultSearchService {
         LIMIT ?
         ''',
         hasPrefix
-            ? [ftsQuery, prefixLower, '$prefixLower/%', limit]
-            : [ftsQuery, limit],
+            ? [ftsQuery, prefixLower, '$prefixLower/%', fetchLimit]
+            : [ftsQuery, fetchLimit],
       );
-      return rows.map((row) {
+      final hits = <VaultSearchHit>[];
+      for (final row in rows) {
         final content = row['content'] as String;
+        final doc = OkfMetadata.parse(content);
+        final stale = doc.metadata.isStale(now: now);
+        if (excludeStale && stale) continue;
+        if (onlyVerified && !doc.metadata.isVerified) continue;
         final rawRank = (row['rank'] as num?)?.toDouble() ?? -1.0;
-        return VaultSearchHit(
-          path: row['path'] as String,
-          folder: row['folder'] as String,
-          title: row['title'] as String,
-          snippet: extractSnippet(content, terms),
-          score: max(0.01, -rawRank),
-          modifiedAt: DateTime.fromMillisecondsSinceEpoch(
-            (row['modified_ms'] as num).toInt(),
+        var score = max(0.01, -rawRank);
+        if (stale) score *= 0.6;
+        hits.add(
+          VaultSearchHit(
+            path: row['path'] as String,
+            folder: row['folder'] as String,
+            title: row['title'] as String,
+            snippet: extractSnippet(doc.body, terms),
+            score: score,
+            modifiedAt: DateTime.fromMillisecondsSinceEpoch(
+              (row['modified_ms'] as num).toInt(),
+            ),
+            isStale: stale,
+            verified: doc.metadata.verified,
+            staleAfter: doc.metadata.staleAfter,
+            sources: doc.metadata.sources,
           ),
         );
-      }).toList();
+      }
+      hits.sort((a, b) {
+        final cmp = b.score.compareTo(a.score);
+        return cmp != 0 ? cmp : b.modifiedAt.compareTo(a.modifiedAt);
+      });
+      return hits.take(limit).toList(growable: false);
     } catch (_) {
       return const [];
     }
@@ -531,6 +606,9 @@ class VaultSearchService {
     List<String> terms, {
     required int limit,
     String? pathPrefix,
+    bool excludeStale = false,
+    bool onlyVerified = false,
+    DateTime? now,
   }) async {
     final ftsQuery = _buildFtsMatchQuery(terms);
     try {
@@ -563,6 +641,9 @@ class VaultSearchService {
         terms.join(' '),
         limit: limit,
         pathPrefix: pathPrefix,
+        excludeStale: excludeStale,
+        onlyVerified: onlyVerified,
+        now: now,
       );
     } catch (_) {
       return const [];
@@ -579,20 +660,33 @@ class VaultSearchService {
         sizeBytes: (row['size_bytes'] as num?)?.toInt() ?? 0,
       );
 
-  /// Formata os melhores trechos recuperados para injeção direta no prompt do LLM.
+  /// Formata os melhores trechos recuperados para injeção direta no prompt do LLM,
+  /// sinalizando notas vencidas ou não verificadas via OKF.
   Future<String> buildRagContext(
     String query, {
     int limit = 3,
     int maxChars = 1400,
     String? pathPrefix,
+    bool excludeStale = false,
+    bool onlyVerified = false,
+    DateTime? now,
   }) async {
-    final hits = await search(query, limit: limit, pathPrefix: pathPrefix);
+    final hits = await search(
+      query,
+      limit: limit,
+      pathPrefix: pathPrefix,
+      excludeStale: excludeStale,
+      onlyVerified: onlyVerified,
+      now: now,
+    );
     if (hits.isEmpty) return '';
 
     final buffer = StringBuffer();
     for (var i = 0; i < hits.length; i++) {
       final h = hits[i];
-      final entry = '[${i + 1}] ${h.path} (${h.title}):\n${h.snippet}\n';
+      final okfTag = h.okfWarningTag;
+      final okfSuffix = okfTag.isEmpty ? '' : ' [OKF: $okfTag]';
+      final entry = '[${i + 1}] ${h.path} (${h.title})$okfSuffix:\n${h.snippet}\n';
       if (buffer.isNotEmpty && buffer.length + entry.length > maxChars) {
         break;
       }
@@ -612,6 +706,9 @@ class VaultSearchService {
     String query, {
     int limit = 3,
     String? pathPrefix,
+    bool excludeStale = false,
+    bool onlyVerified = false,
+    DateTime? now,
   }) {
     if (limit <= 0 || docs.isEmpty) return const [];
     final terms = extractQueryTerms(query);
@@ -625,8 +722,13 @@ class VaultSearchService {
 
     final scored = <VaultSearchHit>[];
     for (final doc in filteredDocs) {
+      final parsed = OkfMetadata.parse(doc.content);
+      final stale = parsed.metadata.isStale(now: now);
+      if (excludeStale && stale) continue;
+      if (onlyVerified && !parsed.metadata.isVerified) continue;
+
       final normTitle = normalizeText(doc.title);
-      final normContent = normalizeText(doc.content);
+      final normContent = normalizeText(parsed.body);
       final normPath = normalizeText(doc.path);
 
       var score = 0.0;
@@ -646,14 +748,19 @@ class VaultSearchService {
 
       // Boost documents covering a higher fraction of distinct query terms.
       score *= 1.0 + (matchedTerms / terms.length);
+      if (stale) score *= 0.6;
       scored.add(
         VaultSearchHit(
           path: doc.path,
           folder: doc.folder,
           title: doc.title,
-          snippet: extractSnippet(doc.content, terms),
+          snippet: extractSnippet(parsed.body, terms),
           score: score,
           modifiedAt: DateTime.fromMillisecondsSinceEpoch(doc.modifiedMs),
+          isStale: stale,
+          verified: parsed.metadata.verified,
+          staleAfter: parsed.metadata.staleAfter,
+          sources: parsed.metadata.sources,
         ),
       );
     }

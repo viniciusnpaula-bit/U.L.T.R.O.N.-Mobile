@@ -600,6 +600,7 @@ class AiReply {
     this.completionTokens = 0,
     this.totalTokens = 0,
     this.tokensEstimated = false,
+    this.failedProviders = const <String>[],
   });
 
   final String provider;
@@ -610,8 +611,88 @@ class AiReply {
   final int completionTokens;
   final int totalTokens;
   final bool tokensEstimated;
+  final List<String> failedProviders;
 
   bool get usedFailover => failedAttempts > 0;
+}
+
+/// Métricas acumuladas por provedor/modelo durante a sessão ativa.
+class ProviderTelemetryStats {
+  const ProviderTelemetryStats({
+    required this.provider,
+    this.turns = 0,
+    this.promptTokens = 0,
+    this.completionTokens = 0,
+    this.totalTokens = 0,
+    this.realTokens = 0,
+    this.estimatedTokens = 0,
+    this.totalLatencyMs = 0,
+    this.lastLatencyMs = 0,
+    this.failedAttempts = 0,
+    this.failovers = 0,
+    this.hasEstimatedTokens = false,
+  });
+
+  final String provider;
+  final int turns;
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  final int realTokens;
+  final int estimatedTokens;
+  final int totalLatencyMs;
+  final int lastLatencyMs;
+  final int failedAttempts;
+  final int failovers;
+  final bool hasEstimatedTokens;
+
+  double get averageLatencyMs => turns > 0 ? totalLatencyMs / turns : 0.0;
+  int get averageLatencyMsRounded => turns > 0 ? (totalLatencyMs / turns).round() : 0;
+
+  ProviderTelemetryStats copyWith({
+    int? turns,
+    int? promptTokens,
+    int? completionTokens,
+    int? totalTokens,
+    int? realTokens,
+    int? estimatedTokens,
+    int? totalLatencyMs,
+    int? lastLatencyMs,
+    int? failedAttempts,
+    int? failovers,
+    bool? hasEstimatedTokens,
+  }) =>
+      ProviderTelemetryStats(
+        provider: provider,
+        turns: turns ?? this.turns,
+        promptTokens: promptTokens ?? this.promptTokens,
+        completionTokens: completionTokens ?? this.completionTokens,
+        totalTokens: totalTokens ?? this.totalTokens,
+        realTokens: realTokens ?? this.realTokens,
+        estimatedTokens: estimatedTokens ?? this.estimatedTokens,
+        totalLatencyMs: totalLatencyMs ?? this.totalLatencyMs,
+        lastLatencyMs: lastLatencyMs ?? this.lastLatencyMs,
+        failedAttempts: failedAttempts ?? this.failedAttempts,
+        failovers: failovers ?? this.failovers,
+        hasEstimatedTokens: hasEstimatedTokens ?? this.hasEstimatedTokens,
+      );
+}
+
+/// Evento registrado quando uma resposta precisou recorrer a failover.
+class FailoverTelemetryEvent {
+  const FailoverTelemetryEvent({
+    required this.timestamp,
+    required this.resolvedProvider,
+    required this.failedAttempts,
+    required this.latencyMs,
+    this.failedProviders = const <String>[],
+  });
+
+  final DateTime timestamp;
+  final String resolvedProvider;
+  final int failedAttempts;
+  final int latencyMs;
+  final List<String> failedProviders;
 }
 
 /// Telemetria acumulada da sessão ativa do cockpit (BRAIN, latência, turnos e tokens).
@@ -627,6 +708,12 @@ class SessionTelemetry {
     this.lastLatencyMs = 0,
     this.lastFailedAttempts = 0,
     this.failoverEvents = 0,
+    this.realTokens = 0,
+    this.estimatedTokens = 0,
+    this.totalLatencyMs = 0,
+    this.totalFailedAttempts = 0,
+    this.byProvider = const <String, ProviderTelemetryStats>{},
+    this.failoverHistory = const <FailoverTelemetryEvent>[],
   });
 
   factory SessionTelemetry.initial({
@@ -648,13 +735,88 @@ class SessionTelemetry {
   final int lastLatencyMs;
   final int lastFailedAttempts;
   final int failoverEvents;
+  final int realTokens;
+  final int estimatedTokens;
+  final int totalLatencyMs;
+  final int totalFailedAttempts;
+  final Map<String, ProviderTelemetryStats> byProvider;
+  final List<FailoverTelemetryEvent> failoverHistory;
 
   bool get lastUsedFailover => lastFailedAttempts > 0;
 
-  SessionTelemetry recordReply(AiReply reply) {
+  int get averageLatencyMs => turns > 0 ? (totalLatencyMs / turns).round() : 0;
+
+  List<ProviderTelemetryStats> get providerBreakdown {
+    final list = byProvider.values.toList(growable: false);
+    list.sort((a, b) {
+      final tokCmp = b.totalTokens.compareTo(a.totalTokens);
+      if (tokCmp != 0) return tokCmp;
+      final turnCmp = b.turns.compareTo(a.turns);
+      if (turnCmp != 0) return turnCmp;
+      final failCmp = b.failedAttempts.compareTo(a.failedAttempts);
+      if (failCmp != 0) return failCmp;
+      return a.provider.compareTo(b.provider);
+    });
+    return list;
+  }
+
+  SessionTelemetry recordReply(AiReply reply, {DateTime? at}) {
     final addedTotal = reply.totalTokens > 0
         ? reply.totalTokens
         : reply.promptTokens + reply.completionTokens;
+    final addedReal = reply.tokensEstimated ? 0 : addedTotal;
+    final addedEst = reply.tokensEstimated ? addedTotal : 0;
+
+    final updatedByProvider = Map<String, ProviderTelemetryStats>.from(byProvider);
+    for (final failed in reply.failedProviders) {
+      final cleanFailed = failed.trim();
+      if (cleanFailed.isEmpty) continue;
+      final prevFail = updatedByProvider[cleanFailed] ??
+          ProviderTelemetryStats(provider: cleanFailed);
+      updatedByProvider[cleanFailed] = prevFail.copyWith(
+        failedAttempts: prevFail.failedAttempts + 1,
+      );
+    }
+
+    final prevActive = updatedByProvider[reply.provider] ??
+        ProviderTelemetryStats(provider: reply.provider);
+    final ownExtraFails =
+        reply.failedProviders.isEmpty ? reply.failedAttempts : 0;
+    updatedByProvider[reply.provider] = prevActive.copyWith(
+      turns: prevActive.turns + 1,
+      promptTokens: prevActive.promptTokens + reply.promptTokens,
+      completionTokens: prevActive.completionTokens + reply.completionTokens,
+      totalTokens: prevActive.totalTokens + addedTotal,
+      realTokens: prevActive.realTokens + addedReal,
+      estimatedTokens: prevActive.estimatedTokens + addedEst,
+      totalLatencyMs: prevActive.totalLatencyMs + reply.elapsedMs,
+      lastLatencyMs: reply.elapsedMs,
+      failedAttempts: prevActive.failedAttempts + ownExtraFails,
+      failovers: prevActive.failovers + (reply.usedFailover ? 1 : 0),
+      hasEstimatedTokens: prevActive.hasEstimatedTokens || reply.tokensEstimated,
+    );
+
+    final updatedFailoverHistory = List<FailoverTelemetryEvent>.from(
+      failoverHistory,
+    );
+    if (reply.usedFailover) {
+      updatedFailoverHistory.add(
+        FailoverTelemetryEvent(
+          timestamp: at ?? DateTime.now(),
+          resolvedProvider: reply.provider,
+          failedAttempts: reply.failedAttempts,
+          latencyMs: reply.elapsedMs,
+          failedProviders: List<String>.unmodifiable(reply.failedProviders),
+        ),
+      );
+      if (updatedFailoverHistory.length > 25) {
+        updatedFailoverHistory.removeRange(
+          0,
+          updatedFailoverHistory.length - 25,
+        );
+      }
+    }
+
     return SessionTelemetry(
       startedAt: startedAt,
       turns: turns + 1,
@@ -666,6 +828,16 @@ class SessionTelemetry {
       lastLatencyMs: reply.elapsedMs,
       lastFailedAttempts: reply.failedAttempts,
       failoverEvents: failoverEvents + (reply.usedFailover ? 1 : 0),
+      realTokens: realTokens + addedReal,
+      estimatedTokens: estimatedTokens + addedEst,
+      totalLatencyMs: totalLatencyMs + reply.elapsedMs,
+      totalFailedAttempts: totalFailedAttempts + reply.failedAttempts,
+      byProvider: Map<String, ProviderTelemetryStats>.unmodifiable(
+        updatedByProvider,
+      ),
+      failoverHistory: List<FailoverTelemetryEvent>.unmodifiable(
+        updatedFailoverHistory,
+      ),
     );
   }
 
@@ -680,6 +852,12 @@ class SessionTelemetry {
         lastLatencyMs: lastLatencyMs,
         lastFailedAttempts: lastFailedAttempts,
         failoverEvents: failoverEvents,
+        realTokens: realTokens,
+        estimatedTokens: estimatedTokens,
+        totalLatencyMs: totalLatencyMs,
+        totalFailedAttempts: totalFailedAttempts,
+        byProvider: byProvider,
+        failoverHistory: failoverHistory,
       );
 
   static String formatCompactTokens(int tokens) {
@@ -779,6 +957,7 @@ class AiFailover {
 
     final sw = Stopwatch()..start();
     var failedAttempts = 0;
+    final failedProviders = <String>[];
     Object? lastError;
 
     for (final p in activeProviders) {
@@ -789,6 +968,9 @@ class AiFailover {
         requiresVision: requiresVision,
       );
       for (final candidateModel in candidateModels) {
+        final label = candidateModel == p.model
+            ? p.name
+            : '${p.name} ($candidateModel)';
         try {
           final candidateConfig = p.copyWith(model: candidateModel);
           final parsed = await _askProvider(
@@ -801,9 +983,6 @@ class AiFailover {
           );
           _circuits.remove(key);
           sw.stop();
-          final label = candidateModel == p.model
-              ? p.name
-              : '${p.name} ($candidateModel)';
           return AiReply(
             provider: label,
             text: parsed.text,
@@ -813,9 +992,11 @@ class AiFailover {
             completionTokens: parsed.usage.completionTokens,
             totalTokens: parsed.usage.totalTokens,
             tokensEstimated: parsed.usage.estimated,
+            failedProviders: List<String>.unmodifiable(failedProviders),
           );
         } catch (err) {
           failedAttempts++;
+          failedProviders.add(label);
           lastError = err;
           final state = _circuits.putIfAbsent(key, _ProviderCircuitState.new);
           if (err is _ProviderHttpException && err.isAuthFailure) {

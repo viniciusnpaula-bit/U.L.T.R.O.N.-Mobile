@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -779,6 +780,105 @@ object DeviceHardwareHelper {
             "wifiConnected" to wifiConnected,
             "cellularConnected" to cellularConnected,
             "bluetoothEnabled" to bluetoothEnabled
+        )
+    }
+
+    /**
+     * Consulta dispositivos de áudio Bluetooth atualmente conectados via [AudioManager.getDevices]
+     * (A2DP, SCO e LE Audio em API 31+), sem exigir permissão perigosa BLUETOOTH_CONNECT em runtime.
+     */
+    fun getConnectedBluetoothAudioDevices(context: Context): Map<String, Any> {
+        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            ?: return mapOf(
+                "connected" to false,
+                "devices" to emptyList<String>(),
+                "primaryDevice" to "",
+            )
+
+        val names = LinkedHashSet<String>()
+        try {
+            val outputs = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            for (device in outputs) {
+                val isBtAudio = device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                    device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (
+                        device.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                            device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER
+                        ))
+                if (isBtAudio) {
+                    val label = device.productName?.toString()?.trim().orEmpty()
+                    names.add(if (label.isNotEmpty()) label else "Fone Bluetooth")
+                }
+            }
+        } catch (_: Throwable) {
+        }
+
+        val list = names.toList()
+        return mapOf(
+            "connected" to list.isNotEmpty(),
+            "devices" to list,
+            "primaryDevice" to (list.firstOrNull() ?: ""),
+        )
+    }
+
+    /**
+     * Aguarda (em thread de background) um fone Bluetooth de áudio conectar ao Android.
+     * Se [preferredName] for informado (ex.: "Attack Shark L30 Pro"), prioriza correspondência
+     * parcial case-insensitive, mas aceita qualquer fone A2DP/BLE conectado após o período inicial.
+     */
+    fun waitForBluetoothAudioDevice(
+        context: Context,
+        preferredName: String = "",
+        timeoutMs: Long = 20000L,
+        pollIntervalMs: Long = 450L,
+    ): Map<String, Any> {
+        val safeTimeout = timeoutMs.coerceIn(1000L, 60000L)
+        val safePoll = pollIntervalMs.coerceIn(150L, 2000L)
+        val normalizedPref = preferredName.trim().lowercase(Locale.ROOT)
+        val startMs = SystemClock.elapsedRealtime()
+
+        fun inspect(): Map<String, Any>? {
+            val snap = getConnectedBluetoothAudioDevices(context)
+            @Suppress("UNCHECKED_CAST")
+            val devices = (snap["devices"] as? List<String>) ?: emptyList()
+            if (devices.isEmpty()) return null
+            val matched = if (normalizedPref.isNotEmpty()) {
+                devices.firstOrNull { d ->
+                    val dl = d.lowercase(Locale.ROOT)
+                    dl.contains(normalizedPref) ||
+                        normalizedPref.split(Regex("\\s+")).any { tok -> tok.length >= 3 && dl.contains(tok) }
+                }
+            } else {
+                null
+            }
+            val elapsed = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(0L)
+            return mapOf(
+                "connected" to true,
+                "deviceName" to (matched ?: devices.first()),
+                "matchedPreferred" to (matched != null),
+                "devices" to devices,
+                "elapsedMs" to elapsed,
+            )
+        }
+
+        inspect()?.let { return it }
+
+        while (SystemClock.elapsedRealtime() - startMs < safeTimeout) {
+            try {
+                Thread.sleep(safePoll)
+            } catch (_: InterruptedException) {
+                break
+            }
+            inspect()?.let { return it }
+        }
+
+        val elapsed = (SystemClock.elapsedRealtime() - startMs).coerceAtLeast(0L)
+        return mapOf(
+            "connected" to false,
+            "deviceName" to "",
+            "matchedPreferred" to false,
+            "devices" to emptyList<String>(),
+            "elapsedMs" to elapsed,
         )
     }
 }

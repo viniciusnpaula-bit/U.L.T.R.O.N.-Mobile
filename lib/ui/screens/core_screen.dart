@@ -28,6 +28,8 @@ import '../../services/gemini_live_service.dart';
 import '../../services/nfc_auth_service.dart';
 import '../../services/obsidian_service.dart';
 import '../../services/reminder_service.dart';
+import '../../services/signal_ledger_service.dart';
+import '../../services/skill_bridge_service.dart';
 import '../../services/slash_command_parser.dart';
 import '../../services/smart_notification_triage_service.dart';
 import '../../services/speech_text.dart';
@@ -47,6 +49,9 @@ import '../sections/settings_section.dart';
 import '../theme/ultron_theme.dart';
 import '../widgets/action_confirmation_dialog.dart';
 import '../widgets/core_orb.dart' show CoreOrb, CoreStage, CoreStarfieldBackdrop;
+import '../widgets/signal_ledger_panel.dart';
+import '../widgets/skill_bridge_panel.dart';
+import '../widgets/telemetry_breakdown_sheet.dart';
 import '../widgets/ultron_navigation_drawer.dart';
 import '../widgets/voice_selector_sheet.dart';
 import 'ai_settings_screen.dart';
@@ -124,15 +129,24 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   late final DeviceControlService deviceService = DeviceControlService(
     authGate: widget.gate,
     onRequestElevation: _elevateSessionTo,
+    onProgressSpeak: (text) async {
+      try {
+        await voiceService.speak(text);
+      } catch (_) {}
+    },
   );
   late final briefingService = BriefingService(deviceService: deviceService);
   final cognicaoService = const CognicaoService();
   final actionGate = const ActionGate();
   late final AudioCaptureSource _audioCaptureSource =
       widget.captureSource ?? MethodChannelAudioCaptureSource();
+  final AudioInputRouterService _audioInputService =
+      MethodChannelAudioInputRouterService();
   late final VoicePipelineController voicePipeline;
   late final GeminiLiveService geminiLiveService;
   late final DeepResearchService deepResearchService;
+  late final SignalLedgerService signalLedgerService;
+  late final SkillBridgeService skillBridgeService;
   late final AndroidActionsService androidActions;
   final desktopPairing = DesktopPairingService();
   late final DesktopCommandListener desktopCommandListener;
@@ -157,6 +171,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   bool ecoVadSentinelRunning = false;
   bool dynamicIslandEnabled = false;
   double speechRms = 0.0;
+  String selectedMicLabel = 'Automático (Padrão do Android)';
   VoiceProfile selectedVoiceProfile = VoiceProfile.grave;
   SpeechStyle selectedSpeechStyle = SpeechStyle.direto;
   VadProfile vadProfile = VadProfile.balanced;
@@ -172,7 +187,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
   SessionTelemetry sessionTelemetry = SessionTelemetry.initial();
   TacticalMode activeTacticalMode = TacticalMode.geral;
   bool pcLanConfigured = false;
-  String installedVersion = 'v1.6.9';
+  String installedVersion = 'v1.7.0';
   int authFailures = 0;
   bool? hasPinConfigured;
   bool hasDuressPinConfigured = false;
@@ -233,6 +248,10 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       aiFailover: AiFailover(store: providerStore),
       obsidianProvider: () => ObsidianService.openDefaultVault(),
     )..addListener(_onAuxServiceChanged);
+    signalLedgerService = SignalLedgerService(
+      deepResearch: deepResearchService,
+    )..addListener(_onAuxServiceChanged);
+    skillBridgeService = SkillBridgeService(deviceService: deviceService);
     geminiLiveService = GeminiLiveService(
       authGate: widget.gate,
       capture: _audioCaptureSource,
@@ -504,10 +523,15 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     try {
       final ids = await deviceService.consumePendingWorkflowIds();
       for (final id in ids) {
+        signalLedgerService.trackWorkflowStarted(
+          flowId: id,
+          flowName: 'Fluxo #$id',
+        );
         final res = await deviceService.runWorkflow(
           '$id',
           isBackgroundTrigger: true,
         );
+        signalLedgerService.recordWorkflowResult(res);
         if (!mounted) return;
         _appendFeed(_FeedEntry(
           isUser: false,
@@ -895,10 +919,16 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         final obsidian = await ObsidianService.openDefaultVault();
         loadedSkills = await obsidian.listSkills();
       } catch (_) {}
+      unawaited(skillBridgeService.load());
       DeviceStatus? hwStatus;
       bool notifEnabled = false;
       bool islandRunning = false;
       List<CapturedNotification> loadedMsgs = const [];
+      var loadedMicName = selectedMicLabel;
+      try {
+        final micSel = await _audioInputService.getPreferredInputDevice();
+        loadedMicName = micSel.name;
+      } catch (_) {}
       try {
         hwStatus = await deviceService.getStatus();
         notifEnabled = await deviceService.isNotificationListenerEnabled();
@@ -922,6 +952,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         nfcStatus = hwNfc;
         notificationSentinelEnabled = notifEnabled;
         dynamicIslandEnabled = islandRunning;
+        selectedMicLabel = loadedMicName;
         selectedVoiceProfile = voiceService.profile;
         selectedSpeechStyle = loadedSpeechStyle;
         vadProfile = loadedVadProfile;
@@ -2098,6 +2129,9 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     geminiLiveService.dispose();
     deepResearchService.removeListener(_onAuxServiceChanged);
     deepResearchService.dispose();
+    signalLedgerService.removeListener(_onAuxServiceChanged);
+    signalLedgerService.dispose();
+    skillBridgeService.dispose();
     deviceService.setNativeEventHandlers(
       onFlip: null,
       onWakeWord: null,
@@ -2789,12 +2823,26 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
 
   Future<bool> _confirmActionSimulation(ActionSimulation sim) async {
     if (!mounted) return false;
-    return _confirmActionGate(
+    final ledgerId = signalLedgerService.registerPendingApproval(
+      simulation: sim,
+      source: sim.actionCode.startsWith('PC_')
+          ? SignalSourceKind.remoteCommand
+          : SignalSourceKind.actionGate,
+    );
+    final approved = await _confirmActionGate(
       title: 'ACTION GATE: ${sim.actionCode}',
       message:
           '${sim.description}\n\nImpacto: ${sim.estimatedImpact}\nAlvo: ${sim.targetResource}',
       confirmText: 'APROVAR',
     );
+    await signalLedgerService.resolveApproval(
+      ledgerId,
+      approved: approved,
+      outcomeSummary: approved
+          ? 'Aprovado no ActionGate (${sim.actionCode})'
+          : 'Recusado no ActionGate (${sim.actionCode})',
+    );
+    return approved;
   }
 
   Future<void> _captureVisionImage(String source) async {
@@ -2937,11 +2985,21 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     await showVoiceSelectorSheet(
       context,
       voiceService: voiceService,
+      audioInputService: _audioInputService,
+      captureSource: _audioCaptureSource,
       onChanged: () {
         UltronTheme.setPersona(activePersona);
         if (mounted) {
           setState(() => selectedVoiceProfile = voiceService.profile);
         }
+        unawaited(() async {
+          try {
+            final micSel = await _audioInputService.getPreferredInputDevice();
+            if (mounted) {
+              setState(() => selectedMicLabel = micSel.name);
+            }
+          } catch (_) {}
+        }());
         unawaited(deviceService
             .setDynamicIslandAccent(activePersona.accentColor.toARGB32()));
         unawaited(_syncBackgroundVoiceConfig());
@@ -3253,6 +3311,37 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               timestamp: timeStr,
             ));
           }
+        } else if (lowerArg.startsWith('verificar ') ||
+            lowerArg.startsWith('aprovar ') ||
+            lowerArg.startsWith('renovar ')) {
+          final noteTarget = trimmedArg.split(RegExp(r'\s+')).skip(1).join(' ').trim();
+          final res = await deviceService.tryExecuteNaturalCommand(
+            'verificar nota $noteTarget',
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Segundo Cérebro (OKF)',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+          }
+        } else if (lowerArg == 'vencidas' ||
+            lowerArg == 'obsoletas' ||
+            lowerArg == 'revisar') {
+          final res = await deviceService.tryExecuteNaturalCommand(
+            'notas vencidas',
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res != null) {
+            _appendFeed(_FeedEntry(
+              isUser: false,
+              senderLabel: 'Segundo Cérebro (OKF)',
+              text: res.message,
+              timestamp: timeStr,
+            ));
+          }
         } else {
           await _saveObsidianInbox(argument);
         }
@@ -3520,6 +3609,80 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         }
         final pcCmd = parsedPc.command;
         final pcArgs = parsedPc.args;
+        if (pcCmd == 'PC_LIST_SKILLS') {
+          final skills = await skillBridgeService.refreshPcSkills(
+            confirmAction: _confirmActionSimulation,
+          );
+          final body = skills.isEmpty
+              ? (skillBridgeService.lastStatusMessage ??
+                  'Nenhuma skill retornada pelo Desktop.')
+              : skills
+                  .map(
+                    (s) => s.description.isEmpty
+                        ? '• ${s.id} (${s.title})'
+                        : '• ${s.id} — ${s.description}',
+                  )
+                  .join('\n');
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Skills do Desktop PC',
+            text: body,
+            timestamp: timeStr,
+          ));
+          break;
+        }
+        if (pcCmd == 'PC_SYNC_MOBILE_SKILLS') {
+          final syncRes = await skillBridgeService.syncMobileSkillsToPc(
+            mobileSkills,
+            confirmAction: _confirmActionSimulation,
+          );
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Bridge de Skills (Celular ⇄ PC)',
+            text: syncRes.sent
+                ? '✅ ${mobileSkills.length} skill(s) local(is) sincronizada(s) com o Desktop.'
+                : '⚠️ ${syncRes.error ?? 'Não foi possível sincronizar com o Desktop.'}',
+            timestamp: timeStr,
+          ));
+          break;
+        }
+        if (pcCmd == 'PC_RUN_SKILL') {
+          final skillQuery = '${pcArgs['skill'] ?? ''}'.trim();
+          final res = await skillBridgeService.runPcSkill(
+            skillQuery,
+            argsText: pcArgs['args']?.toString(),
+            confirmAction: _confirmActionSimulation,
+          );
+          if (res.sent) {
+            signalLedgerService.recordCompletedDelivery(
+              id: 'pc_skill:${DateTime.now().millisecondsSinceEpoch}',
+              title: 'Skill PC: $skillQuery',
+              subtitle: (res.responseBody ?? '').trim().isNotEmpty
+                  ? res.responseBody!.trim()
+                  : 'Executada no Desktop LAN',
+              source: SignalSourceKind.desktopTask,
+            );
+          }
+          final statusMsg = res.deniedByUser
+              ? 'Skill /pc ($skillQuery) cancelada ou requer Biometria (Nível 3).'
+              : res.sent
+                  ? '⚡ Skill "$skillQuery" executada no PC (HTTP ${res.statusCode ?? 200})'
+                      '${(res.responseBody ?? '').trim().isNotEmpty ? '\n${res.responseBody}' : ''}'
+                  : 'Falha ao executar skill "$skillQuery" no PC: ${res.error ?? 'HTTP ${res.statusCode}'}';
+          _appendFeed(_FeedEntry(
+            isUser: false,
+            senderLabel: 'Bridge de Skills (PC)',
+            text: statusMsg,
+            timestamp: timeStr,
+          ));
+          break;
+        }
+        String? delegatedLedgerId;
+        if (pcCmd == 'PC_DELEGATE_TASK') {
+          delegatedLedgerId = signalLedgerService.recordDesktopTaskDelegated(
+            topic: '${pcArgs['query'] ?? pcArgs['objective'] ?? trimmedArg}',
+          );
+        }
         try {
           final res = await deviceService.sendDesktopBridgeCommand(
             command: pcCmd,
@@ -3527,6 +3690,15 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             confirmAction: _confirmActionSimulation,
             actor: 'OPERATOR',
           );
+          if (delegatedLedgerId != null && (!res.sent || res.deniedByUser)) {
+            signalLedgerService.completeDesktopTask(
+              delegatedLedgerId,
+              failed: true,
+              resultSummary: res.deniedByUser
+                  ? 'Delegação cancelada ou aguardando Biometria (Nível 3).'
+                  : 'Falha no envio ao PC (${res.error ?? res.statusCode ?? '-'}).',
+            );
+          }
           final statusMsg = res.deniedByUser
               ? 'Comando /pc ($pcCmd) cancelado ou requer Biometria (Nível 3).'
               : res.sent
@@ -4233,6 +4405,101 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
     return 'Pronta';
   }
 
+  Future<void> _openSignalLedgerSheet() async {
+    HapticFeedback.selectionClick();
+    await showSignalLedgerSheet(
+      context,
+      ledger: signalLedgerService,
+      onOpenObsidianNote: (path) => _executeSlashFromSection('/vault ler $path'),
+    );
+  }
+
+  Future<void> _openSkillBridgeSheet() async {
+    HapticFeedback.selectionClick();
+    await showSkillBridgeSheet(
+      context,
+      skillBridge: skillBridgeService,
+      mobileSkills: mobileSkills,
+      onRunPcSkill: _runPcSkillFromUi,
+      onRefreshPcSkills: _refreshPcSkillsFromUi,
+      onSyncMobileSkillsToPc: _syncMobileSkillsToPcFromUi,
+      onExecuteMobileSkill: _executeSkillCard,
+    );
+  }
+
+  Future<void> _runPcSkillFromUi(String skillId) async {
+    HapticFeedback.mediumImpact();
+    final res = await skillBridgeService.runPcSkill(
+      skillId,
+      confirmAction: _confirmActionSimulation,
+    );
+    if (!mounted) return;
+    if (res.sent) {
+      signalLedgerService.recordCompletedDelivery(
+        id: 'pc_skill:${DateTime.now().millisecondsSinceEpoch}',
+        title: 'Skill PC: $skillId',
+        subtitle: (res.responseBody ?? '').trim().isNotEmpty
+            ? res.responseBody!.trim()
+            : 'Executada no Desktop LAN',
+        source: SignalSourceKind.desktopTask,
+      );
+    }
+    final msg = res.deniedByUser
+        ? 'Execução cancelada ou requer Biometria (Nível 3).'
+        : res.sent
+            ? '⚡ Skill "$skillId" ativada no PC!'
+            : 'Falha ao ativar "$skillId": ${res.error ?? 'HTTP ${res.statusCode ?? '-'}'}';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg, style: const TextStyle(fontSize: 11)),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  Future<void> _refreshPcSkillsFromUi() async {
+    HapticFeedback.selectionClick();
+    await skillBridgeService.refreshPcSkills(
+      confirmAction: _confirmActionSimulation,
+    );
+    if (!mounted) return;
+    final msg = skillBridgeService.lastStatusMessage;
+    if (msg != null && msg.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg, style: const TextStyle(fontSize: 11)),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<void> _syncMobileSkillsToPcFromUi() async {
+    HapticFeedback.mediumImpact();
+    final res = await skillBridgeService.syncMobileSkillsToPc(
+      mobileSkills,
+      confirmAction: _confirmActionSimulation,
+    );
+    if (!mounted) return;
+    final msg = res.sent
+        ? '✅ ${mobileSkills.length} skill(s) do celular enviadas ao PC.'
+        : '⚠️ ${res.error ?? 'Falha ao sincronizar com o PC.'}';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg, style: const TextStyle(fontSize: 11)),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  Future<void> _showTelemetryBreakdownSheet() async {
+    HapticFeedback.selectionClick();
+    await showTelemetryBreakdownSheet(
+      context,
+      telemetry: sessionTelemetry,
+    );
+  }
+
   Future<void> _showNotificationsSheet() async {
     HapticFeedback.selectionClick();
     unawaited(_refreshDeviceStatus());
@@ -4408,43 +4675,47 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               child: activeSection == UltronSection.home
                   ? GestureDetector(
                       onTap: _showTacticalModePicker,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text(
-                            'U.L.T.R.O.N.',
-                            style: TextStyle(
-                              color: UltronColors.textPrimary,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 1.0,
-                            ),
-                          ),
-                          if (!activeTacticalMode.isGeneral) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 7,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: _accentDark,
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color: _accentBorder,
-                                ),
-                              ),
-                              child: Text(
-                                activeTacticalMode.shortLabel,
-                                style: const TextStyle(
-                                  color: UltronColors.textPrimary,
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              activePersona.displayName,
+                              style: const TextStyle(
+                                color: UltronColors.textPrimary,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 1.0,
                               ),
                             ),
+                            if (!activeTacticalMode.isGeneral) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _accentDark,
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: _accentBorder,
+                                  ),
+                                ),
+                                child: Text(
+                                  activeTacticalMode.shortLabel,
+                                  style: const TextStyle(
+                                    color: UltronColors.textPrimary,
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
                     )
                   : Text(
@@ -4458,15 +4729,38 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
             ),
             if (activeSection == UltronSection.home) ...[
               IconButton(
+                key: const Key('signal_ledger_top_button'),
+                tooltip: 'Quadro Sinal vs. Ruído',
+                onPressed: _openSignalLedgerSheet,
+                constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                padding: EdgeInsets.zero,
+                icon: Badge(
+                  isLabelVisible: (signalLedgerService.activeCount +
+                          signalLedgerService.pendingApprovalCount) >
+                      0,
+                  backgroundColor: signalLedgerService.pendingApprovalCount > 0
+                      ? UltronColors.warning
+                      : _accent,
+                  smallSize: 7,
+                  child: const Icon(
+                    Icons.radar_rounded,
+                    size: 20,
+                    color: UltronColors.textSecondary,
+                  ),
+                ),
+              ),
+              IconButton(
                 tooltip: 'Notificações e avisos',
                 onPressed: _showNotificationsSheet,
+                constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+                padding: EdgeInsets.zero,
                 icon: Badge(
                   isLabelVisible: hasNotifBadge,
                   backgroundColor: _accent,
                   smallSize: 7,
                   child: const Icon(
                     Icons.notifications_none_rounded,
-                    size: 21,
+                    size: 20,
                     color: UltronColors.textSecondary,
                   ),
                 ),
@@ -4474,8 +4768,8 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
               const SizedBox(width: 2),
               Tooltip(
                 message: continuousActive
-                    ? 'Desativar escuta contínua ("Ultron")'
-                    : 'Ativar escuta contínua ("Ultron")',
+                    ? 'Desativar escuta contínua ("${activePersona.displayName}")'
+                    : 'Ativar escuta contínua ("${activePersona.displayName}")',
                 child: Material(
                   color: continuousActive
                       ? _accentDark
@@ -4596,6 +4890,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           onRunSlashCommand: _executeSlashFromSection,
           onOpenHistory: _openHistory,
           onOpenMemorySettings: () => _runCommand(UltronCommand.memory),
+          onOpenSkillBridge: _openSkillBridgeSheet,
         ),
       UltronSection.engineering => EngineeringSection(
           onRunSlashCommand: _executeSlashFromSection,
@@ -4611,12 +4906,22 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           onOpenNotificationAccessSettings: () =>
               unawaited(deviceService.openNotificationListenerSettings()),
           onRunSlashCommand: _executeSlashFromSection,
+          signalLedger: signalLedgerService,
+          onOpenSignalLedger: _openSignalLedgerSheet,
         ),
       UltronSection.desktop => DesktopSection(
           pcLanConfigured: pcLanConfigured,
           listenerRunning: desktopCommandListener.isRunning,
           onOpenPairingScreen: () => _runCommand(UltronCommand.desktop),
           onRunSlashCommand: _executeSlashFromSection,
+          signalLedger: signalLedgerService,
+          onOpenSignalLedger: _openSignalLedgerSheet,
+          skillBridge: skillBridgeService,
+          mobileSkills: mobileSkills,
+          onRunPcSkill: _runPcSkillFromUi,
+          onRefreshPcSkills: _refreshPcSkillsFromUi,
+          onSyncMobileSkillsToPc: _syncMobileSkillsToPcFromUi,
+          onExecuteMobileSkill: _executeSkillCard,
         ),
       UltronSection.security => Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -4626,6 +4931,7 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
           isAudioOn: isAudioOn,
           nightFocusMode: nightFocusMode,
           dynamicIslandEnabled: dynamicIslandEnabled,
+          selectedMicLabel: selectedMicLabel,
           selectedVoiceProfile: selectedVoiceProfile,
           activePersona: activePersona,
           speechStyle: selectedSpeechStyle,
@@ -4711,53 +5017,71 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
         ? '${t.lastProvider.substring(0, 15)}…'
         : t.lastProvider;
 
-    return Container(
-      key: const Key('cockpit_telemetry_bar'),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Center(
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              GestureDetector(
-                key: const Key('cockpit_mode_chip'),
-                onTap: _showTacticalModePicker,
-                child: _telemetryDatum(
-                  label: 'Modo',
-                  value: activeTacticalMode.shortLabel,
-                  valueColor: activeTacticalMode.isGeneral
-                      ? UltronColors.textSecondary
-                      : _accent,
+    return Tooltip(
+      message: 'Ver consumo e telemetria por provedor',
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: const Key('cockpit_telemetry_bar_tap'),
+          onTap: _showTelemetryBreakdownSheet,
+          child: Container(
+            key: const Key('cockpit_telemetry_bar'),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Center(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    GestureDetector(
+                      key: const Key('cockpit_mode_chip'),
+                      onTap: _showTacticalModePicker,
+                      child: _telemetryDatum(
+                        label: 'Modo',
+                        value: activeTacticalMode.shortLabel,
+                        valueColor: activeTacticalMode.isGeneral
+                            ? UltronColors.textSecondary
+                            : _accent,
+                      ),
+                    ),
+                    _telemetryDot(),
+                    _telemetryDatum(
+                      label: 'Brain',
+                      value: providerShort,
+                      valueColor: t.lastUsedFailover
+                          ? UltronColors.warning
+                          : UltronColors.textSecondary,
+                    ),
+                    _telemetryDot(),
+                    _telemetryDatum(
+                      label: 'Latência',
+                      value: latStr,
+                      valueColor: t.lastLatencyMs > 4000
+                          ? UltronColors.warning
+                          : UltronColors.textSecondary,
+                    ),
+                    _telemetryDot(),
+                    _telemetryDatum(
+                      label: 'Voz',
+                      value: voiceLabel,
+                      valueColor: (listeningVoice ||
+                              voicePipeline.isContinuousEnabled ||
+                              ecoVadSentinelRunning)
+                          ? UltronColors.positive
+                          : UltronColors.textSecondary,
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(
+                      Icons.analytics_outlined,
+                      size: 13,
+                      color: UltronColors.textMuted,
+                    ),
+                  ],
                 ),
               ),
-              _telemetryDot(),
-              _telemetryDatum(
-                label: 'Brain',
-                value: providerShort,
-                valueColor: t.lastUsedFailover
-                    ? UltronColors.warning
-                    : UltronColors.textSecondary,
-              ),
-              _telemetryDot(),
-              _telemetryDatum(
-                label: 'Latência',
-                value: latStr,
-                valueColor: t.lastLatencyMs > 4000
-                    ? UltronColors.warning
-                    : UltronColors.textSecondary,
-              ),
-              _telemetryDot(),
-              _telemetryDatum(
-                label: 'Voz',
-                value: voiceLabel,
-                valueColor: (listeningVoice ||
-                        voicePipeline.isContinuousEnabled ||
-                        ecoVadSentinelRunning)
-                    ? UltronColors.positive
-                    : UltronColors.textSecondary,
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -7608,56 +7932,59 @@ class _CoreScreenState extends State<CoreScreen> with WidgetsBindingObserver {
       padding: const EdgeInsets.fromLTRB(2, 8, 2, 24),
       children: [
         const UltronSectionLabel('Sessão de IA atual'),
-        UltronSurfaceCard(
-          highlighted: true,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Text(
-                      activeProviderUsed,
-                      style: const TextStyle(
-                        color: UltronColors.textPrimary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (t.lastUsedFailover)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 7,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: UltronColors.warning.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Text(
-                        'Failover',
-                        style: TextStyle(
-                          color: UltronColors.warning,
-                          fontSize: 11,
+        GestureDetector(
+          onTap: _showTelemetryBreakdownSheet,
+          child: UltronSurfaceCard(
+            highlighted: true,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        activeProviderUsed,
+                        style: const TextStyle(
+                          color: UltronColors.textPrimary,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Turnos: ${t.turns}  ·  Tokens: $tokPrefix↑$promptStr ↓$compStr  ·  Latência: $latStr',
-                style: UltronTheme.mono.copyWith(
-                  color: UltronColors.textSecondary,
-                  fontSize: 11.5,
+                    if (t.lastUsedFailover)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: UltronColors.warning.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: const Text(
+                          'Failover',
+                          style: TextStyle(
+                            color: UltronColors.warning,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-              ),
-            ],
+                const SizedBox(height: 8),
+                Text(
+                  'Turnos: ${t.turns}  ·  Tokens: $tokPrefix↑$promptStr ↓$compStr  ·  Latência: $latStr',
+                  style: UltronTheme.mono.copyWith(
+                    color: UltronColors.textSecondary,
+                    fontSize: 11.5,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 14),

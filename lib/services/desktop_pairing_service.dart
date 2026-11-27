@@ -377,10 +377,15 @@ class DesktopPairingService {
             command: 'PC_CLIPBOARD_PULL',
             args: const <String, dynamic>{},
           ),
-        'PC_RUN_SKILL' when val.isNotEmpty => (
-            command: 'PC_RUN_SKILL',
-            args: <String, dynamic>{'skill': val},
+        'PC_LIST_SKILLS' || 'PC_SKILLS' => (
+            command: 'PC_LIST_SKILLS',
+            args: const <String, dynamic>{},
           ),
+        'PC_SYNC_MOBILE_SKILLS' => (
+            command: 'PC_SYNC_MOBILE_SKILLS',
+            args: const <String, dynamic>{},
+          ),
+        'PC_RUN_SKILL' when val.isNotEmpty => _parsePcSkillTarget(val),
         'PC_THERMAL' || 'VERIFICAR_PROTECAO_TERMICA' => (
             command: 'PC_THERMAL',
             args: <String, dynamic>{
@@ -684,16 +689,58 @@ class DesktopPairingService {
           command: 'PC_CLIPBOARD_PULL',
           args: const <String, dynamic>{},
         );
-      case 'skill':
-      case 'pc_run_skill':
-        if (rest.isEmpty) return null;
+      case 'listar':
+      case 'skills':
+      case 'listar_skills':
+      case 'list_skills':
+      case 'pc_list_skills':
         return (
-          command: 'PC_RUN_SKILL',
-          args: <String, dynamic>{'skill': rest},
+          command: 'PC_LIST_SKILLS',
+          args: const <String, dynamic>{},
         );
+      case 'sync_skills':
+      case 'sincronizar_skills':
+      case 'pc_sync_mobile_skills':
+        return (
+          command: 'PC_SYNC_MOBILE_SKILLS',
+          args: const <String, dynamic>{},
+        );
+      case 'skill':
+      case 'rodar_skill':
+      case 'ativar_skill':
+      case 'pc_run_skill':
+        if (rest.isEmpty) {
+          return (
+            command: 'PC_LIST_SKILLS',
+            args: const <String, dynamic>{},
+          );
+        }
+        return _parsePcSkillTarget(rest);
       default:
         return null;
     }
+  }
+
+  static ({String command, Map<String, dynamic> args}) _parsePcSkillTarget(
+    String raw,
+  ) {
+    final clean = raw.trim();
+    final pipeIdx = clean.indexOf('|');
+    if (pipeIdx > 0) {
+      final skillName = clean.substring(0, pipeIdx).trim();
+      final argPart = clean.substring(pipeIdx + 1).trim();
+      return (
+        command: 'PC_RUN_SKILL',
+        args: <String, dynamic>{
+          'skill': skillName,
+          if (argPart.isNotEmpty) 'args': argPart,
+        },
+      );
+    }
+    return (
+      command: 'PC_RUN_SKILL',
+      args: <String, dynamic>{'skill': clean},
+    );
   }
 
   static Map<String, dynamic> _parsePcSpotifyArgs(String raw) {

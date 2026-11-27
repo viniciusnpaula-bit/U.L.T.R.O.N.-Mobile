@@ -54,11 +54,11 @@ void main() {
     expect(index.engine, VaultSearchEngine.fts5);
 
     final stats = await index.sync();
-    // Seeded: Operador.md, Segundo_Cerebro.md, 4 default skills (incl. garantias) + 3 created notes = 9
-    expect(stats.indexed, 9);
+    // Seeded: Operador.md, Segundo_Cerebro.md, 5 default skills (incl. garantias e permutacao_do_fone) + 3 created notes = 10
+    expect(stats.indexed, 10);
     expect(stats.updated, 0);
     expect(stats.removed, 0);
-    expect(stats.totalDocuments, 9);
+    expect(stats.totalDocuments, 10);
 
     final hiddenHits = await index.search('secretos');
     expect(hiddenHits, isEmpty);
@@ -314,5 +314,68 @@ void main() {
     );
     expect(invHits.length, 1);
     expect(invHits.first.path, 'Inventario/Multimetro_Fluke.md');
+  });
+
+  test('OKF flags stale/unverified notes in search and buildRagContext and supports filtering',
+      () async {
+    final now = DateTime(2026, 11, 26);
+    await File(p.join(tempDir.path, 'Memoria', 'Inversor_Antigo.md'))
+        .writeAsString(
+      '---\nsources: [manual_2024]\nverified: false\nstale_after: 2026-10-01\nupdated_at: 2026-09-01T12:00:00Z\n---\n'
+      '# Inversor CFW500 Antigo\nParâmetro P0202 controle vetorial antigo.\n',
+    );
+    await File(p.join(tempDir.path, 'Memoria', 'Inversor_Atual.md'))
+        .writeAsString(
+      '---\nsources: [manual_2026, bancada]\nverified: true\nstale_after: 2026-12-26\nupdated_at: 2026-11-26T12:00:00Z\n---\n'
+      '# Inversor CFW500 Atualizado\nParâmetro P0202 controle vetorial verificado em bancada.\n',
+    );
+    await File(p.join(tempDir.path, 'Memoria', 'Inversor_Legado.md'))
+        .writeAsString(
+      '# Inversor Legado Sem Frontmatter\nParâmetro P0202 anotado sem frontmatter.\n',
+    );
+
+    final db = await _openInMemoryDb();
+    final index = await VaultSearchService.open(
+      vaultRoot: tempDir,
+      database: db,
+      now: () => now,
+    );
+    addTearDown(index.close);
+    await index.sync(force: true);
+
+    final hits = await index.search('P0202 inversor', limit: 5, now: now);
+    expect(hits.length, 3);
+    final staleHit =
+        hits.firstWhere((h) => h.path == 'Memoria/Inversor_Antigo.md');
+    expect(staleHit.isStale, isTrue);
+    expect(staleHit.isUnverified, isTrue);
+    expect(staleHit.okfWarningTag, contains('VENCIDA desde 2026-10-01'));
+    expect(staleHit.okfWarningTag, contains('NÃO VERIFICADA'));
+    expect(staleHit.snippet, isNot(contains('stale_after:')));
+
+    final legacyHit =
+        hits.firstWhere((h) => h.path == 'Memoria/Inversor_Legado.md');
+    expect(legacyHit.isStale, isFalse);
+    expect(legacyHit.verified, isNull);
+
+    // RAG injects explicit OKF warning on stale/unverified hits
+    final ragAll = await index.buildRagContext(
+      'P0202 inversor',
+      limit: 5,
+      maxChars: 2000,
+      now: now,
+    );
+    expect(ragAll, contains('[OKF: VENCIDA desde 2026-10-01 · NÃO VERIFICADA]'));
+
+    // Filtering out stale or unverified notes
+    final freshOnly = await index.search(
+      'P0202 inversor',
+      limit: 5,
+      excludeStale: true,
+      onlyVerified: true,
+      now: now,
+    );
+    expect(freshOnly.length, 1);
+    expect(freshOnly.first.path, 'Memoria/Inversor_Atual.md');
   });
 }

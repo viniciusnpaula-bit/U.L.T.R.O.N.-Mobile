@@ -53,6 +53,7 @@ class UltronAudioService : Service() {
         const val ACTION_SAY_TIME = "com.viniciusnpaula.ultron_mobile.SAY_TIME_OFFLINE"
         const val ACTION_TOGGLE_PAUSE = "com.viniciusnpaula.ultron_mobile.TOGGLE_PAUSE_AUDIO_SERVICE"
         const val ACTION_RELOAD_WAKE_WORD = "com.viniciusnpaula.ultron_mobile.RELOAD_WAKE_WORD"
+        const val ACTION_TRIGGER_BG_VOICE = "com.viniciusnpaula.ultron_mobile.TRIGGER_BG_VOICE"
 
         const val ENGINE_DESCRIPTION = "sherpa-onnx Zipformer KWS (offline / CPU)"
         const val ENGINE_IS_DEDICATED_KWS = true
@@ -70,6 +71,28 @@ class UltronAudioService : Service() {
             private set
 
         private val pendingKeywordHotSwap = AtomicBoolean(false)
+        private val pendingMicReload = AtomicBoolean(false)
+        private val pendingManualBgVoice = AtomicBoolean(false)
+
+        fun requestMicReload() {
+            if (isRunning) {
+                pendingMicReload.set(true)
+            }
+        }
+
+        fun triggerBackgroundVoiceTurn(context: Context) {
+            val intent = Intent(context, UltronAudioService::class.java).apply {
+                action = ACTION_TRIGGER_BG_VOICE
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (_: Exception) {
+            }
+        }
 
         /**
          * Troca o perfil de wake-word ativo em memória e solicita hot-swap do stream
@@ -229,6 +252,7 @@ class UltronAudioService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var noiseSuppressor: NoiseSuppressor? = null
     private var gainControl: AutomaticGainControl? = null
+    private var routingCleanup: (() -> Unit)? = null
     @Volatile
     private var keywordSpotter: KeywordSpotter? = null
 
@@ -299,6 +323,46 @@ class UltronAudioService : Service() {
                     updateNotification("sherpa-onnx KWS carregado — diga \"${profile.displayName}\"")
                 }
                 return START_STICKY
+            }
+            ACTION_TRIGGER_BG_VOICE -> {
+                if (workerActive.get()) {
+                    pendingManualBgVoice.set(true)
+                    return START_STICKY
+                }
+                val hasMicPerm = ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.RECORD_AUDIO
+                ) == PackageManager.PERMISSION_GRANTED
+                if (!hasMicPerm) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                try {
+                    val notification = buildNotification("Ouvindo comando em segundo plano…")
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
+                } catch (_: Exception) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                Thread({
+                    try {
+                        handleBackgroundHandsFreeCommand()
+                    } finally {
+                        stopSelf()
+                    }
+                }, "UltronBgVoiceTurn").apply {
+                    isDaemon = true
+                    start()
+                }
+                return START_NOT_STICKY
             }
         }
 
@@ -607,52 +671,29 @@ class UltronAudioService : Service() {
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
             MediaRecorder.AudioSource.DEFAULT,
         )
-        var lastReason = "nenhum source inicializou"
-        for (source in candidates) {
-            val rec = try {
-                AudioRecord(
-                    source,
-                    SAMPLE_RATE_HZ,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufSize
-                )
-            } catch (e: Exception) {
-                lastReason = "${e.javaClass.simpleName}: ${e.message}"
-                continue
+        val opened = AudioInputRouter.openAudioRecord(
+            context = this,
+            sampleRate = SAMPLE_RATE_HZ,
+            bufferSize = bufSize,
+            defaultSources = candidates,
+            enableBluetoothSco = false,
+        ) ?: throw IllegalStateException("AudioRecord não inicializou para o sentinela")
+
+        val rec = opened.record
+        routingCleanup = opened.cleanupRouting
+        val sessionId = rec.audioSessionId
+        safely("NoiseSuppressor.create") {
+            if (NoiseSuppressor.isAvailable()) {
+                noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
             }
-            if (rec.state != AudioRecord.STATE_INITIALIZED) {
-                lastReason = "source=$source state=${rec.state}"
-                safely("AudioRecord.release") { rec.release() }
-                continue
-            }
-            try {
-                rec.startRecording()
-            } catch (e: Exception) {
-                lastReason = "source=$source startRecording: ${e.message}"
-                safely("AudioRecord.release") { rec.release() }
-                continue
-            }
-            if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                lastReason = "source=$source recordingState=${rec.recordingState}"
-                safely("AudioRecord.release") { rec.release() }
-                continue
-            }
-            val sessionId = rec.audioSessionId
-            safely("NoiseSuppressor.create") {
-                if (NoiseSuppressor.isAvailable()) {
-                    noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
-                }
-            }
-            safely("AutomaticGainControl.create") {
-                if (AutomaticGainControl.isAvailable()) {
-                    gainControl = AutomaticGainControl.create(sessionId)?.apply { enabled = true }
-                }
-            }
-            isRecorderOpen = true
-            return rec
         }
-        throw IllegalStateException("AudioRecord não inicializou ($lastReason)")
+        safely("AutomaticGainControl.create") {
+            if (AutomaticGainControl.isAvailable()) {
+                gainControl = AutomaticGainControl.create(sessionId)?.apply { enabled = true }
+            }
+        }
+        isRecorderOpen = true
+        return rec
     }
 
     private fun releaseRecorder(recorder: AudioRecord?) {
@@ -662,6 +703,8 @@ class UltronAudioService : Service() {
         gainControl = null
         safely("AudioRecord.stop") { recorder?.stop() }
         safely("AudioRecord.release") { recorder?.release() }
+        safely("AudioInputRouter.cleanup") { routingCleanup?.invoke() }
+        routingCleanup = null
         isRecorderOpen = false
     }
 
@@ -710,6 +753,20 @@ class UltronAudioService : Service() {
                     } catch (e: Exception) {
                         Stats.lastError = "hot-swap KWS falhou: ${e.message}"
                     }
+                }
+
+                if (pendingMicReload.compareAndSet(true, false)) {
+                    releaseRecorder(recorder)
+                    recorder = null
+                    captureHealthy = false
+                }
+
+                if (pendingManualBgVoice.compareAndSet(true, false)) {
+                    releaseRecorder(recorder)
+                    recorder = null
+                    captureHealthy = false
+                    handleBackgroundHandsFreeCommand()
+                    return
                 }
 
                 if (isBatteryCriticalUnplugged()) {
@@ -843,6 +900,15 @@ class UltronAudioService : Service() {
     }
 
     private fun handleBackgroundHandsFreeCommand() {
+        val pm = getSystemService(POWER_SERVICE) as? PowerManager
+        val turnLock = try {
+            pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Ultron::BgVoiceTurn")?.apply {
+                setReferenceCounted(false)
+                acquire(90_000L)
+            }
+        } catch (_: Throwable) {
+            null
+        }
         DynamicIslandService.updateState("listening", "Ouvindo...", "Comando por voz")
         try {
             BackgroundVoiceResponder.runBackgroundTurn(
@@ -870,6 +936,12 @@ class UltronAudioService : Service() {
         } catch (e: Exception) {
             Stats.lastError = "bg voice: ${e.message}"
         } finally {
+            try {
+                if (turnLock?.isHeld == true) {
+                    turnLock.release()
+                }
+            } catch (_: Throwable) {
+            }
             DynamicIslandService.updateState("idle")
             if (workerActive.get() && !userPaused) {
                 updateNotification("sherpa-onnx KWS carregado — diga \"${currentWakeProfile.displayName}\"")
@@ -954,17 +1026,9 @@ class UltronAudioService : Service() {
             status == BatteryManager.BATTERY_STATUS_FULL
     }
 
-    private fun isDeepDozeUnplugged(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
-        val pm = getSystemService(POWER_SERVICE) as? PowerManager
-        val idle = pm?.isDeviceIdleMode ?: deepDozeActive
-        if (!idle) return false
-        return try {
-            !isDeviceChargingOrPlugged()
-        } catch (_: Exception) {
-            false
-        }
-    }
+    // Sentinela contínua mantém a escuta ativa mesmo com a tela apagada/Doze;
+    // apenas bateria crítica desconectada (<= 15%) coloca o microfone em pausa.
+    private fun isDeepDozeUnplugged(): Boolean = false
 
     /** Verifica a bateria no máximo a cada 30 s (antes era a cada frame). */
     private fun isBatteryCriticalUnplugged(): Boolean {

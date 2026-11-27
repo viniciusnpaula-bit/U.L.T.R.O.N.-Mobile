@@ -8,6 +8,9 @@ import '../core/security/auth_gate.dart';
 import 'ai_provider_service.dart' show redactSecret;
 import 'desktop_pairing_service.dart';
 import 'device_control_service.dart';
+import 'headset_handoff_service.dart';
+import 'obsidian_service.dart';
+import 'workflow_scheduler_service.dart';
 
 /// Resultado da execução local de um comando enviado pelo U.L.T.R.O.N. Desktop.
 class DesktopInboundResult {
@@ -92,13 +95,24 @@ class DesktopCommandListener {
     'NOTE',
     'READ_CALENDAR',
     'READ_MESSAGES',
+    'LIST_SKILLS',
+    'SKILLS',
+    'MOBILE_SKILLS',
+    'RUN_SKILL',
+    'SKILL',
+    'EXEC_SKILL',
+    'MOBILE_RUN_SKILL',
+    'HEADSET_HANDOFF',
+    'PERMUTACAO_DO_FONE',
   };
 
   static const Set<String> _sensitiveCommands = <String>{
     'WHATSAPP',
+    'WHATSAPP_CALL',
     'SMS',
     'REPLY_MESSAGE',
     'DIAL',
+    'CALL_PHONE',
     'CREATE_EVENT',
   };
 
@@ -774,6 +788,33 @@ class DesktopCommandListener {
           message: '📞 Discador aberto para $number.',
         );
 
+      case 'CALL_PHONE':
+        final target = (args['target'] ?? args['number'] ?? '').toString().trim();
+        final msg = await deviceService.placePhoneCall(target);
+        return DesktopInboundResult(
+          commandId: cmdId,
+          command: cmd,
+          ok: true,
+          status: 'executed',
+          message: msg,
+        );
+
+      case 'WHATSAPP_CALL':
+        final target = (args['target'] ?? args['number'] ?? '').toString().trim();
+        final video = args['video'] == true ||
+            '${args['mode'] ?? ''}'.trim().toLowerCase() == 'video';
+        final msg = await deviceService.placeWhatsAppCall(
+          target: target,
+          video: video,
+        );
+        return DesktopInboundResult(
+          commandId: cmdId,
+          command: cmd,
+          ok: true,
+          status: 'executed',
+          message: msg,
+        );
+
       case 'CREATE_EVENT':
         final title = (args['title'] as String? ?? '').trim();
         final startStr = (args['start'] as String? ?? '').trim();
@@ -799,6 +840,156 @@ class DesktopCommandListener {
           message: '📅 Evento criado: $title',
         );
 
+      case 'LIST_SKILLS':
+      case 'SKILLS':
+      case 'MOBILE_SKILLS':
+        final vault = await deviceService.getObsidianVault();
+        final skills = await vault.listSkills();
+        final serialized = skills.map((s) {
+          final tags = WorkflowSchedulerService.extractActionTags(s.content);
+          final maxRisk = _highestRiskForTags(tags);
+          return <String, dynamic>{
+            'id': s.id,
+            'slug': s.slug,
+            'title': s.title,
+            'actions': tags,
+            'riskLevel': maxRisk.name,
+            'requiresConfirmation': maxRisk != RiskLevel.safe,
+          };
+        }).toList(growable: false);
+        final listPreview = skills.isEmpty
+            ? 'Nenhuma skill local encontrada.'
+            : skills.map((s) => '${s.slug} (${s.title})').join(', ');
+        return DesktopInboundResult(
+          commandId: cmdId,
+          command: cmd,
+          ok: true,
+          status: 'executed',
+          message: '⚡ ${skills.length} skill(s) no celular: $listPreview',
+          data: <String, dynamic>{'skills': serialized},
+        );
+
+      case 'RUN_SKILL':
+      case 'SKILL':
+      case 'EXEC_SKILL':
+      case 'MOBILE_RUN_SKILL':
+        final query =
+            (args['skill'] ?? args['id'] ?? args['name'] ?? '').toString().trim();
+        if (query.isEmpty) {
+          return DesktopInboundResult(
+            commandId: cmdId,
+            command: cmd,
+            ok: false,
+            status: 'failed',
+            message: 'Nome da skill vazio.',
+          );
+        }
+        final vault = await deviceService.getObsidianVault();
+        final resolvedSkill = await _resolveMobileSkill(vault, query);
+        if (resolvedSkill == null) {
+          final all = await vault.listSkills();
+          final available = all.map((s) => s.slug).join(', ');
+          return DesktopInboundResult(
+            commandId: cmdId,
+            command: cmd,
+            ok: false,
+            status: 'failed',
+            message:
+                'Skill "$query" não encontrada no celular. Disponíveis: ${available.isEmpty ? 'nenhuma' : available}.',
+          );
+        }
+        final tags =
+            WorkflowSchedulerService.extractActionTags(resolvedSkill.content);
+        final maxRisk = _highestRiskForTags(tags);
+        if (maxRisk != RiskLevel.safe) {
+          final sim = ActionSimulation(
+            actionCode: 'RUN_SKILL',
+            riskLevel: maxRisk,
+            description:
+                'Execução remota pelo Desktop da skill "${resolvedSkill.title}"',
+            targetResource: 'Skills/${resolvedSkill.id}.md',
+            requiresConfirmation: true,
+            estimatedImpact: 'Contém ações: ${tags.join(', ')}',
+            canDegradeToOffline: true,
+          );
+          final confirm = confirmAction;
+          final approved = confirm != null ? await confirm(sim) : false;
+          if (!approved) {
+            await deviceService.recordAudit(
+              actor: 'DESKTOP_LAN',
+              action: 'RUN_SKILL',
+              target: resolvedSkill.id,
+              status: 'DENIED',
+              detail: 'Skill sensível/crítica recusada ou sem confirmação no celular',
+            );
+            return DesktopInboundResult(
+              commandId: cmdId,
+              command: cmd,
+              ok: false,
+              status: 'cancelled',
+              message:
+                  'Skill "${resolvedSkill.title}" requer confirmação no celular (ação ${maxRisk.name}).',
+            );
+          }
+        }
+        var skillScript = resolvedSkill.content;
+        final directionOverride =
+            (args['direction'] ?? args['args'] ?? '').toString().trim();
+        if (directionOverride.isNotEmpty &&
+            skillScript.contains('[ACTION:HEADSET_HANDOFF:auto]')) {
+          skillScript = skillScript.replaceAll(
+            '[ACTION:HEADSET_HANDOFF:auto]',
+            '[ACTION:HEADSET_HANDOFF:$directionOverride]',
+          );
+        }
+        final exec = await deviceService.executeAiActions(
+          skillScript,
+          confirmAction: confirmAction,
+          actor: 'DESKTOP_LAN',
+        );
+        return DesktopInboundResult(
+          commandId: cmdId,
+          command: cmd,
+          ok: true,
+          status: 'executed',
+          message:
+              '⚡ Skill Mobile "${resolvedSkill.title}" executada pelo PC: ${exec.executedLogs.isEmpty ? exec.cleanText : exec.executedLogs.join(' • ')}',
+          data: <String, dynamic>{
+            'skill': resolvedSkill.id,
+            'title': resolvedSkill.title,
+            'logs': exec.executedLogs,
+          },
+        );
+
+      case 'HEADSET_HANDOFF':
+      case 'PERMUTACAO_DO_FONE':
+        final rawDir =
+            (args['direction'] ?? args['args'] ?? 'to_mobile').toString().trim();
+        final headsetName = (args['headset'] ?? '').toString().trim();
+        final res = await deviceService.executeHeadsetHandoff(
+          direction: HandoffDirection.parse(rawDir),
+          headsetName: headsetName.isEmpty
+              ? HeadsetHandoffService.defaultHeadsetName
+              : headsetName,
+          fromDesktop: true,
+          confirmAction: confirmAction,
+          actor: 'DESKTOP_LAN',
+        );
+        return DesktopInboundResult(
+          commandId: cmdId,
+          command: cmd,
+          ok: res.ok,
+          status: res.ok ? 'executed' : 'failed',
+          message: res.message,
+          data: <String, dynamic>{
+            'direction': res.direction.name,
+            'bluetoothConnected': res.bluetoothConnected,
+            'bluetoothDeviceName': res.bluetoothDeviceName,
+            'spotifyTransferred': res.spotifyTransferred,
+            'spotifyDeviceName': res.spotifyDeviceName,
+          },
+        );
+
       default:
         return DesktopInboundResult(
           commandId: cmdId,
@@ -808,6 +999,45 @@ class DesktopCommandListener {
           message: 'Comando não suportado.',
         );
     }
+  }
+
+  RiskLevel _highestRiskForTags(List<String> tags) {
+    var highest = RiskLevel.safe;
+    for (final tag in tags) {
+      final level = actionGate.simulate(tag).riskLevel;
+      if (level == RiskLevel.critical) return RiskLevel.critical;
+      if (level == RiskLevel.sensitive) highest = RiskLevel.sensitive;
+    }
+    return highest;
+  }
+
+  Future<MobileSkill?> _resolveMobileSkill(
+    ObsidianService vault,
+    String query,
+  ) async {
+    final direct = await vault.findSkill(query);
+    if (direct != null) return direct;
+    String norm(String s) => s
+        .toLowerCase()
+        .replaceAll(RegExp(r'[áàâãä]'), 'a')
+        .replaceAll(RegExp(r'[éèêë]'), 'e')
+        .replaceAll(RegExp(r'[íìîï]'), 'i')
+        .replaceAll(RegExp(r'[óòôõö]'), 'o')
+        .replaceAll(RegExp(r'[úùûü]'), 'u')
+        .replaceAll('ç', 'c')
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    final target = norm(query);
+    if (target.isEmpty) return null;
+    final all = await vault.listSkills();
+    for (final s in all) {
+      if (norm(s.id) == target ||
+          norm(s.title) == target ||
+          norm(s.title).contains(target)) {
+        return s;
+      }
+    }
+    return null;
   }
 
   Future<void> _postResult(

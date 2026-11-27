@@ -86,6 +86,8 @@ class ActionGate {
     'PC_CLIPBOARD_PUSH',
     'PC_CLIPBOARD_PULL',
     'PC_RUN_SKILL',
+    'PC_LIST_SKILLS',
+    'PC_SYNC_MOBILE_SKILLS',
     'PC_STATUS',
     'PC_THERMAL',
     'PC_TEMP',
@@ -205,11 +207,13 @@ class ActionGate {
       );
     }
 
-    // Na Biometria (Nível 3): sem fricção em ações normais/sensíveis; confirmação só nos críticos/autodestrutivos e em exclusão de Skills/Arquivos Duplicados.
+    // Na Biometria (Nível 3): sem fricção em ações normais/sensíveis; confirmação só nos críticos/autodestrutivos, exclusão de Skills/Arquivos Duplicados e ligações diretas (Telefone/WhatsApp).
     final op = sim.actionCode.toUpperCase().trim();
     final alwaysConfirmInSovereign = sim.riskLevel == RiskLevel.critical ||
         op == 'SKILL_DELETE' ||
-        op == 'CLEAN_DUPLICATES';
+        op == 'CLEAN_DUPLICATES' ||
+        op == 'CALL_PHONE' ||
+        op == 'WHATSAPP_CALL';
     final needsConfirm = currentLevel == AccessLevel.sovereign
         ? alwaysConfirmInSovereign
         : sim.requiresConfirmation;
@@ -305,6 +309,40 @@ class ActionGate {
           canDegradeToOffline: false,
         );
 
+      case 'CALL_PHONE':
+      case 'CALL':
+      case 'LIGAR':
+        return ActionSimulation(
+          actionCode: 'CALL_PHONE',
+          riskLevel: RiskLevel.sensitive,
+          description: 'Efetuar ligação telefônica direta',
+          targetResource: 'Telefone ($arg1)',
+          requiresConfirmation: true,
+          estimatedImpact:
+              'Inicia chamada telefônica via operadora para $arg1.',
+          canDegradeToOffline: true,
+        );
+
+      case 'WHATSAPP_CALL':
+      case 'CALL_WHATSAPP':
+      case 'LIGAR_WHATSAPP':
+      case 'WHATSAPP_VIDEO_CALL':
+        final isVideo =
+            op == 'WHATSAPP_VIDEO_CALL' || arg2.toLowerCase() == 'video';
+        return ActionSimulation(
+          actionCode: 'WHATSAPP_CALL',
+          riskLevel: RiskLevel.sensitive,
+          description: isVideo
+              ? 'Efetuar chamada de vídeo via WhatsApp'
+              : 'Efetuar ligação de voz via WhatsApp',
+          targetResource: 'WhatsApp ($arg1)',
+          requiresConfirmation: true,
+          estimatedImpact: isVideo
+              ? 'Inicia chamada de vídeo no WhatsApp para $arg1.'
+              : 'Inicia chamada de voz no WhatsApp para $arg1.',
+          canDegradeToOffline: false,
+        );
+
       case 'CREATE_EVENT':
       case 'CALENDAR_EVENT':
         return ActionSimulation(
@@ -383,6 +421,33 @@ class ActionGate {
           requiresConfirmation: false,
           estimatedImpact:
               'Retorna contagem de notas, tamanho, caminho ativo e engine FTS.',
+          canDegradeToOffline: true,
+        );
+
+      case 'OBSIDIAN_VERIFY':
+      case 'OBSIDIAN_RENOVAR':
+        return ActionSimulation(
+          actionCode: 'OBSIDIAN_VERIFY',
+          riskLevel: RiskLevel.safe,
+          description: 'Verificação humana e renovação de validade OKF de nota no Obsidian',
+          targetResource:
+              'ULTRON-Vault/${arg1.isEmpty ? 'nota.md' : arg1}',
+          requiresConfirmation: false,
+          estimatedImpact:
+              'Marca verified=true e renova stale_after no frontmatter OKF com UNDO.',
+          canDegradeToOffline: true,
+        );
+
+      case 'OBSIDIAN_STALE':
+      case 'OBSIDIAN_VENCIDAS':
+        return const ActionSimulation(
+          actionCode: 'OBSIDIAN_STALE',
+          riskLevel: RiskLevel.safe,
+          description: 'Listagem de notas vencidas para revisão OKF no Obsidian',
+          targetResource: 'ULTRON-Vault (OKF stale_after)',
+          requiresConfirmation: false,
+          estimatedImpact:
+              'Consulta somente leitura de notas com validade vencida.',
           canDegradeToOffline: true,
         );
 
@@ -594,6 +659,31 @@ class ActionGate {
           requiresConfirmation: false,
           estimatedImpact:
               'Verifica latência e saúde do agente desktop na LAN.',
+          canDegradeToOffline: false,
+        );
+
+      case 'PC_LIST_SKILLS':
+      case 'PC_SKILLS':
+        return const ActionSimulation(
+          actionCode: 'PC_LIST_SKILLS',
+          riskLevel: RiskLevel.safe,
+          description: 'Listagem de skills e automações disponíveis no Desktop',
+          targetResource: 'Desktop PC (Catálogo de Skills)',
+          requiresConfirmation: false,
+          estimatedImpact:
+              'Consulta somente leitura das skills registradas no PC via LAN.',
+          canDegradeToOffline: false,
+        );
+
+      case 'PC_SYNC_MOBILE_SKILLS':
+        return const ActionSimulation(
+          actionCode: 'PC_SYNC_MOBILE_SKILLS',
+          riskLevel: RiskLevel.safe,
+          description: 'Sincronização do catálogo de skills do celular com o Desktop',
+          targetResource: 'Desktop PC (Bridge Skills)',
+          requiresConfirmation: false,
+          estimatedImpact:
+              'Envia metadados das skills locais (Skills/*.md) para o PC acionar remotamente.',
           canDegradeToOffline: false,
         );
 
@@ -872,6 +962,49 @@ class ActionGate {
           requiresConfirmation: false,
           estimatedImpact:
               'Adiciona a faixa especificada (ou a que está tocando) à playlist.',
+          canDegradeToOffline: false,
+        );
+
+      case 'SPOTIFY_DEVICES':
+      case 'SPOTIFY_DISPOSITIVOS':
+        return const ActionSimulation(
+          actionCode: 'SPOTIFY_DEVICES',
+          riskLevel: RiskLevel.safe,
+          description: 'Listagem de dispositivos ativos no Spotify Connect',
+          targetResource: 'Spotify Web API (/v1/me/player/devices)',
+          requiresConfirmation: false,
+          estimatedImpact:
+              'Consulta somente leitura dos dispositivos Spotify Connect da conta.',
+          canDegradeToOffline: false,
+        );
+
+      case 'SPOTIFY_TRANSFER':
+      case 'SPOTIFY_TRANSFERIR':
+        return ActionSimulation(
+          actionCode: 'SPOTIFY_TRANSFER',
+          riskLevel: RiskLevel.safe,
+          description: 'Transferência de reprodução via Spotify Connect',
+          targetResource:
+              'Spotify Connect (${arg1.isEmpty ? 'Smartphone' : arg1})',
+          requiresConfirmation: false,
+          estimatedImpact:
+              'Continua a música no dispositivo selecionado mantendo o ponto exato.',
+          canDegradeToOffline: false,
+        );
+
+      case 'HEADSET_HANDOFF':
+      case 'PERMUTACAO_FONE':
+      case 'PERMUTACAO_DO_FONE':
+        return ActionSimulation(
+          actionCode: 'HEADSET_HANDOFF',
+          riskLevel: RiskLevel.safe,
+          description:
+              'Permutação do Fone (PC Dongle ⇄ Celular Bluetooth + Spotify Connect)',
+          targetResource:
+              'Headset Bluetooth & Spotify Connect (${arg1.isEmpty ? 'auto' : arg1})',
+          requiresConfirmation: false,
+          estimatedImpact:
+              'Coordena troca de áudio do fone entre PC e celular e retoma o Spotify.',
           canDegradeToOffline: false,
         );
 

@@ -449,4 +449,29 @@ void main() {
     );
     expect(missingToken, isNull);
   });
+
+  test('parsePcCommandInput parses bidirectional skill commands cleanly', () {
+    expect(
+      DesktopPairingService.parsePcCommandInput('/pc listar')?.command,
+      'PC_LIST_SKILLS',
+    );
+    expect(
+      DesktopPairingService.parsePcCommandInput('/pc skills')?.command,
+      'PC_LIST_SKILLS',
+    );
+    expect(
+      DesktopPairingService.parsePcCommandInput('/pc sincronizar_skills')
+          ?.command,
+      'PC_SYNC_MOBILE_SKILLS',
+    );
+    final skillSimple =
+        DesktopPairingService.parsePcCommandInput('/pc skill modo_dev');
+    expect(skillSimple?.command, 'PC_RUN_SKILL');
+    expect(skillSimple?.args, {'skill': 'modo_dev'});
+
+    final skillWithArgs =
+        DesktopPairingService.parsePcCommandInput('/pc skill deploy | prod');
+    expect(skillWithArgs?.command, 'PC_RUN_SKILL');
+    expect(skillWithArgs?.args, {'skill': 'deploy', 'args': 'prod'});
+  });
 }

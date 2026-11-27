@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../models/assistant_persona.dart';
+import '../../services/audio_capture_service.dart';
+import '../../services/audio_vad_buffer.dart';
 import '../../services/speech_text.dart';
 import '../../services/voice_service.dart';
 import '../theme/ultron_theme.dart';
@@ -11,6 +13,8 @@ import '../theme/ultron_theme.dart';
 Future<void> showVoiceSelectorSheet(
   BuildContext context, {
   required VoiceService voiceService,
+  AudioInputRouterService? audioInputService,
+  AudioCaptureSource? captureSource,
   VoidCallback? onChanged,
 }) {
   return showModalBottomSheet<void>(
@@ -29,6 +33,8 @@ Future<void> showVoiceSelectorSheet(
         expand: false,
         builder: (_, scrollController) => VoiceSelectorSheet(
           voiceService: voiceService,
+          audioInputService: audioInputService,
+          captureSource: captureSource,
           onChanged: onChanged,
           scrollController: scrollController,
         ),
@@ -41,11 +47,15 @@ class VoiceSelectorSheet extends StatefulWidget {
   const VoiceSelectorSheet({
     super.key,
     required this.voiceService,
+    this.audioInputService,
+    this.captureSource,
     this.onChanged,
     this.scrollController,
   });
 
   final VoiceService voiceService;
+  final AudioInputRouterService? audioInputService;
+  final AudioCaptureSource? captureSource;
   final VoidCallback? onChanged;
   final ScrollController? scrollController;
 
@@ -76,15 +86,33 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
   String? _fishFeedback;
   bool _fishFeedbackIsError = false;
 
+  late final AudioInputRouterService _audioInput =
+      widget.audioInputService ?? MethodChannelAudioInputRouterService();
+  late final AudioCaptureSource _captureSource =
+      widget.captureSource ?? MethodChannelAudioCaptureSource();
+  List<AudioInputDevice> _inputDevices = <AudioInputDevice>[
+    AudioInputDevice.auto(),
+  ];
+  bool _loadingMics = false;
+  bool _hasBtPerm = true;
+  bool _testingMic = false;
+  double _micTestDbfs = -60.0;
+  String? _micTestRouted;
+  String? _micTestError;
+  StreamSubscription<Uint8List>? _micTestSub;
+  Timer? _micTestTimer;
+
   @override
   void initState() {
     super.initState();
     _syncFishFieldsFromService();
     _loadVoices();
+    unawaited(_loadInputDevices(initial: true));
   }
 
   @override
   void dispose() {
+    unawaited(_stopMicTest(updateUi: false));
     _fishKeyCtrl.dispose();
     _fishRefUltronCtrl.dispose();
     _fishRefJarvisCtrl.dispose();
@@ -129,6 +157,131 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
         _loading = false;
         _status = 'Não foi possível consultar as vozes do Android: $e';
       });
+    }
+  }
+
+  Future<void> _loadInputDevices({bool initial = false}) async {
+    if (!initial && mounted) setState(() => _loadingMics = true);
+    try {
+      final devices = await _audioInput
+          .listInputDevices()
+          .timeout(const Duration(milliseconds: 800));
+      final btPerm = await _audioInput
+          .hasBluetoothPermission()
+          .timeout(const Duration(milliseconds: 800));
+      if (!mounted) return;
+      setState(() {
+        _inputDevices = devices.isNotEmpty ? devices : [AudioInputDevice.auto()];
+        _hasBtPerm = btPerm;
+        _loadingMics = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _inputDevices = [AudioInputDevice.auto()];
+        _loadingMics = false;
+      });
+    }
+  }
+
+  Future<void> _selectInputDevice(AudioInputDevice device) async {
+    HapticFeedback.selectionClick();
+    if (_testingMic) {
+      await _stopMicTest();
+    }
+    try {
+      if (device.isBluetooth && !_hasBtPerm) {
+        final granted = await _audioInput.requestBluetoothPermission();
+        if (!mounted) return;
+        setState(() => _hasBtPerm = granted);
+      }
+      await _audioInput.setPreferredInputDevice(device);
+      await _loadInputDevices();
+      widget.onChanged?.call();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Microfone ativo: ${device.name}',
+            style: const TextStyle(fontSize: 11),
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _micTestError = 'Falha ao selecionar microfone: $e');
+    }
+  }
+
+  Future<void> _toggleMicTest() async {
+    if (_testingMic) {
+      await _stopMicTest();
+      return;
+    }
+    HapticFeedback.selectionClick();
+    setState(() {
+      _testingMic = true;
+      _micTestDbfs = -60.0;
+      _micTestRouted = null;
+      _micTestError = null;
+    });
+    try {
+      var hasPerm = await _captureSource.hasPermission();
+      if (!hasPerm) {
+        hasPerm = await _captureSource.requestPermission();
+      }
+      if (!hasPerm) {
+        if (!mounted) return;
+        setState(() {
+          _testingMic = false;
+          _micTestError = 'Permissão de microfone negada.';
+        });
+        return;
+      }
+      _micTestSub = _captureSource.frames.listen((frame) {
+        if (!mounted || !_testingMic) return;
+        final rms = PcmEnergy.dcRemovedRmsInt16(frame);
+        final db = PcmEnergy.dbfsFromRms(rms);
+        setState(() => _micTestDbfs = db);
+      });
+      final report = await _captureSource.start(sampleRate: 16000);
+      if (!mounted) {
+        await _captureSource.stop();
+        return;
+      }
+      setState(() {
+        _micTestRouted = report.routedDeviceName;
+      });
+      _micTestTimer?.cancel();
+      _micTestTimer = Timer(const Duration(seconds: 4), () {
+        unawaited(_stopMicTest());
+      });
+    } catch (e) {
+      await _stopMicTest(updateUi: false);
+      if (!mounted) return;
+      setState(() {
+        _testingMic = false;
+        _micTestError = 'Falha no teste de captação: $e';
+      });
+    }
+  }
+
+  Future<void> _stopMicTest({bool updateUi = true}) async {
+    _micTestTimer?.cancel();
+    _micTestTimer = null;
+    final sub = _micTestSub;
+    _micTestSub = null;
+    try {
+      await _captureSource.stop();
+    } catch (_) {}
+    if (sub != null) {
+      unawaited(sub.cancel().catchError((_) {}));
+    }
+    if (updateUi && mounted) {
+      setState(() => _testingMic = false);
+    } else {
+      _testingMic = false;
     }
   }
 
@@ -373,6 +526,8 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
               ],
             ),
           ),
+          const SizedBox(height: 12),
+          _buildMicrophoneSelectorSection(accent, onAccent),
           const SizedBox(height: 12),
           const Text(
             'PALAVRA DE ATIVAÇÃO (WAKE-WORD KWS MULTI-PERFIL)',
@@ -870,6 +1025,186 @@ class _VoiceSelectorSheetState extends State<VoiceSelectorSheet> {
                 ],
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMicrophoneSelectorSection(Color accent, Color onAccent) {
+    final selectedMic = _inputDevices.firstWhere(
+      (d) => d.isSelected,
+      orElse: () => _inputDevices.first,
+    );
+    final levelNorm = ((_micTestDbfs + 60.0) / 60.0).clamp(0.0, 1.0);
+
+    return Container(
+      key: const Key('mic_selector_section'),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF18181D),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.mic_outlined, color: accent, size: 15),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  'MICROFONE DE ENTRADA',
+                  style: TextStyle(
+                    color: _rose,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.9,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                key: const Key('mic_test_button'),
+                onPressed: _toggleMicTest,
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                icon: Icon(
+                  _testingMic ? Icons.stop_rounded : Icons.graphic_eq_rounded,
+                  size: 14,
+                  color: _testingMic ? accent : _rose,
+                ),
+                label: Text(
+                  _testingMic ? 'Parar' : 'Testar',
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                    color: _testingMic ? accent : const Color(0xFFEEEEEE),
+                  ),
+                ),
+              ),
+              IconButton(
+                key: const Key('mic_refresh_button'),
+                tooltip: 'Atualizar microfones conectados',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                onPressed: _loadingMics ? null : _loadInputDevices,
+                icon: const Icon(Icons.refresh, color: _rose, size: 15),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Ativo: ${selectedMic.name}',
+            style: const TextStyle(
+              color: Color(0xFFEEEEEE),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 2),
+          const Text(
+            'De fone? Escolha "Microfone do Celular" ou o microfone do seu fone.',
+            style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 10),
+          ),
+          if (!_hasBtPerm) ...[
+            const SizedBox(height: 6),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final granted = await _audioInput.requestBluetoothPermission();
+                if (!mounted) return;
+                setState(() => _hasBtPerm = granted);
+                if (granted) {
+                  await _loadInputDevices();
+                }
+              },
+              icon: Icon(Icons.bluetooth, size: 14, color: accent),
+              label: const Text(
+                'Permitir áudio Bluetooth (Android 12+)',
+                style: TextStyle(fontSize: 10.5),
+              ),
+            ),
+          ],
+          const SizedBox(height: 8),
+          if (_loadingMics)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                'Atualizando lista de microfones...',
+                style: TextStyle(color: Color(0xFF9A9AA3), fontSize: 10.5),
+              ),
+            )
+          else
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: _inputDevices.map((dev) {
+                final icon = dev.isAuto
+                    ? Icons.auto_awesome_outlined
+                    : dev.isBluetooth
+                        ? Icons.bluetooth_audio_rounded
+                        : dev.isWiredOrUsb
+                            ? Icons.headset_mic_outlined
+                            : Icons.smartphone_rounded;
+                return ChoiceChip(
+                  key: ValueKey('mic_option_${dev.id}_${dev.category}'),
+                  avatar: Icon(
+                    icon,
+                    size: 14,
+                    color: dev.isSelected ? onAccent : _rose,
+                  ),
+                  label: Text(dev.name),
+                  selected: dev.isSelected,
+                  onSelected: (_) => _selectInputDevice(dev),
+                  selectedColor: accent,
+                  backgroundColor: const Color(0xFF111114),
+                  side: BorderSide(color: dev.isSelected ? accent : _border),
+                  labelStyle: TextStyle(
+                    color: dev.isSelected ? onAccent : const Color(0xFFEEEEEE),
+                    fontSize: 10.5,
+                    fontWeight: dev.isSelected ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                );
+              }).toList(),
+            ),
+          if (_testingMic || _micTestRouted != null || _micTestError != null) ...[
+            const SizedBox(height: 8),
+            if (_testingMic) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: levelNorm,
+                  minHeight: 5,
+                  backgroundColor: const Color(0xFF111114),
+                  color: levelNorm > 0.35 ? const Color(0xFF22C55E) : accent,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Nível: ${_micTestDbfs.toStringAsFixed(1)} dBFS'
+                '${_micTestRouted != null && _micTestRouted!.isNotEmpty ? ' · Rota: $_micTestRouted' : ''}',
+                style: const TextStyle(color: Color(0xFF9A9AA3), fontSize: 10),
+              ),
+            ],
+            if (!_testingMic &&
+                _micTestRouted != null &&
+                _micTestRouted!.isNotEmpty)
+              Text(
+                'Última rota confirmada: $_micTestRouted',
+                style: const TextStyle(color: Color(0xFF22C55E), fontSize: 10),
+              ),
+            if (_micTestError != null)
+              Text(
+                _micTestError!,
+                style: const TextStyle(color: Color(0xFFF10D28), fontSize: 10),
+              ),
+          ],
         ],
       ),
     );

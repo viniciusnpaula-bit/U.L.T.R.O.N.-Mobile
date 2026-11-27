@@ -15,6 +15,7 @@ class MemorySection extends StatefulWidget {
     required this.onRunSlashCommand,
     required this.onOpenHistory,
     required this.onOpenMemorySettings,
+    this.onOpenSkillBridge,
   });
 
   final TextEditingController quickNoteController;
@@ -25,6 +26,7 @@ class MemorySection extends StatefulWidget {
   final Future<void> Function(String slashCommand) onRunSlashCommand;
   final VoidCallback onOpenHistory;
   final VoidCallback onOpenMemorySettings;
+  final VoidCallback? onOpenSkillBridge;
 
   @override
   State<MemorySection> createState() => _MemorySectionState();
@@ -137,6 +139,13 @@ class _MemorySectionState extends State<MemorySection> {
         ),
         const SizedBox(height: 8),
         UltronActionTile(
+          icon: Icons.verified_outlined,
+          title: 'Revisar notas vencidas (OKF)',
+          subtitle: 'Lista notas com validade expirada para revisão e renovação',
+          onTap: () => widget.onRunSlashCommand('/vault vencidas'),
+        ),
+        const SizedBox(height: 8),
+        UltronActionTile(
           icon: Icons.fitness_center_rounded,
           title: 'Sincronizar openGym (Modo Treino)',
           subtitle: 'Importar relatório PDF ou backup JSON/CSV offline para o Obsidian',
@@ -163,6 +172,18 @@ class _MemorySectionState extends State<MemorySection> {
           subtitle: 'Restaura o backup automático mais recente (/undo)',
           onTap: () => widget.onRunSlashCommand('/undo'),
         ),
+        if (widget.onOpenSkillBridge != null) ...[
+          const SizedBox(height: 16),
+          const UltronSectionLabel('Ponte de Skills (Celular ⇄ PC)'),
+          UltronActionTile(
+            icon: Icons.swap_horiz_rounded,
+            title: 'Central de Skills (Celular ⇄ PC)',
+            subtitle:
+                'Ativar skills do PC em 1 toque ou enviar skills locais ao Desktop',
+            accentColor: UltronTheme.accentOf(context),
+            onTap: widget.onOpenSkillBridge,
+          ),
+        ],
         if (widget.mobileSkills.isNotEmpty) ...[
           const SizedBox(height: 16),
           const UltronSectionLabel('Skills locais (.md)'),

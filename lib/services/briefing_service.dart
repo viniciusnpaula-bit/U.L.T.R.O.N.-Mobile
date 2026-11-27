@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'device_control_service.dart';
+import 'obsidian_service.dart';
 
 /// Resumo meteorológico sem necessidade de chave de API (Open-Meteo / wttr.in).
 class WeatherSnapshot {
@@ -58,6 +59,7 @@ class MorningBriefing {
     required this.calendarError,
     required this.formattedReport,
     required this.speakText,
+    this.staleNotes = const <OkfNoteStatus>[],
   });
 
   final DateTime generatedAt;
@@ -69,23 +71,27 @@ class MorningBriefing {
   final String? calendarError;
   final String formattedReport;
   final String speakText;
+  final List<OkfNoteStatus> staleNotes;
 }
 
 typedef WeatherFetcher = Future<WeatherSnapshot?> Function(String city);
 
-/// Consolida o Briefing Executivo Unificado (P4): Agenda + Sentinela + Clima + Telemetria.
+/// Consolida o Briefing Executivo Unificado (P4): Agenda + Sentinela + Clima + Telemetria + OKF.
 class BriefingService {
   BriefingService({
     DeviceControlService? deviceService,
     FlutterSecureStorage? storage,
     WeatherFetcher? weatherFetcher,
+    Future<ObsidianService> Function()? obsidianProvider,
   })  : _deviceService = deviceService ?? DeviceControlService(),
         _storage = storage ?? const FlutterSecureStorage(),
-        _weatherFetcher = weatherFetcher;
+        _weatherFetcher = weatherFetcher,
+        _obsidianProvider = obsidianProvider;
 
   final DeviceControlService _deviceService;
   final FlutterSecureStorage _storage;
   final WeatherFetcher? _weatherFetcher;
+  final Future<ObsidianService> Function()? _obsidianProvider;
 
   static const _weatherCityKey = 'ultron.briefing.city.v1';
 
@@ -247,11 +253,22 @@ class BriefingService {
       } catch (_) {}
     }();
 
+    List<OkfNoteStatus> staleNotes = const [];
+    final staleNotesFuture = () async {
+      try {
+        final vault = _obsidianProvider != null
+            ? await _obsidianProvider()
+            : await _deviceService.getObsidianVault();
+        staleNotes = await vault.listStaleNotes(now: current);
+      } catch (_) {}
+    }();
+
     await Future.wait([
       calendarFuture,
       messagesFuture,
       weatherFuture,
       statusFuture,
+      staleNotesFuture,
     ]);
 
     final report = _buildReport(
@@ -262,6 +279,7 @@ class BriefingService {
       weather: weather,
       status: status,
       calendarError: calendarError,
+      staleNotes: staleNotes,
     );
     final spoken = _buildSpeakText(
       greeting: greeting,
@@ -269,6 +287,7 @@ class BriefingService {
       messages: messages,
       weather: weather,
       status: status,
+      staleNotes: staleNotes,
     );
 
     return MorningBriefing(
@@ -281,6 +300,7 @@ class BriefingService {
       calendarError: calendarError,
       formattedReport: report,
       speakText: spoken,
+      staleNotes: staleNotes,
     );
   }
 
@@ -298,6 +318,7 @@ class BriefingService {
     required WeatherSnapshot? weather,
     required DeviceStatus? status,
     required String? calendarError,
+    List<OkfNoteStatus> staleNotes = const <OkfNoteStatus>[],
   }) {
     String two(int v) => v.toString().padLeft(2, '0');
     final dateHeader =
@@ -340,6 +361,20 @@ class BriefingService {
       }
     }
 
+    if (staleNotes.isNotEmpty) {
+      buf.writeln('');
+      buf.writeln(
+        '📚 REVISÃO DO COFRE OKF (${staleNotes.length} nota(s) vencida(s))',
+      );
+      for (final note in staleNotes.take(6)) {
+        buf.writeln(note.formatReviewLine());
+      }
+      if (staleNotes.length > 6) {
+        buf.writeln('• ... e mais ${staleNotes.length - 6} nota(s).');
+      }
+      buf.writeln('• Use /vault verificar <nota> para aprovar e renovar validade.');
+    }
+
     if (status != null) {
       buf.writeln('');
       final net = status.wifiConnected
@@ -362,6 +397,7 @@ class BriefingService {
     required List<CapturedNotification> messages,
     required WeatherSnapshot? weather,
     required DeviceStatus? status,
+    List<OkfNoteStatus> staleNotes = const <OkfNoteStatus>[],
   }) {
     final parts = <String>['$greeting.'];
     if (weather != null) {
@@ -386,6 +422,11 @@ class BriefingService {
       final latest = messages.first;
       parts.add(
         'Há ${messages.length} mensagens recentes, incluindo ${latest.appLabel} de ${latest.sender}.',
+      );
+    }
+    if (staleNotes.isNotEmpty) {
+      parts.add(
+        'Atenção: há ${staleNotes.length} nota${staleNotes.length == 1 ? '' : 's'} vencida${staleNotes.length == 1 ? '' : 's'} no cofre Obsidian para revisão.',
       );
     }
     if (status != null && status.batteryLevel >= 0) {

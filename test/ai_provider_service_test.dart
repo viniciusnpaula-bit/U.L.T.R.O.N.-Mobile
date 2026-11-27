@@ -254,6 +254,7 @@ void main() {
       expect(reply1.text, 'OK backup');
       expect(reply1.provider, 'Backup Free');
       expect(reply1.failedAttempts, 1);
+      expect(reply1.failedProviders, ['Groq Primary']);
       // Should abort Groq immediately after 401 instead of trying all 4 Groq fallback models.
       expect(calls.where((c) => c.startsWith('api.groq.com')).length, 1);
 
@@ -375,6 +376,7 @@ void main() {
           completionTokens: r2.completionTokens,
           totalTokens: r2.totalTokens,
           tokensEstimated: true,
+          failedProviders: const ['Groq Usage'],
         ),
       );
       expect(telemetry.turns, 2);
@@ -384,6 +386,19 @@ void main() {
       expect(telemetry.lastUsedFailover, isTrue);
       expect(telemetry.failoverEvents, 1);
       expect(telemetry.lastLatencyMs, 910);
+      expect(telemetry.realTokens, 165);
+      expect(telemetry.estimatedTokens, r2.totalTokens);
+      expect(telemetry.totalFailedAttempts, 1);
+      expect(telemetry.byProvider['Groq Usage']?.turns, 1);
+      expect(telemetry.byProvider['Groq Usage']?.failedAttempts, 1);
+      expect(telemetry.byProvider['Groq Usage']?.realTokens, 165);
+      expect(telemetry.byProvider['Pollinations Free']?.turns, 1);
+      expect(telemetry.byProvider['Pollinations Free']?.failovers, 1);
+      expect(telemetry.byProvider['Pollinations Free']?.estimatedTokens, r2.totalTokens);
+      expect(telemetry.failoverHistory.length, 1);
+      expect(telemetry.failoverHistory.first.resolvedProvider, 'Pollinations Free');
+      expect(telemetry.failoverHistory.first.failedProviders, ['Groq Usage']);
+      expect(telemetry.withActiveProvider('Outro').byProvider.length, 2);
       expect(SessionTelemetry.formatCompactTokens(1540), '1.5k');
     });
   });

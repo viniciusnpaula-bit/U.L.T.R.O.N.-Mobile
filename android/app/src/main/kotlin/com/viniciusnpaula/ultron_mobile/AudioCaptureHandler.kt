@@ -9,6 +9,7 @@ import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.core.app.ActivityCompat
@@ -31,6 +32,7 @@ class AudioCaptureHandler(
         private const val METHOD_CHANNEL = "com.viniciusnpaula.ultron_mobile/audio_capture"
         private const val EVENT_CHANNEL = "com.viniciusnpaula.ultron_mobile/audio_capture_frames"
         private const val PERMISSION_REQUEST_CODE = 4101
+        private const val BLUETOOTH_PERMISSION_REQUEST_CODE = 4102
     }
 
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL)
@@ -40,10 +42,12 @@ class AudioCaptureHandler(
 
     private var eventSink: EventChannel.EventSink? = null
     private var pendingPermissionResult: MethodChannel.Result? = null
+    private var pendingBluetoothPermissionResult: MethodChannel.Result? = null
     private var audioRecord: AudioRecord? = null
     private var echoCanceler: AcousticEchoCanceler? = null
     private var noiseSuppressor: NoiseSuppressor? = null
     private var gainControl: AutomaticGainControl? = null
+    private var routingCleanup: (() -> Unit)? = null
     private var readerThread: Thread? = null
 
     @Volatile
@@ -61,6 +65,28 @@ class AudioCaptureHandler(
         when (call.method) {
             "hasPermission" -> result.success(hasRecordPermission())
             "requestPermission" -> requestRecordPermission(result)
+            "hasBluetoothPermission" -> result.success(AudioInputRouter.hasBluetoothConnectPermission(activity))
+            "requestBluetoothPermission" -> requestBluetoothPermission(result)
+            "listInputDevices" -> result.success(AudioInputRouter.listInputDevices(activity))
+            "getPreferredInputDevice" -> {
+                val sel = AudioInputRouter.loadSelection(activity)
+                result.success(
+                    mapOf(
+                        "id" to sel.id,
+                        "type" to sel.type,
+                        "name" to sel.name,
+                        "isAuto" to sel.isAuto,
+                    ),
+                )
+            }
+            "setPreferredInputDevice" -> {
+                val id = call.argument<Int>("id") ?: AudioInputRouter.AUTO_ID
+                val type = call.argument<Int>("type") ?: AudioInputRouter.AUTO_TYPE
+                val name = call.argument<String>("name") ?: "Automático (Padrão do Android)"
+                AudioInputRouter.saveSelection(activity, id, type, name)
+                UltronAudioService.requestMicReload()
+                result.success(true)
+            }
             "start" -> {
                 val sampleRate = call.argument<Int>("sampleRate") ?: 16000
                 startCapture(sampleRate, result)
@@ -105,11 +131,37 @@ class AudioCaptureHandler(
         )
     }
 
+    private fun requestBluetoothPermission(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            AudioInputRouter.hasBluetoothConnectPermission(activity)
+        ) {
+            result.success(true)
+            return
+        }
+        if (pendingBluetoothPermissionResult != null) {
+            result.error("permission_pending", "Bluetooth permission request already in progress.", null)
+            return
+        }
+        pendingBluetoothPermissionResult = result
+        ActivityCompat.requestPermissions(
+            activity,
+            arrayOf(Manifest.permission.BLUETOOTH_CONNECT),
+            BLUETOOTH_PERMISSION_REQUEST_CODE,
+        )
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
         grantResults: IntArray,
     ): Boolean {
+        if (requestCode == BLUETOOTH_PERMISSION_REQUEST_CODE) {
+            val pending = pendingBluetoothPermissionResult
+            pendingBluetoothPermissionResult = null
+            val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+            pending?.success(granted)
+            return true
+        }
         if (requestCode != PERMISSION_REQUEST_CODE) return false
         val pending = pendingPermissionResult
         pendingPermissionResult = null
@@ -182,69 +234,32 @@ class AudioCaptureHandler(
                     MediaRecorder.AudioSource.DEFAULT,
                 )
 
-                var openedRecord: AudioRecord? = null
-                var lastReason = "Nenhum microfone inicializou"
-                for (source in sources) {
-                    val candidate = try {
-                        AudioRecord(
-                            source,
-                            sampleRate,
-                            AudioFormat.CHANNEL_IN_MONO,
-                            AudioFormat.ENCODING_PCM_16BIT,
-                            bufferSize,
-                        )
-                    } catch (e: SecurityException) {
-                        MainActivity.isForegroundCaptureActive = false
-                        mainHandler.post {
-                            result.error("permission_denied", e.message, null)
-                        }
-                        return@Thread
-                    } catch (e: IllegalArgumentException) {
-                        lastReason = "${e.javaClass.simpleName}: ${e.message}"
-                        continue
-                    }
-
-                    if (candidate.state != AudioRecord.STATE_INITIALIZED) {
-                        lastReason = "source=$source state=${candidate.state}"
-                        try {
-                            candidate.release()
-                        } catch (_: Throwable) {
-                        }
-                        continue
-                    }
-
-                    try {
-                        candidate.startRecording()
-                    } catch (e: IllegalStateException) {
-                        lastReason = "source=$source startRecording: ${e.message}"
-                        try {
-                            candidate.release()
-                        } catch (_: Throwable) {
-                        }
-                        continue
-                    }
-
-                    if (candidate.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                        lastReason = "source=$source recordingState=${candidate.recordingState}"
-                        try {
-                            candidate.release()
-                        } catch (_: Throwable) {
-                        }
-                        continue
-                    }
-
-                    openedRecord = candidate
-                    break
-                }
-
-                val record = openedRecord
-                if (record == null) {
+                val opened = try {
+                    AudioInputRouter.openAudioRecord(
+                        context = activity,
+                        sampleRate = sampleRate,
+                        bufferSize = bufferSize,
+                        defaultSources = sources,
+                        enableBluetoothSco = true,
+                    )
+                } catch (e: SecurityException) {
                     MainActivity.isForegroundCaptureActive = false
                     mainHandler.post {
-                        result.error("audio_init_failed", "Nenhum microfone ativo disponível ($lastReason).", null)
+                        result.error("permission_denied", e.message, null)
                     }
                     return@Thread
                 }
+
+                if (opened == null) {
+                    MainActivity.isForegroundCaptureActive = false
+                    mainHandler.post {
+                        result.error("audio_init_failed", "Nenhum microfone ativo disponível.", null)
+                    }
+                    return@Thread
+                }
+
+                val record = opened.record
+                routingCleanup = opened.cleanupRouting
 
                 val sessionId = record.audioSessionId
                 var aecEnabled = false
@@ -311,6 +326,8 @@ class AudioCaptureHandler(
                             "nsEnabled" to nsEnabled,
                             "agcEnabled" to agcEnabled,
                             "sampleRate" to sampleRate,
+                            "routedDeviceName" to opened.routedDeviceName,
+                            "routedDeviceType" to opened.routedDeviceType,
                         ),
                     )
                 }
@@ -358,11 +375,14 @@ class AudioCaptureHandler(
         gainControl = null
 
         record?.release()
+        routingCleanup?.invoke()
+        routingCleanup = null
     }
 
     fun release() {
         stopCapture()
         pendingPermissionResult = null
+        pendingBluetoothPermissionResult = null
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
         eventSink = null

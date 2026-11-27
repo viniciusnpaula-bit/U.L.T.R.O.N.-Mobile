@@ -11,6 +11,7 @@ import 'package:ultron_mobile/services/audit_log_service.dart';
 import 'package:ultron_mobile/services/desktop_command_listener.dart';
 import 'package:ultron_mobile/services/desktop_pairing_service.dart';
 import 'package:ultron_mobile/services/device_control_service.dart';
+import 'package:ultron_mobile/services/obsidian_service.dart';
 
 class _RealHttpOverrides extends HttpOverrides {}
 
@@ -403,6 +404,125 @@ void main() {
     );
     expect(sensitiveAllowed?.ok, isTrue);
     expect(sensitiveAllowed?.status, 'executed');
+    expect(nativeCalls.where((c) => c.method == 'sendWhatsApp').length, 1);
+  });
+
+  test('LIST_SKILLS and RUN_SKILL allow Desktop to discover and trigger Mobile skills with ActionGate protection',
+      () async {
+    final tempVault =
+        await Directory.systemTemp.createTemp('ultron_mobile_skills_bridge_');
+    addTearDown(() async {
+      if (await tempVault.exists()) {
+        await tempVault.delete(recursive: true);
+      }
+    });
+    final obs = ObsidianService(tempVault);
+    await obs.initialize();
+    await obs.createSkill(
+      'enviar_aviso_wa',
+      '# Enviar Aviso\n[ACTION:WHATSAPP:Carlos:Cheguei]',
+    );
+
+    final storage = _TestMemoryStorage();
+    final pairing = DesktopPairingService(storage: storage);
+    final config = const DesktopPairingConfig(
+      baseUrl: 'http://127.0.0.1:8765',
+      deviceId: 'galaxy-a34',
+      sharedSecret: 'desktop-bridge-secret-32-chars!!',
+    );
+    await pairing.savePairing(config);
+
+    final authGate = AuthGate(auth: _FakeLocalAuth());
+    await authGate.authenticateBiometric();
+
+    final fixedNow = DateTime.fromMillisecondsSinceEpoch(1700000000000);
+    final listener = DesktopCommandListener(
+      pairingService: pairing,
+      deviceService: DeviceControlService(
+        channel: channel,
+        auditLogProvider: () async => audit,
+        obsidianProvider: () async => obs,
+      ),
+      authGate: authGate,
+      now: () => fixedNow,
+    );
+
+    // 1. LIST_SKILLS returns Mobile skills with risk level metadata
+    final listRes = await listener.handleVerifiedEnvelope(
+      rawBody: jsonEncode({
+        'command_id': 'cmd-list-skills',
+        'device_id': 'galaxy-a34',
+        'command': 'LIST_SKILLS',
+        'args': {},
+        'timestamp': fixedNow.millisecondsSinceEpoch.toString(),
+        'nonce': '11112222333344445555666677778888',
+      }),
+      config: config,
+    );
+    expect(listRes?.ok, isTrue);
+    final listedSkills = (listRes?.data['skills'] as List).cast<Map>();
+    expect(listedSkills.any((s) => s['slug'] == 'alerta_tatico'), isTrue);
+    final waSkill =
+        listedSkills.firstWhere((s) => s['slug'] == 'enviar_aviso_wa');
+    expect(waSkill['riskLevel'], 'sensitive');
+    expect(waSkill['requiresConfirmation'], isTrue);
+
+    // 2. RUN_SKILL executes safe skill (alerta_tatico) without friction
+    final safeRun = await listener.handleVerifiedEnvelope(
+      rawBody: jsonEncode({
+        'command_id': 'cmd-run-safe-skill',
+        'device_id': 'galaxy-a34',
+        'command': 'RUN_SKILL',
+        'args': {'skill': 'alerta tatico'},
+        'timestamp': fixedNow.millisecondsSinceEpoch.toString(),
+        'nonce': '22223333444455556666777788889999',
+      }),
+      config: config,
+    );
+    expect(safeRun?.ok, isTrue);
+    expect(safeRun?.status, 'executed');
+    expect(nativeCalls.any((c) => c.method == 'setTorch'), isTrue);
+
+    // 3. RUN_SKILL blocks sensitive skill when confirmAction is missing/denied
+    final deniedSensitive = await listener.handleVerifiedEnvelope(
+      rawBody: jsonEncode({
+        'command_id': 'cmd-run-wa-denied',
+        'device_id': 'galaxy-a34',
+        'command': 'RUN_SKILL',
+        'args': {'skill': 'enviar_aviso_wa'},
+        'timestamp': fixedNow.millisecondsSinceEpoch.toString(),
+        'nonce': '33334444555566667777888899990000',
+      }),
+      config: config,
+    );
+    expect(deniedSensitive?.ok, isFalse);
+    expect(deniedSensitive?.status, 'cancelled');
+    expect(nativeCalls.where((c) => c.method == 'sendWhatsApp'), isEmpty);
+
+    // 4. RUN_SKILL executes sensitive skill when confirmed by operator
+    final confirmingListener = DesktopCommandListener(
+      pairingService: pairing,
+      deviceService: DeviceControlService(
+        channel: channel,
+        auditLogProvider: () async => audit,
+        obsidianProvider: () async => obs,
+      ),
+      authGate: authGate,
+      now: () => fixedNow,
+      confirmAction: (_) async => true,
+    );
+    final allowedSensitive = await confirmingListener.handleVerifiedEnvelope(
+      rawBody: jsonEncode({
+        'command_id': 'cmd-run-wa-allowed',
+        'device_id': 'galaxy-a34',
+        'command': 'RUN_SKILL',
+        'args': {'skill': 'enviar_aviso_wa'},
+        'timestamp': fixedNow.millisecondsSinceEpoch.toString(),
+        'nonce': '44445555666677778888999900001111',
+      }),
+      config: config,
+    );
+    expect(allowedSensitive?.ok, isTrue);
     expect(nativeCalls.where((c) => c.method == 'sendWhatsApp').length, 1);
   });
 }

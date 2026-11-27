@@ -813,6 +813,25 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             "getDeviceStatus" -> {
                 result.success(DeviceHardwareHelper.readDeviceStatus(this))
             }
+            "getBluetoothAudioDevices" -> {
+                result.success(DeviceHardwareHelper.getConnectedBluetoothAudioDevices(this))
+            }
+            "waitForBluetoothAudioDevice" -> {
+                val preferredName = call.argument<String>("preferredName") ?: ""
+                val timeoutMs = ((call.argument<Number>("timeoutMs")?.toLong()) ?: 20000L)
+                    .coerceIn(1000L, 60000L)
+                val pollIntervalMs = ((call.argument<Number>("pollIntervalMs")?.toLong()) ?: 450L)
+                    .coerceIn(150L, 2000L)
+                Thread {
+                    val res = DeviceHardwareHelper.waitForBluetoothAudioDevice(
+                        this,
+                        preferredName = preferredName,
+                        timeoutMs = timeoutMs,
+                        pollIntervalMs = pollIntervalMs,
+                    )
+                    runOnUiThread { result.success(res) }
+                }.start()
+            }
             "setVolume" -> {
                 val percent = (call.argument<Int>("percent") ?: 50).coerceIn(0, 100)
                 result.success(DeviceHardwareHelper.setMediaVolumePercent(this, percent, showUi = true))
@@ -868,6 +887,32 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
                 val number = call.argument<String>("number") ?: ""
                 DeviceHardwareHelper.dialNumber(this, number)
                 result.success(true)
+            }
+            "resolveContact" -> {
+                val query = call.argument<String>("query") ?: ""
+                val resolved = resolveContactPhone(query)
+                if (resolved != null) {
+                    result.success(
+                        mapOf(
+                            "found" to true,
+                            "name" to resolved.first,
+                            "phone" to resolved.second,
+                        )
+                    )
+                } else {
+                    result.success(mapOf("found" to false, "name" to "", "phone" to ""))
+                }
+            }
+            "placePhoneCall" -> {
+                val target = call.argument<String>("target") ?: ""
+                val statusMsg = placePhoneCall(target)
+                result.success(statusMsg)
+            }
+            "placeWhatsAppCall" -> {
+                val target = call.argument<String>("target") ?: ""
+                val video = call.argument<Boolean>("video") ?: false
+                val statusMsg = placeWhatsAppCall(target, video)
+                result.success(statusMsg)
             }
             "shareText" -> {
                 val text = call.argument<String>("text") ?: ""
@@ -1567,6 +1612,151 @@ class MainActivity : FlutterFragmentActivity(), SensorEventListener {
             startActivity(browserIntent)
             return "Link do WhatsApp aberto com a mensagem: \"$cleanText\"."
         }
+    }
+
+    private fun placePhoneCall(target: String): String {
+        val clean = target.trim()
+        if (clean.isEmpty()) {
+            throw IllegalArgumentException("Informe o contato ou número para ligar.")
+        }
+        val resolved = resolveContactPhone(clean)
+            ?: throw IllegalStateException(
+                "Contato ou número \"$clean\" não encontrado na agenda (verifique a permissão de Contatos)."
+            )
+        val (contactLabel, rawPhone) = resolved
+        val dialTarget = rawPhone.replace(Regex("[^0-9+*#]"), "")
+        if (dialTarget.isEmpty()) {
+            throw IllegalArgumentException("Número de telefone inválido para \"$contactLabel\".")
+        }
+
+        val hasCallPerm = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.CALL_PHONE
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasCallPerm) {
+            val callIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$dialTarget")).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(callIntent)
+            return "Ligação telefônica iniciada para $contactLabel ($dialTarget)."
+        }
+
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.CALL_PHONE),
+            9045
+        )
+        DeviceHardwareHelper.dialNumber(this, dialTarget)
+        return "Permissão de ligação direta solicitada; discador aberto para $contactLabel ($dialTarget)."
+    }
+
+    private fun placeWhatsAppCall(target: String, video: Boolean): String {
+        val clean = target.trim()
+        if (clean.isEmpty()) {
+            throw IllegalArgumentException("Informe o contato ou número para ligar no WhatsApp.")
+        }
+
+        val resolved = resolveContactPhone(clean)
+        val contactLabel = resolved?.first ?: clean
+        val rawPhone = resolved?.second ?: clean.replace(Regex("[^0-9+]"), "")
+        val waPhone = if (rawPhone.isNotEmpty()) normalizeWhatsAppPhone(rawPhone) else ""
+
+        // 1. Consulta ContactsContract.Data pela linha VoIP/Vídeo oficial do WhatsApp
+        val hasContactsPerm = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.READ_CONTACTS
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasContactsPerm) {
+            val candidates = if (video) {
+                listOf(
+                    "vnd.android.cursor.item/vnd.com.whatsapp.video.call" to "com.whatsapp",
+                    "vnd.android.cursor.item/vnd.com.whatsapp.w4b.video.call" to "com.whatsapp.w4b",
+                )
+            } else {
+                listOf(
+                    "vnd.android.cursor.item/vnd.com.whatsapp.voip.call" to "com.whatsapp",
+                    "vnd.android.cursor.item/vnd.com.whatsapp.w4b.voip.call" to "com.whatsapp.w4b",
+                )
+            }
+            val last8 = if (waPhone.length >= 8) waPhone.takeLast(8) else waPhone
+
+            for ((mimeType, waPkg) in candidates) {
+                val dataId = findWhatsAppCallDataId(mimeType, contactLabel, clean, last8)
+                if (dataId != null) {
+                    val callIntent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(
+                            Uri.parse("content://com.android.contacts/data/$dataId"),
+                            mimeType
+                        )
+                        setPackage(waPkg)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    try {
+                        startActivity(callIntent)
+                        val modeLabel = if (video) "chamada de vídeo" else "ligação"
+                        return "WhatsApp: $modeLabel iniciada para $contactLabel."
+                    } catch (_: Exception) {
+                        // Tenta próximo pacote ou fallback de conversa
+                    }
+                }
+            }
+        }
+
+        // 2. Fallback: abre diretamente a conversa do contato no WhatsApp se não houver linha VoIP sincronizada
+        if (waPhone.length >= 8) {
+            val uri = Uri.parse("https://api.whatsapp.com/send?phone=$waPhone")
+            val fallbackIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(fallbackIntent)
+            val modeLabel = if (video) "chamada de vídeo" else "ligação"
+            return "Contato $contactLabel ($waPhone) aberto no WhatsApp para concluir a $modeLabel (sem linha VoIP direta sincronizada)."
+        }
+
+        throw IllegalStateException(
+            "Contato \"$clean\" não encontrado para chamada no WhatsApp (verifique a agenda e o WhatsApp)."
+        )
+    }
+
+    private fun findWhatsAppCallDataId(
+        mimeType: String,
+        contactLabel: String,
+        rawQuery: String,
+        last8Digits: String,
+    ): Long? {
+        try {
+            val projection = arrayOf(
+                ContactsContract.Data._ID,
+                ContactsContract.Data.DISPLAY_NAME,
+                ContactsContract.Data.DATA1,
+            )
+            val cursor = contentResolver.query(
+                ContactsContract.Data.CONTENT_URI,
+                projection,
+                "${ContactsContract.Data.MIMETYPE} = ?",
+                arrayOf(mimeType),
+                "${ContactsContract.Data.STARRED} DESC"
+            )
+            cursor?.use {
+                val labelLower = contactLabel.trim().lowercase()
+                val queryLower = rawQuery.trim().lowercase()
+                while (it.moveToNext()) {
+                    val id = it.getLong(0)
+                    val disp = (it.getString(1) ?: "").trim().lowercase()
+                    val data1Digits = (it.getString(2) ?: "").replace(Regex("[^0-9]"), "")
+                    val matchesPhone = last8Digits.length >= 8 && data1Digits.endsWith(last8Digits)
+                    val matchesName = (labelLower.isNotEmpty() && disp.contains(labelLower)) ||
+                        (queryLower.isNotEmpty() && disp.contains(queryLower))
+                    if (matchesPhone || matchesName) {
+                        return id
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        return null
     }
 
     private fun sendSmsMessage(target: String, message: String): String {

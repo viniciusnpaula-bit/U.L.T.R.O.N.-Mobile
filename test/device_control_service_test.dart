@@ -741,7 +741,7 @@ void main() {
 
     // DIAL blocked when confirmAction returns false
     final deniedDial = await service.tryExecuteNaturalCommand(
-      'ligar para 11999999999',
+      'discar 11999999999',
       confirmAction: (_) async => false,
     );
     expect(deniedDial?.handled, isTrue);
@@ -750,7 +750,7 @@ void main() {
 
     // DIAL succeeds + logs when confirmed
     final okDial = await service.tryExecuteNaturalCommand(
-      'ligar para 11999999999',
+      'discar 11999999999',
       confirmAction: (_) async => true,
     );
     expect(okDial?.handled, isTrue);

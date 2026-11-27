@@ -59,7 +59,7 @@ object BackgroundVoiceResponder {
             FloatingOrbService.updateState(OrbState.LISTENING)
             onStatusUpdate("Ouvindo comando em segundo plano…")
 
-            val pcm = captureCommandPcm()
+            val pcm = captureCommandPcm(context)
             if (pcm == null || pcm.isEmpty()) {
                 return
             }
@@ -139,7 +139,7 @@ object BackgroundVoiceResponder {
         }
     }
 
-    private fun captureCommandPcm(): ByteArray? {
+    private fun captureCommandPcm(context: Context): ByteArray? {
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE_HZ,
             AudioFormat.CHANNEL_IN_MONO,
@@ -153,46 +153,20 @@ object BackgroundVoiceResponder {
             MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.DEFAULT,
         )
-        var recorder: AudioRecord? = null
-        for (src in candidates) {
-            val candidate = try {
-                AudioRecord(
-                    src,
-                    SAMPLE_RATE_HZ,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufSize,
-                )
-            } catch (_: Throwable) {
-                continue
-            }
-            if (candidate.state != AudioRecord.STATE_INITIALIZED) {
-                try {
-                    candidate.release()
-                } catch (_: Throwable) {
-                }
-                continue
-            }
-            try {
-                candidate.startRecording()
-            } catch (_: Throwable) {
-                try {
-                    candidate.release()
-                } catch (_: Throwable) {
-                }
-                continue
-            }
-            if (candidate.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                recorder = candidate
-                break
-            }
-            try {
-                candidate.release()
-            } catch (_: Throwable) {
-            }
-        }
+        val opened = try {
+            AudioInputRouter.openAudioRecord(
+                context = context,
+                sampleRate = SAMPLE_RATE_HZ,
+                bufferSize = bufSize,
+                defaultSources = candidates,
+                enableBluetoothSco = true,
+            )
+        } catch (_: SecurityException) {
+            null
+        } ?: return null
 
-        val activeRec = recorder ?: return null
+        val activeRec = opened.record
+        val routingCleanup = opened.cleanupRouting
         var aec: AcousticEchoCanceler? = null
         var ns: NoiseSuppressor? = null
         try {
@@ -290,6 +264,10 @@ object BackgroundVoiceResponder {
             }
             try {
                 activeRec.release()
+            } catch (_: Throwable) {
+            }
+            try {
+                routingCleanup()
             } catch (_: Throwable) {
             }
         }

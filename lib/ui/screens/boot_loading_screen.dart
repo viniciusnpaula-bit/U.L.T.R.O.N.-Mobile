@@ -86,7 +86,7 @@ class _BootLoadingScreenState extends State<BootLoadingScreen> {
                       hasError: error != null,
                     ),
                     _StageRow(
-                      label: 'Núcleo visual crimson',
+                      label: 'Núcleo visual 3D',
                       stage: BootStage.shader,
                       current: current,
                       hasError: error != null,
